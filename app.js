@@ -4422,6 +4422,26 @@
       });
     }
 
+    // Fallback: some Credit Karma exports concatenate "<NAME>Reported:" with no
+    // space. Try a no-space variant when the spaced version found nothing.
+    if (matches.length === 0) {
+      const noSpaceRegex = /([A-Z][A-Z0-9&/\s\-]{1,38}[A-Z0-9])Reported:\s*([A-Z][a-z]{2,9}\.?\s+\d{1,2},?\s+\d{4})/g;
+      let nsm;
+      while ((nsm = noSpaceRegex.exec(text)) !== null) {
+        let rawName = nsm[1].trim();
+        // Strip leading "CREDIT CARDS" prefix if it got captured
+        rawName = rawName.replace(/^CREDIT CARDS\s*/i, "").trim();
+        if (/CREDIT CARDS|CREDIT KARMA|TODAY CREDIT|VIEW REPORT|HARD INQUIRIES|CREDITOR INFORMATION/i.test(rawName)) continue;
+        if ((rawName.match(/[A-Z]/g) || []).length < 3) continue;
+        matches.push({
+          rawName,
+          reportedDate: nsm[2],
+          idx: nsm.index,
+          endIdx: nsm.index + nsm[0].length,
+        });
+      }
+    }
+
     const seenCards = new Set();
 
     matches.forEach((mt, i) => {
@@ -4431,11 +4451,20 @@
       const block = text.slice(blockStart, blockEnd);
 
       const balanceMatch = block.match(/Balance\s*\$?([\d,]+(?:\.\d{2})?)/i);
-      const balance = balanceMatch ? Number(balanceMatch[1].replace(/,/g, "")) : 0;
+      let balance = balanceMatch ? Number(balanceMatch[1].replace(/,/g, "")) : 0;
 
       const limitMatch = block.match(/Credit limit\s*\$?([\d,]+(?:\.\d{2})?)/i);
       const noLimit = /Credit limit\s*No Info/i.test(block);
       const limit = limitMatch ? Number(limitMatch[1].replace(/,/g, "")) : 0;
+
+      // Summary-format fallback: when "Balance $X" section isn't present, try
+      // to grab the balance from the line right after "Reported: <date>$X.XX<status>"
+      if (balance === 0 && !balanceMatch) {
+        const summaryBalanceMatch = block.match(/^\s*\$?([\d,]+(?:\.\d{2})?)\s*(In good standing|Needs Attention|Closed)/i);
+        if (summaryBalanceMatch) {
+          balance = Number(summaryBalanceMatch[1].replace(/,/g, ""));
+        }
+      }
 
       const monthlyMatch = block.match(/Monthly payment\s*\$?([\d,]+(?:\.\d{2})?)/i);
       const monthly = monthlyMatch ? Number(monthlyMatch[1].replace(/,/g, "")) : null;
@@ -4450,7 +4479,12 @@
       const utilization = utilMatch ? Number(utilMatch[1]) : null;
 
       const accountStatusMatch = block.match(/Account status\s+(Open|Closed|Paid)/i);
-      const accountStatus = accountStatusMatch ? accountStatusMatch[1] : null;
+      let accountStatus = accountStatusMatch ? accountStatusMatch[1] : null;
+      // Summary fallback: pick up status badge ("In good standing" → Open, "Needs Attention" → Open with issues, "Closed" → Closed)
+      if (!accountStatus) {
+        if (/Closed/.test(block.slice(0, 100)) && !/Account closed/.test(block)) accountStatus = "Closed";
+        else if (/In good standing|Needs Attention/.test(block.slice(0, 100))) accountStatus = "Open";
+      }
 
       const lateMatch = block.match(/Times 30\/60\/90\+\s+days late\s+(\d+)\/(\d+)\/(\d+)/i);
       const lates = lateMatch ? { d30: Number(lateMatch[1]), d60: Number(lateMatch[2]), d90: Number(lateMatch[3]) } : null;
@@ -4495,23 +4529,32 @@
     });
 
     // Parse hard inquiries — same-line format: "<NAME> Inquiry: <date>"
-    const inquiryRegex = /\b([A-Z][A-Z0-9&./\s\-]{1,38}[A-Z0-9])\s+Inquiry:\s*([A-Z][a-z]{2,9}\.?\s+\d{1,2},?\s+\d{4})/g;
-    let inq;
+    // Try both spaced and concatenated variants since CK exports vary.
+    const inquiryRegexes = [
+      /\b([A-Z][A-Z0-9&./\s\-]{1,38}[A-Z0-9])\s+Inquiry:\s*([A-Z][a-z]{2,9}\.?\s+\d{1,2},?\s+\d{4})/g,
+      /([A-Z][A-Z0-9&/\s\-]{1,38}[A-Z0-9])Inquiry:\s*([A-Z][a-z]{2,9}\.?\s+\d{1,2},?\s+\d{4})/g,
+    ];
     const seenInq = new Set();
-    while ((inq = inquiryRegex.exec(text)) !== null) {
-      const reasonName = inq[1].trim();
-      if (/CREDIT CARDS|TODAY CREDIT|HARD INQUIRIES/i.test(reasonName)) continue;
-      const date = parseFlexDate(inq[2]);
-      if (!date) continue;
-      const key = `${reasonName}|${date}`;
-      if (seenInq.has(key)) continue;
-      seenInq.add(key);
-      result.inquiries.push({
-        date,
-        reason: friendlyNames[reasonName] || reasonName,
-        bureau: result.bureau || null,
-      });
-    }
+    inquiryRegexes.forEach((rx) => {
+      let inq;
+      while ((inq = rx.exec(text)) !== null) {
+        let reasonName = inq[1].trim();
+        // Strip trailing "Banks" prefix or other category labels
+        reasonName = reasonName.replace(/^(Banks|Auto|Mortgage|Cards|Other)\s+/i, "").trim();
+        if (/CREDIT CARDS|TODAY CREDIT|HARD INQUIRIES/i.test(reasonName)) continue;
+        if ((reasonName.match(/[A-Z]/g) || []).length < 3) continue;
+        const date = parseFlexDate(inq[2]);
+        if (!date) continue;
+        const key = `${reasonName}|${date}`;
+        if (seenInq.has(key)) continue;
+        seenInq.add(key);
+        result.inquiries.push({
+          date,
+          reason: friendlyNames[reasonName] || reasonName,
+          bureau: result.bureau || null,
+        });
+      }
+    });
 
     // Detect derogatory remarks (late payment patterns from cards that have lates)
     result.cards.forEach((c) => {
