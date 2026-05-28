@@ -149,6 +149,7 @@
 
   /* ---------- AES-GCM encryption ---------- */
   let cryptoKey = null; // CryptoKey derived from password (held in memory only)
+  let cachedPassword = null; // Password held in memory during session, used to re-derive key on salt mismatch
 
   function getOrCreateSalt() {
     let salt = localStorage.getItem(KEYS.salt);
@@ -567,6 +568,7 @@
     $("#lockScreen").classList.remove("open");
     $("#app").hidden = false;
     if (password) {
+      cachedPassword = password;
       try {
         cryptoKey = await deriveKey(password);
       } catch (e) {
@@ -620,6 +622,7 @@
 
   function lockNow() {
     cryptoKey = null;
+    cachedPassword = null;
     stopAutoLock();
     $("#app").hidden = true;
     $("#lockScreen").classList.add("open");
@@ -5969,6 +5972,41 @@
       if (e.target.id === "syncDevicesModal") $("#syncDevicesModal").classList.remove("open");
     });
 
+    // Delete cloud data
+    $("#syncDeleteCloudBtn")?.addEventListener("click", async () => {
+      const token = localStorage.getItem(KEYS.syncToken);
+      const gistId = localStorage.getItem(KEYS.syncGistId);
+      if (!token || !gistId) {
+        showToast("No cloud data to delete.");
+        return;
+      }
+      if (!confirm("Delete the cloud Gist completely? Local data stays. Other devices will lose their cloud copy and will re-create the Gist on their next push.")) return;
+      try {
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: "DELETE",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!res.ok && res.status !== 404) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.message || `HTTP ${res.status}`);
+        }
+        // Clear local Gist ID + history; keep the token so user can push again
+        localStorage.removeItem(KEYS.syncGistId);
+        localStorage.removeItem("mb_last_synced");
+        localStorage.removeItem(SYNC_HISTORY_KEY);
+        lastSyncedAt = null;
+        $("#syncGistId").value = "";
+        updateSyncIndicator("synced");
+        renderDashSyncCard();
+        showToast("Cloud data deleted. Push again to re-sync.");
+      } catch (e) {
+        showToast(`❌ ${e.message || "Delete failed"}`);
+      }
+    });
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -7760,15 +7798,23 @@
               if (remotePayload.encrypted) {
                 // Decrypt remote with the right key
                 if (remotePayload.salt && remotePayload.salt !== localStorage.getItem(KEYS.salt)) {
-                  // Salt mismatch — skip merge silently rather than break user
-                  console.warn("Salt mismatch on push-merge, skipping merge");
-                } else {
-                  const remoteState = await decryptState(remotePayload.encrypted);
-                  if (remoteState) {
-                    const merged = mergeStates(state, remoteState);
-                    state = merged;
-                    saveData();
+                  // Salt mismatch — re-derive with cached password if available
+                  if (cachedPassword) {
+                    localStorage.setItem(KEYS.salt, remotePayload.salt);
+                    try {
+                      cryptoKey = await deriveKey(cachedPassword);
+                    } catch (e) {
+                      console.warn("Re-derive failed during push-merge", e);
+                    }
+                  } else {
+                    console.warn("Salt mismatch on push-merge, no cached password to re-derive");
                   }
+                }
+                const remoteState = await decryptState(remotePayload.encrypted);
+                if (remoteState) {
+                  const merged = mergeStates(state, remoteState);
+                  state = merged;
+                  saveData();
                 }
               }
             }
@@ -7937,14 +7983,26 @@
       if (!payload.encrypted) throw new Error("No encrypted data in gist");
 
       if (payload.salt && payload.salt !== localStorage.getItem(KEYS.salt)) {
-        if (silent) {
+        // Salt mismatch — try to re-derive with cached password silently
+        if (cachedPassword) {
+          localStorage.setItem(KEYS.salt, payload.salt);
+          try {
+            cryptoKey = await deriveKey(cachedPassword);
+          } catch (e) {
+            updateSyncIndicator("error");
+            if (!silent) showSyncStatus("❌ Salt mismatch — try locking and unlocking", "warn");
+            return;
+          }
+        } else if (silent) {
           updateSyncIndicator("error");
           return;
+        } else {
+          const pwd = prompt("Enter your password to decrypt the cloud backup:");
+          if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
+          localStorage.setItem(KEYS.salt, pwd);
+          cryptoKey = await deriveKey(pwd);
+          cachedPassword = pwd;
         }
-        const pwd = prompt("Enter your password to decrypt the cloud backup:");
-        if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
-        localStorage.setItem(KEYS.salt, payload.salt);
-        cryptoKey = await deriveKey(pwd);
       }
 
       const decrypted = await decryptState(payload.encrypted);
