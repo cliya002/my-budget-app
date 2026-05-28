@@ -18,6 +18,9 @@
     hideAmounts: "mb_hide_amounts",
     aiProvider: "mb_ai_provider",
     aiKey: "mb_ai_key",
+    syncToken: "mb_sync_token",
+    syncGistId: "mb_sync_gist_id",
+    syncEnabled: "mb_sync_enabled",
   };
 
   const DEFAULT_PWD_HASH =
@@ -5559,6 +5562,38 @@
     // Print monthly report
     $("#printReportBtn")?.addEventListener("click", openPrintReport);
 
+    // Sync settings
+    const syncTokenInput = $("#syncToken");
+    const syncGistIdInput = $("#syncGistId");
+    if (syncTokenInput) {
+      const stored = localStorage.getItem(KEYS.syncToken) || "";
+      syncTokenInput.value = stored ? stored.slice(0, 4) + "•••••••••••" + stored.slice(-4) : "";
+      syncTokenInput.addEventListener("focus", () => {
+        if (syncTokenInput.dataset.unlocked !== "true") {
+          syncTokenInput.value = stored;
+          syncTokenInput.dataset.unlocked = "true";
+        }
+      });
+    }
+    if (syncGistIdInput) {
+      syncGistIdInput.value = localStorage.getItem(KEYS.syncGistId) || "";
+    }
+    $("#syncSaveBtn")?.addEventListener("click", () => {
+      const token = $("#syncToken").value.trim();
+      const gistId = $("#syncGistId").value.trim();
+      if (token && !token.includes("•")) {
+        localStorage.setItem(KEYS.syncToken, token);
+      }
+      if (gistId) {
+        localStorage.setItem(KEYS.syncGistId, gistId);
+      } else {
+        localStorage.removeItem(KEYS.syncGistId);
+      }
+      showSyncStatus("Settings saved.", "success");
+    });
+    $("#syncPushBtn")?.addEventListener("click", syncPush);
+    $("#syncPullBtn")?.addEventListener("click", syncPull);
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -6647,6 +6682,124 @@
       if (e.target === div) div.classList.remove("open");
     });
   }
+  /* ---------- Cloud Sync via GitHub Gist ---------- */
+  const SYNC_FILENAME = "pocket-budget-encrypted.json";
+
+  async function syncPush() {
+    const token = localStorage.getItem(KEYS.syncToken);
+    if (!token) { showSyncStatus("Add a GitHub token first.", "warn"); return; }
+    if (!cryptoKey) { showSyncStatus("Unlock the app first.", "warn"); return; }
+
+    showSyncStatus("⬆️ Encrypting and uploading…", "loading");
+    try {
+      const encBlob = await encryptState(state);
+      if (!encBlob) throw new Error("Encryption failed");
+
+      // Wrap with a small metadata header
+      const payload = JSON.stringify({
+        version: 1,
+        encrypted: encBlob,
+        salt: localStorage.getItem(KEYS.salt),
+        updatedAt: new Date().toISOString(),
+      });
+
+      const gistId = localStorage.getItem(KEYS.syncGistId);
+      const body = {
+        description: "Pocket Budget App — encrypted backup",
+        public: false,
+        files: { [SYNC_FILENAME]: { content: payload } },
+      };
+
+      let res, data;
+      if (gistId) {
+        res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: "PATCH",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Update failed");
+      } else {
+        res = await fetch("https://api.github.com/gists", {
+          method: "POST",
+          headers: {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body),
+        });
+        data = await res.json();
+        if (!res.ok) throw new Error(data.message || "Create failed");
+        localStorage.setItem(KEYS.syncGistId, data.id);
+        $("#syncGistId").value = data.id;
+      }
+      showSyncStatus(`✓ Pushed ${(payload.length / 1024).toFixed(1)} KB · ${new Date().toLocaleTimeString()}`, "success");
+    } catch (e) {
+      console.error(e);
+      showSyncStatus(`❌ ${e.message || "Push failed"}`, "warn");
+    }
+  }
+
+  async function syncPull() {
+    const token = localStorage.getItem(KEYS.syncToken);
+    const gistId = localStorage.getItem(KEYS.syncGistId);
+    if (!token) { showSyncStatus("Add a GitHub token first.", "warn"); return; }
+    if (!gistId) { showSyncStatus("No Gist ID — push from another device first.", "warn"); return; }
+    if (!cryptoKey) { showSyncStatus("Unlock the app first.", "warn"); return; }
+
+    if (!confirm("Pull will replace ALL local data with what's in the cloud. Continue?")) return;
+
+    showSyncStatus("⬇️ Downloading and decrypting…", "loading");
+    try {
+      const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || "Fetch failed");
+      const file = data.files[SYNC_FILENAME];
+      if (!file) throw new Error("Gist doesn't contain budget file");
+      const payload = JSON.parse(file.content);
+      if (!payload.encrypted) throw new Error("No encrypted data in gist");
+
+      // Use the salt from the gist so decryption works (different device may have different salt)
+      if (payload.salt && payload.salt !== localStorage.getItem(KEYS.salt)) {
+        // We need to re-derive the key with the gist's salt. This requires re-prompting password.
+        // Simpler: store the original salt and re-derive once.
+        const pwd = prompt("Enter your password to decrypt the cloud backup:");
+        if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
+        localStorage.setItem(KEYS.salt, payload.salt);
+        cryptoKey = await deriveKey(pwd);
+      }
+
+      const decrypted = await decryptState(payload.encrypted);
+      if (!decrypted) throw new Error("Decryption failed — wrong password?");
+
+      state = { ...state, ...decrypted };
+      saveData();
+      renderAll();
+      showSyncStatus(`✓ Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()}`, "success");
+    } catch (e) {
+      console.error(e);
+      showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
+    }
+  }
+
+  function showSyncStatus(msg, type) {
+    const el = $("#syncStatus");
+    if (!el) return;
+    el.hidden = false;
+    el.className = `sync-status ${type || ""}`;
+    el.textContent = msg;
+  }
+
   /* ---------- AI Insights (BYOK) ---------- */
   async function askAiInsights() {
     const provider = localStorage.getItem(KEYS.aiProvider);

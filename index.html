@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=34" />
+  <link rel="stylesheet" href="styles.css?v=35" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1016,6 +1016,31 @@
           </div>
 
           <div class="card">
+            <div class="card-title">☁️ Sync Across Devices</div>
+            <p class="card-sub">Sync encrypted data via a private GitHub Gist you own. Your password decrypts on each device — GitHub never sees plain data.</p>
+            <div class="form-row" style="margin-top:0.85rem">
+              <label>GitHub personal access token (gist scope)</label>
+              <input type="password" id="syncToken" placeholder="github_pat_..." autocomplete="off" />
+              <p class="card-sub" style="margin-top:0.3rem">
+                <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">Generate a token</a> with only the <strong>gist</strong> permission.
+              </p>
+            </div>
+            <div class="form-row" style="margin-top:0.5rem">
+              <label>Gist ID (auto-filled after first sync)</label>
+              <input type="text" id="syncGistId" placeholder="(blank to create new on next sync)" />
+            </div>
+            <div class="sync-actions" style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem">
+              <button id="syncSaveBtn" class="btn-secondary">Save Settings</button>
+              <button id="syncPushBtn" class="btn-primary">⬆️ Push to Cloud</button>
+              <button id="syncPullBtn" class="btn-secondary">⬇️ Pull from Cloud</button>
+            </div>
+            <div id="syncStatus" class="sync-status" hidden></div>
+            <p class="footer-note" style="margin-top:0.5rem; text-align:left">
+              💡 To set up a second device: install the app there, sign in with the same password, paste the same token + Gist ID, then tap Pull.
+            </p>
+          </div>
+
+          <div class="card">
             <div class="card-title">AI Insights (Optional)</div>
             <p class="card-sub">Add an API key to get AI-powered spending advice. Your key stays in your browser.</p>
             <div class="form-row two-col" style="margin-top:0.85rem">
@@ -1626,7 +1651,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=34"></script>
+  <script src="app.js?v=35"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

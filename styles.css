@@ -2391,3 +2391,17 @@ input[type="color"] {
   font-weight: 700;
   color: var(--primary);
 }
+
+/* ================ Sync ================ */
+.sync-status {
+  margin-top: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  font-weight: 500;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+}
+.sync-status.loading { background: var(--primary-soft); color: var(--primary); }
+.sync-status.success { background: rgba(34, 197, 94, 0.12); color: var(--success); }
+.sync-status.warn { background: rgba(239, 68, 68, 0.12); color: var(--danger); }
