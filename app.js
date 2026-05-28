@@ -292,17 +292,57 @@
       migrated = true;
     }
 
-    // Seed a few default quick-add presets on first launch
+    // Seed quick-add presets on first launch with built-in library
     if (!state.presets.length) {
       const findCat = (name) => state.categories.find((c) => c.name === name)?.id;
       state.presets = [
-        { id: uid(), type: "expense", desc: "Coffee", amount: 5, categoryId: findCat("Eating Out") },
-        { id: uid(), type: "expense", desc: "Lunch", amount: 15, categoryId: findCat("Eating Out") },
-        { id: uid(), type: "expense", desc: "Gas", amount: 50, categoryId: findCat("Transport") },
-        { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null },
+        // Daily expenses
+        { id: uid(), type: "expense", desc: "Coffee", amount: 5, categoryId: findCat("Eating Out"), icon: "☕", group: "daily", favorite: true },
+        { id: uid(), type: "expense", desc: "Lunch", amount: 15, categoryId: findCat("Eating Out"), icon: "🥗", group: "daily", favorite: true },
+        { id: uid(), type: "expense", desc: "Dinner Out", amount: 35, categoryId: findCat("Eating Out"), icon: "🍽️", group: "daily" },
+        { id: uid(), type: "expense", desc: "Groceries", amount: 75, categoryId: findCat("Groceries"), icon: "🛒", group: "daily", favorite: true },
+        { id: uid(), type: "expense", desc: "Gas", amount: 50, categoryId: findCat("Transport"), icon: "⛽", group: "daily", favorite: true },
+        { id: uid(), type: "expense", desc: "Uber/Lyft", amount: 18, categoryId: findCat("Transport"), icon: "🚗", group: "daily" },
+        { id: uid(), type: "expense", desc: "Public transit", amount: 5, categoryId: findCat("Transport"), icon: "🚇", group: "daily" },
+        { id: uid(), type: "expense", desc: "Snacks", amount: 8, categoryId: findCat("Eating Out"), icon: "🍿", group: "daily" },
+
+        // Subscriptions
+        { id: uid(), type: "expense", desc: "Netflix", amount: 15.49, categoryId: findCat("Other"), icon: "🎬", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Spotify", amount: 11.99, categoryId: findCat("Other"), icon: "🎵", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Amazon Prime", amount: 14.99, categoryId: findCat("Other"), icon: "📦", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Disney+", amount: 13.99, categoryId: findCat("Other"), icon: "✨", group: "subscription" },
+        { id: uid(), type: "expense", desc: "YouTube Premium", amount: 13.99, categoryId: findCat("Other"), icon: "▶️", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Apple iCloud", amount: 2.99, categoryId: findCat("Other"), icon: "☁️", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Gym", amount: 30, categoryId: findCat("Other"), icon: "💪", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Phone bill", amount: 75, categoryId: findCat("Utilities"), icon: "📱", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Internet", amount: 60, categoryId: findCat("Utilities"), icon: "📡", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Electric bill", amount: 120, categoryId: findCat("Utilities"), icon: "💡", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Water bill", amount: 40, categoryId: findCat("Utilities"), icon: "💧", group: "subscription" },
+        { id: uid(), type: "expense", desc: "Rent", amount: 1500, categoryId: findCat("Rent"), icon: "🏠", group: "subscription" },
+
+        // Income
+        { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null, icon: "💼", group: "income", favorite: true },
+        { id: uid(), type: "income", desc: "Side gig", amount: 0, categoryId: null, icon: "💻", group: "income" },
+        { id: uid(), type: "income", desc: "Refund", amount: 0, categoryId: null, icon: "↩️", group: "income" },
+        { id: uid(), type: "income", desc: "Gift received", amount: 0, categoryId: null, icon: "🎁", group: "income" },
+        { id: uid(), type: "income", desc: "Cashback", amount: 0, categoryId: null, icon: "💸", group: "income" },
       ];
       migrated = true;
     }
+
+    // Migrate older presets to have group/icon/favorite fields
+    state.presets = state.presets.map((p) => {
+      let changed = false;
+      const out = { ...p };
+      if (!out.group) {
+        out.group = out.type === "income" ? "income" : "daily";
+        changed = true;
+      }
+      if (!out.icon) { out.icon = out.type === "income" ? "💵" : "💸"; changed = true; }
+      if (typeof out.favorite !== "boolean") { out.favorite = false; changed = true; }
+      if (changed) migrated = true;
+      return out;
+    });
 
     if (migrated) saveData();
   }
@@ -867,13 +907,24 @@
         const catName = cat ? cat.name : (p.type === "income" ? "Income" : "—");
         const amt = Number(p.amount) > 0 ? fmt(p.amount) : "any amount";
         const typeLabel = p.type === "income" ? "💰 Income" : "💸 Expense";
+        const groupLabel = p.group === "subscription" ? "📺 Subscription"
+          : p.group === "daily" ? "☕ Daily"
+          : p.group === "income" ? "💼 Income"
+          : "Custom";
+        const star = p.favorite ? "⭐" : "☆";
+        const recurringBtn = p.type === "expense" && p.group === "subscription"
+          ? `<button data-action="preset-recurring" data-id="${p.id}" title="Make recurring">🔁</button>`
+          : "";
         return `
           <li class="list-item">
+            <span class="preset-icon-mini">${p.icon || "💸"}</span>
             <div class="list-item-main">
               <div class="list-item-title">${escapeHtml(p.desc)}</div>
-              <div class="list-item-sub">${typeLabel} · ${escapeHtml(catName)} · ${amt}</div>
+              <div class="list-item-sub">${typeLabel} · ${groupLabel} · ${escapeHtml(catName)} · ${amt}</div>
             </div>
             <div class="list-item-actions">
+              <button data-action="preset-fav" data-id="${p.id}" title="Toggle favorite">${star}</button>
+              ${recurringBtn}
               <button data-action="del-preset" data-id="${p.id}" title="Delete">🗑️</button>
             </div>
           </li>`;
@@ -3046,17 +3097,44 @@
     const list = $("#presetsList");
     const items = state.presets.filter((p) => p.type === currentModalType);
     if (!items.length) {
-      list.innerHTML = '<span class="empty-chip">No presets for this type. Add one with "Save as preset" below.</span>';
+      list.innerHTML = '<span class="empty-chip">No presets for this type. Use "Save as preset" below.</span>';
       return;
     }
-    list.innerHTML = items
-      .map((p) => {
-        const amt = Number(p.amount) > 0 ? ` ${fmt(p.amount)}` : "";
-        return `<button type="button" class="preset-chip" data-preset="${p.id}">
-          ${escapeHtml(p.desc)}${amt}
-        </button>`;
-      })
-      .join("");
+
+    // Group: favorites first, then by group key
+    const groupOrder = currentModalType === "income"
+      ? [["income", "Income"]]
+      : [["favorite", "⭐ Favorites"], ["daily", "Daily"], ["subscription", "Subscriptions"], ["custom", "Custom"]];
+
+    const buckets = {};
+    items.forEach((p) => {
+      if (p.favorite && currentModalType !== "income") {
+        if (!buckets["favorite"]) buckets["favorite"] = [];
+        buckets["favorite"].push(p);
+        return;
+      }
+      const k = p.group || (p.type === "income" ? "income" : "custom");
+      if (!buckets[k]) buckets[k] = [];
+      buckets[k].push(p);
+    });
+
+    let html = "";
+    groupOrder.forEach(([key, label]) => {
+      const arr = buckets[key];
+      if (!arr || !arr.length) return;
+      html += `<div class="preset-group-label">${label}</div><div class="preset-row">`;
+      arr.forEach((p) => {
+        const amt = Number(p.amount) > 0 ? `<span class="preset-amt">${fmt(p.amount)}</span>` : "";
+        html += `
+          <button type="button" class="preset-card" data-preset="${p.id}">
+            <span class="preset-icon">${p.icon || "💸"}</span>
+            <span class="preset-name">${escapeHtml(p.desc)}</span>
+            ${amt}
+          </button>`;
+      });
+      html += "</div>";
+    });
+    list.innerHTML = html;
   }
 
   function applyPreset(id) {
@@ -3224,12 +3302,24 @@
         showToast("Add a description first");
         return;
       }
+      // Ask for group (defaults based on type)
+      let group;
+      if (currentModalType === "income") {
+        group = "income";
+      } else {
+        group = confirm("Is this a recurring subscription/bill? OK for Subscription, Cancel for Daily expense")
+          ? "subscription" : "daily";
+      }
+      const icon = prompt("Pick an emoji icon (optional):", currentModalType === "income" ? "💵" : "💸") || "💸";
       state.presets.push({
         id: uid(),
         type: currentModalType,
         desc,
         amount: isNaN(amount) ? 0 : amount,
         categoryId,
+        group,
+        icon,
+        favorite: false,
       });
       saveData();
       renderPresets();
@@ -3663,6 +3753,32 @@
           saveData();
           renderPresetsManage();
         }
+      } else if (action === "preset-fav") {
+        const p = state.presets.find((x) => x.id === id);
+        if (!p) return;
+        p.favorite = !p.favorite;
+        saveData();
+        renderPresetsManage();
+        renderPresets();
+      } else if (action === "preset-recurring") {
+        const p = state.presets.find((x) => x.id === id);
+        if (!p) return;
+        const day = prompt(`Make "${p.desc}" recurring on which day of month? (1-28)`, "1");
+        if (day === null) return;
+        const dayOfMonth = Math.min(28, Math.max(1, parseInt(day, 10) || 1));
+        state.recurring.push({
+          id: uid(),
+          type: p.type,
+          desc: p.desc,
+          amount: p.amount,
+          categoryId: p.categoryId,
+          dayOfMonth,
+          active: true,
+          lastRunMonth: null,
+        });
+        saveData();
+        renderRecurringList();
+        showToast(`"${p.desc}" is now recurring on day ${dayOfMonth}`);
       } else if (action === "toggle-rec") {
         const r = state.recurring.find((x) => x.id === id);
         if (r) {

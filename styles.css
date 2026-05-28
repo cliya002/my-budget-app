@@ -1665,3 +1665,57 @@ input[type="color"] {
 @media (max-width: 980px) {
   .stat-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ================ Quick-Add Presets v2 ================ */
+.preset-group-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0.85rem 0 0.4rem;
+}
+.preset-group-label:first-child { margin-top: 0; }
+.preset-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.75rem;
+  min-width: 78px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.12s;
+  font-size: 0.85rem;
+  color: var(--text);
+}
+.preset-card:hover {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+  transform: translateY(-1px);
+}
+.preset-card:active { transform: scale(0.97); }
+.preset-icon { font-size: 1.5rem; line-height: 1; }
+.preset-name { font-size: 0.8rem; }
+.preset-amt {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.preset-card:hover .preset-amt { color: var(--primary); }
+
+.preset-icon-mini {
+  font-size: 1.4rem;
+  flex-shrink: 0;
+  margin-right: 0.25rem;
+}
