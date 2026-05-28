@@ -293,6 +293,18 @@
     if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
     if (typeof state.mapTimestamps !== "object" || !state.mapTimestamps) state.mapTimestamps = {};
     if (typeof state.settingsTimestamps !== "object" || !state.settingsTimestamps) state.settingsTimestamps = {};
+
+    // Backfill mapTimestamps for any existing keys that lack one. This way, after
+    // upgrading, the next time the user touches a value, the merge correctly
+    // identifies it as newer than other devices' un-stamped values.
+    ["monthlyIncome", "creditFreezes", "annualReports"].forEach((coll) => {
+      if (!state.mapTimestamps[coll]) state.mapTimestamps[coll] = {};
+      Object.keys(state[coll] || {}).forEach((k) => {
+        if (typeof state.mapTimestamps[coll][k] !== "number") {
+          state.mapTimestamps[coll][k] = 0; // sentinel — any real update beats this
+        }
+      });
+    });
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month

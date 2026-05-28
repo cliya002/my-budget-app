@@ -1,10 +1,8 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v2";
+const CACHE = "pocket-budget-v54";
 const ASSETS = [
   "./",
   "./index.html",
-  "./styles.css?v=15",
-  "./app.js?v=15",
   "./manifest.json",
   "./icon-192.svg",
   "./icon-512.svg",
