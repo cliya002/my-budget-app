@@ -6069,15 +6069,44 @@
       showToast(added > 0 ? `Added ${added} default preset${added === 1 ? "" : "s"}` : "All defaults already present");
     });
 
-    // Re-link presets to categories (manual fix for the "—" category issue)
+    // Re-link presets to categories (manual fix for the "—" category issue).
+    // Also auto-creates any missing default categories so the link can succeed.
     $("#relinkPresetsBtn")?.addEventListener("click", () => {
+      const categoryDefaults = [
+        { name: "Groceries", limit: 400 },
+        { name: "Rent", limit: 1500 },
+        { name: "Utilities", limit: 200 },
+        { name: "Transport", limit: 150 },
+        { name: "Eating Out", limit: 200 },
+        { name: "Subscriptions", limit: 100 },
+        { name: "Healthcare", limit: 150 },
+        { name: "Entertainment", limit: 100 },
+        { name: "Shopping", limit: 200 },
+        { name: "Personal Care", limit: 75 },
+        { name: "Other", limit: 200 },
+      ];
+      // Figure out which categories the relink wants but don't exist yet
+      const wantedNames = new Set(Object.values(PRESET_CATEGORY_MAP));
+      const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
+      let addedCats = 0;
+      categoryDefaults.forEach((d) => {
+        if (!wantedNames.has(d.name)) return;
+        if (existingNames.has(d.name.toLowerCase())) return;
+        state.categories.push(touchRecord({ id: uid(), name: d.name, limit: d.limit }));
+        existingNames.add(d.name.toLowerCase());
+        addedCats += 1;
+      });
+
       const updated = relinkPresetsToCategories();
-      if (updated > 0) {
+      if (updated > 0 || addedCats > 0) {
         saveData();
         renderAll();
-        showToast(`Re-linked ${updated} preset${updated === 1 ? "" : "s"}`);
+        const parts = [];
+        if (addedCats > 0) parts.push(`added ${addedCats} categor${addedCats === 1 ? "y" : "ies"}`);
+        if (updated > 0) parts.push(`re-linked ${updated} preset${updated === 1 ? "" : "s"}`);
+        showToast(parts.join(", "));
       } else {
-        showToast("Nothing to re-link — presets are already categorized");
+        showToast("Nothing to re-link — all presets are already categorized");
       }
     });
 
@@ -8271,8 +8300,8 @@
 
   // Walk through state.presets and link each one to its proper category (by name)
   // when its desc matches a known default. Always overwrites null/missing
-  // categoryId; respects existing categoryId when it's already set.
-  // Returns the number of presets that were updated.
+  // categoryId or pointers to missing categories. Returns the number of
+  // presets that were updated.
   function relinkPresetsToCategories() {
     if (!Array.isArray(state.presets) || !state.presets.length) return 0;
     const catByName = new Map();
@@ -8280,17 +8309,12 @@
     let updated = 0;
     state.presets = state.presets.map((p) => {
       if (p.type === "income") return p; // Income presets don't have a category
-      if (p.categoryId) {
-        // Verify the existing categoryId still resolves to a real category;
-        // if not (orphaned reference), try to re-link.
-        const stillExists = state.categories.some((c) => c.id === p.categoryId);
-        if (stillExists) return p;
-      }
       const key = String(p.desc || "").toLowerCase().trim();
       const wantedCatName = PRESET_CATEGORY_MAP[key];
-      if (!wantedCatName) return p;
+      if (!wantedCatName) return p; // No mapping for this preset, leave it alone
       const newCatId = catByName.get(wantedCatName.toLowerCase());
-      if (!newCatId) return p;
+      if (!newCatId) return p; // Target category doesn't exist on this device
+      if (p.categoryId === newCatId) return p; // Already linked correctly
       updated += 1;
       return { ...p, categoryId: newCatId, updatedAt: Date.now() };
     });
