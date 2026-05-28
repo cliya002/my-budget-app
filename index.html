@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=36" />
+  <link rel="stylesheet" href="styles.css?v=37" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -113,6 +113,7 @@
           <div class="page-header">
             <h1>My Dashboard</h1>
             <div class="page-actions">
+              <span id="dashSyncBadge" class="sync-dash-badge" hidden></span>
               <span id="monthLabel" class="month-pill"></span>
               <button id="printReportBtn" class="btn-secondary" title="Generate monthly report (Ctrl+P to save as PDF)">📄 Report</button>
               <button id="paycheckBtn" class="btn-secondary">💼 Log Paycheck</button>
@@ -1104,6 +1105,8 @@
             <p class="footer-note" style="margin-top:0.5rem; text-align:left">
               💡 To set up a second device: install the app there, sign in with the same password, paste the same token + Gist ID, then tap Pull.
             </p>
+            <button id="syncQrBtn" class="btn-secondary block" style="margin-top:0.5rem">📱 Generate QR for new device</button>
+            <button id="syncHistoryBtn" class="btn-secondary block" style="margin-top:0.5rem">📜 View sync history</button>
           </div>
 
           <div class="card">
@@ -1714,6 +1717,40 @@
     </div>
   </div>
 
+  <!-- Sync QR Modal -->
+  <div id="syncQrModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>📱 New Device Setup</h2>
+        <button class="modal-close" id="syncQrClose">×</button>
+      </div>
+      <p class="card-sub">On your new device, install Pocket Budget, sign in with the same password, then scan this QR or paste the link.</p>
+      <div id="syncQrCanvas" class="qr-canvas"></div>
+      <div class="form-row" style="margin-top:0.85rem">
+        <label>Or copy this link</label>
+        <input type="text" id="syncSetupLink" readonly />
+      </div>
+      <button id="syncCopyLink" class="btn-secondary block" style="margin-top:0.5rem">Copy Link</button>
+      <p class="footer-note" style="margin-top:0.5rem; text-align:left">
+        ⚠️ The link contains your sync token. Don't share publicly. Treat it like a password.
+      </p>
+    </div>
+  </div>
+
+  <!-- Sync History Modal -->
+  <div id="syncHistoryModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>📜 Sync History</h2>
+        <button class="modal-close" id="syncHistoryClose">×</button>
+      </div>
+      <ul id="syncHistoryList" class="list">
+        <li class="empty">No sync events yet.</li>
+      </ul>
+      <button id="syncHistoryClear" class="btn-secondary block" style="margin-top:0.85rem">Clear history</button>
+    </div>
+  </div>
+
   <!-- Global Search -->
   <div id="globalSearchOverlay" class="search-overlay" hidden>
     <div class="search-modal">
@@ -1732,6 +1769,7 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
     if (window.pdfjsLib) {
@@ -1739,7 +1777,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=36"></script>
+  <script src="app.js?v=37"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

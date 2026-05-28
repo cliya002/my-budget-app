@@ -2601,3 +2601,25 @@ input[type="color"] {
 }
 .csv-table th { background: var(--card-soft); color: var(--primary); font-weight: 600; }
 .csv-table .right { text-align: right; }
+
+/* ================ Sync improvements ================ */
+.qr-canvas {
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: #fff;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.qr-canvas img, .qr-canvas canvas { display: block; }
+
+.sync-dash-badge {
+  background: var(--card-soft);
+  color: var(--text-dim);
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+}

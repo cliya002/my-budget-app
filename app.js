@@ -248,6 +248,10 @@
     currency = localStorage.getItem(KEYS.currency) || "USD";
     hideAmounts = localStorage.getItem(KEYS.hideAmounts) === "true";
 
+    // Restore last sync time
+    const ls = parseInt(localStorage.getItem("mb_last_synced") || "0", 10);
+    if (ls > 0) lastSyncedAt = ls;
+
     // Apply saved theme (or auto-detect on first launch)
     theme = localStorage.getItem(KEYS.theme);
     if (!theme) {
@@ -5854,6 +5858,33 @@
       });
     }
 
+    // QR setup
+    $("#syncQrBtn")?.addEventListener("click", openSyncQrModal);
+    $("#syncQrClose")?.addEventListener("click", () => $("#syncQrModal").classList.remove("open"));
+    $("#syncQrModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "syncQrModal") $("#syncQrModal").classList.remove("open");
+    });
+    $("#syncCopyLink")?.addEventListener("click", () => {
+      const link = $("#syncSetupLink").value;
+      navigator.clipboard.writeText(link).then(() => showToast("Link copied"));
+    });
+
+    // Sync history
+    $("#syncHistoryBtn")?.addEventListener("click", () => {
+      renderSyncHistory();
+      $("#syncHistoryModal").classList.add("open");
+    });
+    $("#syncHistoryClose")?.addEventListener("click", () => $("#syncHistoryModal").classList.remove("open"));
+    $("#syncHistoryModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "syncHistoryModal") $("#syncHistoryModal").classList.remove("open");
+    });
+    $("#syncHistoryClear")?.addEventListener("click", () => {
+      if (confirm("Clear sync history?")) {
+        localStorage.removeItem(SYNC_HISTORY_KEY);
+        renderSyncHistory();
+      }
+    });
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -7339,16 +7370,62 @@
   let autoSyncTimer = null;
   let dirtyForSync = false;
   let lastSyncedAt = null;
+  let pushDebounceTimer = null;
+  let syncRetryCount = 0;
+  const SYNC_HISTORY_KEY = "mb_sync_history";
+
+  function logSyncEvent(action, status, message) {
+    try {
+      const history = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]");
+      history.unshift({
+        ts: Date.now(),
+        action,    // 'push' | 'pull' | 'check'
+        status,    // 'success' | 'error' | 'conflict' | 'offline'
+        message: String(message || "").slice(0, 200),
+      });
+      localStorage.setItem(SYNC_HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+    } catch (e) { /* ignore */ }
+  }
 
   function startAutoSync() {
     stopAutoSync();
     if (localStorage.getItem("mb_auto_sync") !== "true") return;
     if (!localStorage.getItem(KEYS.syncToken)) return;
     autoSyncTimer = setInterval(() => {
-      if (dirtyForSync) {
+      if (dirtyForSync && navigator.onLine) {
         syncPush({ silent: true });
       }
     }, 5 * 60 * 1000);
+
+    // Refresh "X min ago" badge every minute
+    setInterval(() => {
+      if (lastSyncedAt) updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
+    }, 60 * 1000);
+
+    // Online/offline
+    window.removeEventListener("online", handleOnline);
+    window.addEventListener("online", handleOnline);
+    window.removeEventListener("offline", handleOffline);
+    window.addEventListener("offline", handleOffline);
+
+    // Visibility change — pull when returning to app
+    document.removeEventListener("visibilitychange", handleVisibility);
+    document.addEventListener("visibilitychange", handleVisibility);
+  }
+
+  function handleOnline() {
+    showAlertToast("📡 Back online", "success");
+    if (dirtyForSync) syncPush({ silent: true });
+    updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
+  }
+  function handleOffline() {
+    updateSyncIndicator("offline");
+  }
+  function handleVisibility() {
+    if (!document.hidden && localStorage.getItem("mb_auto_sync") === "true") {
+      // Quick remote-newer check
+      checkForRemoteUpdate();
+    }
   }
 
   function stopAutoSync() {
@@ -7359,40 +7436,73 @@
   function markDirty() {
     dirtyForSync = true;
     updateSyncIndicator("dirty");
+    schedulePushIfAuto();
+  }
+
+  function schedulePushIfAuto() {
+    if (localStorage.getItem("mb_auto_sync") !== "true") return;
+    if (!localStorage.getItem(KEYS.syncToken)) return;
+    if (!navigator.onLine) {
+      updateSyncIndicator("offline");
+      return;
+    }
+    clearTimeout(pushDebounceTimer);
+    pushDebounceTimer = setTimeout(() => {
+      if (dirtyForSync) syncPush({ silent: true });
+    }, 30000); // 30 seconds after last change
   }
 
   function updateSyncIndicator(status) {
-    // status: 'synced' | 'dirty' | 'syncing' | 'error' | 'off'
+    // status: 'synced' | 'dirty' | 'syncing' | 'error' | 'off' | 'offline' | 'conflict'
     const ind = $("#syncIndicator");
     const indDesk = $("#syncIndicatorDesktop");
-    if (!ind && !indDesk) return;
+    const dashBadge = $("#dashSyncBadge");
+    if (!ind && !indDesk && !dashBadge) return;
 
     const enabled = localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId);
     if (!enabled) {
       if (ind) ind.hidden = true;
       if (indDesk) indDesk.hidden = true;
+      if (dashBadge) dashBadge.hidden = true;
       return;
     }
     if (ind) ind.hidden = false;
     if (indDesk) indDesk.hidden = false;
+    if (dashBadge) dashBadge.hidden = false;
 
     const pretty = {
       synced: { icon: "🟢", text: "Synced", title: lastSyncedAt ? "Last synced " + new Date(lastSyncedAt).toLocaleTimeString() : "Synced" },
       dirty: { icon: "🟡", text: "Pending", title: "Local changes pending sync" },
       syncing: { icon: "🔄", text: "Syncing…", title: "Sync in progress" },
       error: { icon: "🔴", text: "Sync error", title: "Last sync failed" },
+      offline: { icon: "📵", text: "Offline", title: "Will push when back online" },
+      conflict: { icon: "⚠️", text: "Conflict", title: "Cloud and local diverged — resolve in Settings" },
       off: { icon: "⚪", text: "Off", title: "Sync disabled" },
     };
     const p = pretty[status] || pretty.synced;
-    [ind, indDesk].forEach((el) => {
+    [ind, indDesk, dashBadge].forEach((el) => {
       if (!el) return;
-      el.textContent = el === indDesk ? `${p.icon} ${p.text}` : p.icon;
+      if (el === ind) {
+        el.textContent = p.icon;
+      } else {
+        const time = lastSyncedAt ? ` · ${formatSyncRelative(lastSyncedAt)}` : "";
+        el.textContent = `${p.icon} ${p.text}${el === dashBadge ? time : ""}`;
+      }
       el.title = p.title;
     });
   }
 
+  function formatSyncRelative(ts) {
+    const diff = Date.now() - ts;
+    if (diff < 60000) return "just now";
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return `${Math.floor(diff / 86400000)}d ago`;
+  }
+
   async function syncPush(opts = {}) {
     const silent = !!opts.silent;
+    const force = !!opts.force;
     const token = localStorage.getItem(KEYS.syncToken);
     if (!token) {
       if (!silent) showSyncStatus("Add a GitHub token first.", "warn");
@@ -7402,22 +7512,67 @@
       if (!silent) showSyncStatus("Unlock the app first.", "warn");
       return;
     }
+    if (!navigator.onLine) {
+      updateSyncIndicator("offline");
+      logSyncEvent("push", "offline", "Browser is offline");
+      if (!silent) showSyncStatus("📵 You're offline. Will retry when back online.", "warn");
+      return;
+    }
 
     if (!silent) showSyncStatus("⬆️ Encrypting and uploading…", "loading");
     updateSyncIndicator("syncing");
     try {
+      const gistId = localStorage.getItem(KEYS.syncGistId);
+
+      // Conflict check: fetch remote's updatedAt before pushing
+      if (gistId && !force) {
+        try {
+          const checkRes = await fetch(`https://api.github.com/gists/${gistId}`, {
+            headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+          });
+          if (checkRes.ok) {
+            const checkData = await checkRes.json();
+            const file = checkData.files[SYNC_FILENAME];
+            if (file) {
+              const remotePayload = JSON.parse(file.content);
+              const remoteTime = new Date(remotePayload.updatedAt).getTime();
+              if (lastSyncedAt && remoteTime > lastSyncedAt + 60000) {
+                // Conflict! Remote was updated after our last sync
+                updateSyncIndicator("conflict");
+                logSyncEvent("push", "conflict", `Remote updated ${new Date(remoteTime).toLocaleString()}`);
+                if (silent) {
+                  showAlertToast("⚠️ Sync conflict — open Settings to resolve", "warning");
+                  return;
+                }
+                const choice = await showConflictDialog(remotePayload, remoteTime);
+                if (choice === "cancel") {
+                  updateSyncIndicator("dirty");
+                  return;
+                }
+                if (choice === "pull") {
+                  await syncPull({ skipConfirm: true });
+                  return;
+                }
+                // 'overwrite' falls through to push
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("Conflict check failed", e);
+        }
+      }
+
       const encBlob = await encryptState(state);
       if (!encBlob) throw new Error("Encryption failed");
 
-      // Wrap with a small metadata header
       const payload = JSON.stringify({
         version: 1,
         encrypted: encBlob,
         salt: localStorage.getItem(KEYS.salt),
         updatedAt: new Date().toISOString(),
+        device: getDeviceLabel(),
       });
 
-      const gistId = localStorage.getItem(KEYS.syncGistId);
       const body = {
         description: "Pocket Budget App — encrypted backup",
         public: false,
@@ -7452,27 +7607,89 @@
         localStorage.setItem(KEYS.syncGistId, data.id);
         $("#syncGistId").value = data.id;
       }
-      showSyncStatus(`✓ Pushed ${(payload.length / 1024).toFixed(1)} KB · ${new Date().toLocaleTimeString()}`, "success");
+      const sizeMsg = `Pushed ${(payload.length / 1024).toFixed(1)} KB · ${new Date().toLocaleTimeString()}`;
+      showSyncStatus(`✓ ${sizeMsg}`, "success");
       lastSyncedAt = Date.now();
+      localStorage.setItem("mb_last_synced", String(lastSyncedAt));
       dirtyForSync = false;
+      syncRetryCount = 0;
       updateSyncIndicator("synced");
+      logSyncEvent("push", "success", sizeMsg);
+      renderSyncHistory();
     } catch (e) {
       console.error(e);
-      if (!silent) showSyncStatus(`❌ ${e.message || "Push failed"}`, "warn");
-      updateSyncIndicator("error");
+      logSyncEvent("push", "error", e.message);
+      // Retry with backoff (max 3 attempts)
+      if (silent && syncRetryCount < 3) {
+        syncRetryCount += 1;
+        const delay = Math.pow(2, syncRetryCount) * 1000;
+        setTimeout(() => syncPush({ silent: true }), delay);
+        updateSyncIndicator("dirty");
+      } else {
+        if (!silent) showSyncStatus(`❌ ${e.message || "Push failed"}`, "warn");
+        updateSyncIndicator("error");
+      }
+      renderSyncHistory();
     }
   }
 
-  async function syncPull() {
+  function getDeviceLabel() {
+    let label = localStorage.getItem("mb_device_label");
+    if (!label) {
+      const ua = navigator.userAgent;
+      if (/iPhone/.test(ua)) label = "iPhone";
+      else if (/iPad/.test(ua)) label = "iPad";
+      else if (/Android/.test(ua)) label = "Android";
+      else if (/Mac/.test(ua)) label = "Mac";
+      else if (/Windows/.test(ua)) label = "Windows";
+      else label = "Browser";
+      localStorage.setItem("mb_device_label", label);
+    }
+    return label;
+  }
+
+  function showConflictDialog(remotePayload, remoteTime) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement("div");
+      overlay.className = "modal open";
+      overlay.style.zIndex = "9500";
+      overlay.innerHTML = `
+        <div class="modal-card">
+          <div class="modal-header">
+            <h2>⚠️ Sync Conflict</h2>
+          </div>
+          <p>Cloud was updated by another device <strong>${new Date(remoteTime).toLocaleString()}</strong> (${remotePayload.device || "unknown device"}).</p>
+          <p>Your local changes are <strong>${formatSyncRelative(lastSyncedAt)}</strong>. What do you want to do?</p>
+          <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:1rem">
+            <button class="btn-secondary" data-conflict="pull">⬇️ Pull cloud (replace local)</button>
+            <button class="btn-danger" data-conflict="overwrite">⬆️ Push my changes (overwrite cloud)</button>
+            <button class="btn-secondary" data-conflict="cancel">Cancel</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(overlay);
+      overlay.querySelectorAll("[data-conflict]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const choice = btn.dataset.conflict;
+          overlay.remove();
+          resolve(choice);
+        });
+      });
+    });
+  }
+
+  async function syncPull(opts = {}) {
+    const skipConfirm = !!opts.skipConfirm;
     const token = localStorage.getItem(KEYS.syncToken);
     const gistId = localStorage.getItem(KEYS.syncGistId);
     if (!token) { showSyncStatus("Add a GitHub token first.", "warn"); return; }
     if (!gistId) { showSyncStatus("No Gist ID — push from another device first.", "warn"); return; }
     if (!cryptoKey) { showSyncStatus("Unlock the app first.", "warn"); return; }
 
-    if (!confirm("Pull will replace ALL local data with what's in the cloud. Continue?")) return;
+    if (!skipConfirm && !confirm("Pull will replace ALL local data with what's in the cloud. Continue?")) return;
 
     showSyncStatus("⬇️ Downloading and decrypting…", "loading");
+    updateSyncIndicator("syncing");
     try {
       const res = await fetch(`https://api.github.com/gists/${gistId}`, {
         headers: {
@@ -7487,10 +7704,7 @@
       const payload = JSON.parse(file.content);
       if (!payload.encrypted) throw new Error("No encrypted data in gist");
 
-      // Use the salt from the gist so decryption works (different device may have different salt)
       if (payload.salt && payload.salt !== localStorage.getItem(KEYS.salt)) {
-        // We need to re-derive the key with the gist's salt. This requires re-prompting password.
-        // Simpler: store the original salt and re-derive once.
         const pwd = prompt("Enter your password to decrypt the cloud backup:");
         if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
         localStorage.setItem(KEYS.salt, payload.salt);
@@ -7503,14 +7717,20 @@
       state = { ...state, ...decrypted };
       saveData();
       renderAll();
-      showSyncStatus(`✓ Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()}`, "success");
+      const msg = `Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()} (${payload.device || "unknown"})`;
+      showSyncStatus(`✓ ${msg}`, "success");
       lastSyncedAt = Date.now();
+      localStorage.setItem("mb_last_synced", String(lastSyncedAt));
       dirtyForSync = false;
       updateSyncIndicator("synced");
+      logSyncEvent("pull", "success", msg);
+      renderSyncHistory();
     } catch (e) {
       console.error(e);
+      logSyncEvent("pull", "error", e.message);
       showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
       updateSyncIndicator("error");
+      renderSyncHistory();
     }
   }
 
@@ -7520,6 +7740,75 @@
     el.hidden = false;
     el.className = `sync-status ${type || ""}`;
     el.textContent = msg;
+  }
+
+  /* ---------- Sync QR + history + setup link ---------- */
+  function openSyncQrModal() {
+    const token = localStorage.getItem(KEYS.syncToken);
+    const gistId = localStorage.getItem(KEYS.syncGistId);
+    if (!token || !gistId) {
+      showToast("Set up sync first (push from this device once).");
+      return;
+    }
+    // Build a fragment-only link (never sent to server)
+    const url = `${location.origin}${location.pathname}#sync=${encodeURIComponent(token)}|${encodeURIComponent(gistId)}`;
+    $("#syncSetupLink").value = url;
+
+    const canvas = $("#syncQrCanvas");
+    canvas.innerHTML = "";
+    if (typeof QRCode !== "undefined") {
+      new QRCode(canvas, { text: url, width: 256, height: 256, correctLevel: QRCode.CorrectLevel.M });
+    } else {
+      canvas.innerHTML = '<p class="empty">QR library failed to load. Use the link below.</p>';
+    }
+    $("#syncQrModal").classList.add("open");
+  }
+
+  function processSyncSetupHash() {
+    if (!location.hash || !location.hash.startsWith("#sync=")) return;
+    const data = decodeURIComponent(location.hash.slice(6));
+    const [token, gistId] = data.split("|").map(decodeURIComponent);
+    if (!token || !gistId) return;
+    if (confirm("Set up cloud sync from a paired device? This saves the token + Gist ID locally.")) {
+      localStorage.setItem(KEYS.syncToken, token);
+      localStorage.setItem(KEYS.syncGistId, gistId);
+      localStorage.setItem("mb_auto_sync", "true");
+      // Clear hash so it doesn't sit in URL
+      history.replaceState(null, "", location.pathname);
+      showToast("Sync paired. Pull from cloud to load data.");
+    } else {
+      history.replaceState(null, "", location.pathname);
+    }
+  }
+
+  function renderSyncHistory() {
+    const list = $("#syncHistoryList");
+    if (!list) return;
+    let history;
+    try { history = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]"); }
+    catch (e) { history = []; }
+    if (!history.length) {
+      list.innerHTML = '<li class="empty">No sync events yet.</li>';
+      return;
+    }
+    list.innerHTML = history.map((ev) => {
+      const time = new Date(ev.ts).toLocaleString();
+      const icon = ev.status === "success" ? "✓"
+        : ev.status === "error" ? "❌"
+        : ev.status === "conflict" ? "⚠️"
+        : ev.status === "offline" ? "📵"
+        : "·";
+      const cls = ev.status === "success" ? "positive"
+        : ev.status === "error" ? "negative"
+        : "";
+      return `
+        <li class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title ${cls}">${icon} ${ev.action.toUpperCase()}</div>
+            <div class="list-item-sub">${time} · ${escapeHtml(ev.message)}</div>
+          </div>
+        </li>`;
+    }).join("");
   }
 
   /* ---------- AI Insights (BYOK) ---------- */
@@ -7860,6 +8149,7 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
 
   /* ---------- Init ---------- */
   document.addEventListener("DOMContentLoaded", () => {
+    processSyncSetupHash();
     initLock();
     initNav();
     initForms();
