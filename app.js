@@ -173,7 +173,7 @@
   }
 
   function unlock() {
-    $("#lockScreen").style.display = "none";
+    $("#lockScreen").hidden = true;
     $("#app").hidden = false;
     loadData();
     renderAll();
@@ -181,7 +181,7 @@
 
   function lockNow() {
     $("#app").hidden = true;
-    $("#lockScreen").style.display = "flex";
+    $("#lockScreen").hidden = false;
     $("#passwordInput").value = "";
     $("#passwordConfirm").value = "";
     $("#lockError").hidden = true;

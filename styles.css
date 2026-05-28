@@ -130,6 +130,10 @@ label {
   z-index: 1000;
 }
 
+.lock-screen[hidden] {
+  display: none !important;
+}
+
 .lock-card {
   background: var(--card);
   border-radius: var(--radius);
@@ -490,6 +494,10 @@ label {
   justify-content: center;
   z-index: 100;
   padding: 1rem;
+}
+
+.modal[hidden] {
+  display: none !important;
 }
 
 .modal-content {
