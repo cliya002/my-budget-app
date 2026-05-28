@@ -24,13 +24,14 @@
     income: 0,             // legacy default if no per-month value set
     monthlyIncome: {},     // map: "YYYY-MM" -> amount (per-month target)
     categories: [],
-    expenses: [],          // each: { id, type, desc, amount, date, categoryId, accountId, tags, receipt }
+    expenses: [],          // each: { id, type, desc, amount, date, categoryId, accountId, personId, tags, receipt }
     goals: [],
-    presets: [],           // each: { id, type, desc, amount, categoryId }
-    recurring: [],         // each: { id, type, desc, amount, categoryId, dayOfMonth, lastRunMonth, active }
-    cards: [],             // each: { id, name, issuer, last4, limit, balance, apr, dueDay, autopay }
-    creditScores: [],      // each: { id, score, date, source, type, note }
-    accounts: [],          // each: { id, name, type, balance, color }
+    presets: [],
+    recurring: [],
+    cards: [],
+    creditScores: [],
+    accounts: [],
+    people: [],            // each: { id, name, relation, color, notes }
     settings: {
       rollover: false,
       alertsShown: {},
@@ -66,6 +67,9 @@
 
   // Period for insights
   let insightsPeriod = "monthly";
+
+  // Period for family tab
+  let familyPeriod = "monthly"; // 'monthly' | 'ytd' | 'all'
 
   // Chart instances (so we can destroy them before re-render)
   const charts = {};
@@ -244,6 +248,7 @@
     if (!Array.isArray(state.cards)) state.cards = [];
     if (!Array.isArray(state.creditScores)) state.creditScores = [];
     if (!Array.isArray(state.accounts)) state.accounts = [];
+    if (!Array.isArray(state.people)) state.people = [];
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -543,6 +548,9 @@
         if (btn.dataset.tab === "credit") {
           setTimeout(renderCreditTrend, 50);
         }
+        if (btn.dataset.tab === "family") {
+          setTimeout(renderFamilyTrend, 50);
+        }
       });
     });
 
@@ -564,6 +572,7 @@
     renderTransactions();
     renderInsights();
     renderCredit();
+    renderFamily();
     renderPresetsManage();
     renderRecurringList();
     renderAccountList();
@@ -571,6 +580,7 @@
     renderThemeButtons();
     populateExpenseCategorySelect();
     populateAccountSelect("#expAccount", true);
+    populatePersonSelect();
     populateRecurringCategorySelect();
     renderFilterChips();
     $("#currencySelect").value = currency;
@@ -1219,6 +1229,10 @@
     const tagsHtml = (exp.tags && exp.tags.length)
       ? `<div class="txn-tags">${exp.tags.map((t) => `<span class="txn-tag-chip">${escapeHtml(t)}</span>`).join("")}</div>`
       : "";
+    const person = exp.personId ? state.people.find((p) => p.id === exp.personId) : null;
+    const personHtml = person
+      ? `<div class="txn-person" style="color: ${person.color || "var(--primary)"}">→ ${escapeHtml(person.name)}</div>`
+      : "";
     return `
       <li class="txn-item ${isSelected ? "selected" : ""}" data-txn-row="${exp.id}">
         <input type="checkbox" class="txn-check" data-action="select-txn" data-id="${exp.id}" ${isSelected ? "checked" : ""} aria-label="Select transaction" />
@@ -1231,6 +1245,7 @@
           <div class="txn-id">#${exp.id.slice(-4).toUpperCase()}</div>
           <div class="txn-name">${escapeHtml(exp.desc)}</div>
           <div class="txn-cat">${escapeHtml(catName)}</div>
+          ${personHtml}
           ${tagsHtml}
         </div>
         <div class="txn-right">
@@ -2666,6 +2681,207 @@
     showToast(`Imported ${saved} item${saved === 1 ? "" : "s"}`);
   }
 
+  /* ---------- Family ---------- */
+  function familyTransactions() {
+    // Only outgoing money sent to a person
+    return state.expenses.filter(
+      (e) => e.personId && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+  }
+
+  function filterFamilyByPeriod(txns) {
+    const m = currentMonth();
+    if (familyPeriod === "monthly") {
+      return txns.filter((e) => monthKey(e.date) === m);
+    }
+    if (familyPeriod === "ytd") {
+      const year = m.slice(0, 4);
+      return txns.filter((e) => (e.date || "").startsWith(year));
+    }
+    return txns;
+  }
+
+  function renderFamily() {
+    renderPeopleList();
+    renderFamilyBreakdown();
+    renderFamilyTrend();
+    renderFamilyTxnList();
+
+    const total = filterFamilyByPeriod(familyTransactions())
+      .reduce((s, e) => s + Number(e.amount), 0);
+    $("#familyTotalPill").textContent = `Total sent: ${fmt(total)}`;
+  }
+
+  function renderPeopleList() {
+    const list = $("#peopleList");
+    if (!list) return;
+    if (!state.people.length) {
+      list.innerHTML = '<li class="empty">No people yet.</li>';
+      return;
+    }
+    list.innerHTML = state.people
+      .map((p) => {
+        const totalAll = state.expenses
+          .filter((e) => e.personId === p.id && e.type !== "income"
+            && e.type !== "transfer-in" && e.type !== "transfer-out")
+          .reduce((s, e) => s + Number(e.amount), 0);
+        const notes = p.notes ? ` · ${escapeHtml(p.notes)}` : "";
+        return `
+          <li class="list-item person-item" style="border-left: 4px solid ${p.color || "#5b3fb8"}">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(p.name)}</div>
+              <div class="list-item-sub">${escapeHtml(p.relation || "Other")}${notes}</div>
+            </div>
+            <div class="list-item-amount">${fmt(totalAll)}<div class="list-item-sub" style="margin-top:0.15rem">all-time</div></div>
+            <div class="list-item-actions">
+              <button data-action="edit-person" data-id="${p.id}" title="Edit">✏️</button>
+              <button data-action="del-person" data-id="${p.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function renderFamilyBreakdown() {
+    const el = $("#familyBreakdown");
+    if (!el) return;
+    if (!state.people.length) {
+      el.innerHTML = '<p class="empty">No people added yet. Tap <strong>+ Add Person</strong> to track money sent to family.</p>';
+      return;
+    }
+    const txns = filterFamilyByPeriod(familyTransactions());
+    const totalSent = txns.reduce((s, e) => s + Number(e.amount), 0);
+
+    const rows = state.people.map((p) => {
+      const personTxns = txns.filter((e) => e.personId === p.id);
+      const total = personTxns.reduce((s, e) => s + Number(e.amount), 0);
+      const pct = totalSent > 0 ? (total / totalSent) * 100 : 0;
+      return { person: p, total, pct, count: personTxns.length };
+    });
+
+    rows.sort((a, b) => b.total - a.total);
+
+    el.innerHTML = rows
+      .map((r) => {
+        return `
+          <div class="progress-item person-progress" style="border-left: 4px solid ${r.person.color || "#5b3fb8"}">
+            <div class="progress-header">
+              <span class="progress-name">${escapeHtml(r.person.name)} <span class="progress-amount">${escapeHtml(r.person.relation || "")}</span></span>
+              <span class="progress-amount">${fmt(r.total)} · ${r.count} txn${r.count === 1 ? "" : "s"}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill" style="width: ${pct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}"></div>
+            </div>
+          </div>`;
+      })
+      .join("");
+
+    if (totalSent === 0) {
+      el.innerHTML += `<p class="empty" style="margin-top:0.75rem">No transactions for this period yet.</p>`;
+    }
+  }
+
+  function renderFamilyTrend() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("familyTrend");
+    const ctx = $("#chartFamilyTrend");
+    if (!ctx) return;
+
+    const txns = familyTransactions();
+    if (!txns.length || !state.people.length) {
+      $("#familyTrendEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#familyTrendEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    // Last 6 months totals per person, stacked
+    const m = currentMonth();
+    const months = [];
+    for (let i = 5; i >= 0; i--) months.push(monthOffset(m, -i));
+
+    const datasets = state.people.map((p) => {
+      const data = months.map((mk) =>
+        txns
+          .filter((e) => e.personId === p.id && monthKey(e.date) === mk)
+          .reduce((s, e) => s + Number(e.amount), 0)
+      );
+      return {
+        label: p.name,
+        data,
+        backgroundColor: p.color || "#5b3fb8",
+        borderRadius: 4,
+      };
+    });
+
+    const labels = months.map((mk) => {
+      const [y, mm] = mk.split("-");
+      const d = new Date(Number(y), Number(mm) - 1, 1);
+      return d.toLocaleDateString(undefined, { month: "short" });
+    });
+
+    charts.familyTrend = new Chart(ctx, {
+      type: "bar",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top", labels: { boxWidth: 12 } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } },
+        },
+        scales: {
+          x: { stacked: true, grid: { display: false } },
+          y: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  function renderFamilyTxnList() {
+    const list = $("#familyTxnList");
+    if (!list) return;
+    const txns = filterFamilyByPeriod(familyTransactions())
+      .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+    if (!txns.length) {
+      list.innerHTML = '<li class="empty">Mark a transaction as sent to someone using the "Sent to family member" field.</li>';
+      return;
+    }
+    list.innerHTML = txns.map(renderTxnItem).join("");
+    attachReceiptClicks(list);
+  }
+
+  function populatePersonSelect() {
+    const sel = $("#expPerson");
+    if (!sel) return;
+    sel.innerHTML =
+      '<option value="">— Not for a family member —</option>' +
+      state.people
+        .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}${p.relation ? " (" + escapeHtml(p.relation) + ")" : ""}</option>`)
+        .join("");
+  }
+
+  function openPersonModal(person) {
+    const isEdit = !!person;
+    $("#personModalTitle").textContent = isEdit ? "Edit Person" : "Add Person";
+    $("#personEditId").value = isEdit ? person.id : "";
+    $("#personName").value = isEdit ? person.name : "";
+    $("#personRelation").value = isEdit ? (person.relation || "other") : "parent";
+    $("#personColor").value = isEdit ? (person.color || "#5b3fb8") : randomPersonColor();
+    $("#personNotes").value = isEdit ? (person.notes || "") : "";
+    $("#personModal").classList.add("open");
+    setTimeout(() => $("#personName")?.focus(), 50);
+  }
+  function closePersonModal() {
+    $("#personModal").classList.remove("open");
+    $("#personForm").reset();
+  }
+  function randomPersonColor() {
+    const colors = ["#5b3fb8", "#22c55e", "#3b82f6", "#ec4899", "#f59e0b", "#14b8a6", "#06b6d4", "#8b5cf6"];
+    return colors[state.people.length % colors.length];
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -2713,11 +2929,15 @@
 
     populateExpenseCategorySelect();
     populateAccountSelect("#expAccount", true);
+    populatePersonSelect();
     if (prefill && prefill.categoryId) {
       $("#expCategory").value = prefill.categoryId;
     }
     if (prefill && prefill.accountId) {
       $("#expAccount").value = prefill.accountId;
+    }
+    if (prefill && prefill.personId) {
+      $("#expPerson").value = prefill.personId;
     }
 
     // Receipt prefill (only when editing)
@@ -2890,6 +3110,7 @@
       const date = $("#expDate").value;
       const categoryId = $("#expCategory").value;
       const accountId = $("#expAccount").value;
+      const personId = $("#expPerson").value;
       const tagsRaw = $("#expTags").value.trim();
       const tags = tagsRaw
         ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
@@ -2909,6 +3130,7 @@
             type, desc, amount, date,
             categoryId: categoryId || null,
             accountId: accountId || null,
+            personId: personId || null,
             tags,
             receipt,
           };
@@ -2918,6 +3140,7 @@
           id: uid(), type, desc, amount, date,
           categoryId: categoryId || null,
           accountId: accountId || null,
+          personId: personId || null,
           tags,
           receipt,
         });
@@ -3156,6 +3379,45 @@
       showToast("Transfer recorded");
     });
 
+    // Family: person form
+    $("#addPersonBtn").addEventListener("click", () => openPersonModal(null));
+    $("#personModalClose").addEventListener("click", closePersonModal);
+    $("#personModal").addEventListener("click", (e) => {
+      if (e.target.id === "personModal") closePersonModal();
+    });
+    $("#personForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const editId = $("#personEditId").value;
+      const person = {
+        id: editId || uid(),
+        name: $("#personName").value.trim(),
+        relation: $("#personRelation").value,
+        color: $("#personColor").value,
+        notes: $("#personNotes").value.trim(),
+      };
+      if (!person.name) return;
+      if (editId) {
+        const idx = state.people.findIndex((p) => p.id === editId);
+        if (idx >= 0) state.people[idx] = person;
+      } else {
+        state.people.push(person);
+      }
+      saveData();
+      closePersonModal();
+      renderAll();
+      showToast(editId ? "Person updated" : "Person added");
+    });
+
+    // Family period selector
+    $$(".family-period-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $$(".family-period-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        familyPeriod = btn.dataset.period;
+        renderFamily();
+      });
+    });
+
     // Card form
     $("#cardForm").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -3390,6 +3652,19 @@
           saveData();
           renderAll();
         }
+      } else if (action === "edit-person") {
+        const p = state.people.find((x) => x.id === id);
+        if (p) openPersonModal(p);
+      } else if (action === "del-person") {
+        if (confirm("Delete this person? Transactions linked to them will keep their record but lose the link.")) {
+          state.people = state.people.filter((p) => p.id !== id);
+          // Unlink transactions
+          state.expenses.forEach((e) => {
+            if (e.personId === id) e.personId = null;
+          });
+          saveData();
+          renderAll();
+        }
       } else if (action === "del-card") {
         if (confirm("Delete this card?")) {
           state.cards = state.cards.filter((c) => c.id !== id);
@@ -3514,6 +3789,7 @@
             cards: data.cards || [],
             creditScores: data.creditScores || [],
             accounts: data.accounts || [],
+            people: data.people || [],
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -3541,6 +3817,7 @@
           cards: [],
           creditScores: [],
           accounts: [],
+          people: [],
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();

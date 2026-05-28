@@ -1624,3 +1624,38 @@ label {
   border-radius: var(--radius-pill);
   font-weight: 600;
 }
+
+/* ================ Family Tab ================ */
+.person-item .list-item-amount {
+  text-align: right;
+  font-weight: 700;
+}
+.person-progress {
+  background: var(--card-soft);
+}
+.txn-person {
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-top: 0.15rem;
+}
+
+.family-period-btn {
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.5rem 1.1rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+}
+.family-period-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+input[type="color"] {
+  height: 42px;
+  padding: 0.2rem;
+  cursor: pointer;
+}
