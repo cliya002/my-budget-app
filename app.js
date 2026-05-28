@@ -294,39 +294,7 @@
 
     // Seed quick-add presets on first launch with built-in library
     if (!state.presets.length) {
-      const findCat = (name) => state.categories.find((c) => c.name === name)?.id;
-      state.presets = [
-        // Daily expenses
-        { id: uid(), type: "expense", desc: "Coffee", amount: 5, categoryId: findCat("Eating Out"), icon: "☕", group: "daily", favorite: true },
-        { id: uid(), type: "expense", desc: "Lunch", amount: 15, categoryId: findCat("Eating Out"), icon: "🥗", group: "daily", favorite: true },
-        { id: uid(), type: "expense", desc: "Dinner Out", amount: 35, categoryId: findCat("Eating Out"), icon: "🍽️", group: "daily" },
-        { id: uid(), type: "expense", desc: "Groceries", amount: 75, categoryId: findCat("Groceries"), icon: "🛒", group: "daily", favorite: true },
-        { id: uid(), type: "expense", desc: "Gas", amount: 50, categoryId: findCat("Transport"), icon: "⛽", group: "daily", favorite: true },
-        { id: uid(), type: "expense", desc: "Uber/Lyft", amount: 18, categoryId: findCat("Transport"), icon: "🚗", group: "daily" },
-        { id: uid(), type: "expense", desc: "Public transit", amount: 5, categoryId: findCat("Transport"), icon: "🚇", group: "daily" },
-        { id: uid(), type: "expense", desc: "Snacks", amount: 8, categoryId: findCat("Eating Out"), icon: "🍿", group: "daily" },
-
-        // Subscriptions
-        { id: uid(), type: "expense", desc: "Netflix", amount: 15.49, categoryId: findCat("Other"), icon: "🎬", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Spotify", amount: 11.99, categoryId: findCat("Other"), icon: "🎵", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Amazon Prime", amount: 14.99, categoryId: findCat("Other"), icon: "📦", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Disney+", amount: 13.99, categoryId: findCat("Other"), icon: "✨", group: "subscription" },
-        { id: uid(), type: "expense", desc: "YouTube Premium", amount: 13.99, categoryId: findCat("Other"), icon: "▶️", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Apple iCloud", amount: 2.99, categoryId: findCat("Other"), icon: "☁️", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Gym", amount: 30, categoryId: findCat("Other"), icon: "💪", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Phone bill", amount: 75, categoryId: findCat("Utilities"), icon: "📱", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Internet", amount: 60, categoryId: findCat("Utilities"), icon: "📡", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Electric bill", amount: 120, categoryId: findCat("Utilities"), icon: "💡", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Water bill", amount: 40, categoryId: findCat("Utilities"), icon: "💧", group: "subscription" },
-        { id: uid(), type: "expense", desc: "Rent", amount: 1500, categoryId: findCat("Rent"), icon: "🏠", group: "subscription" },
-
-        // Income
-        { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null, icon: "💼", group: "income", favorite: true },
-        { id: uid(), type: "income", desc: "Side gig", amount: 0, categoryId: null, icon: "💻", group: "income" },
-        { id: uid(), type: "income", desc: "Refund", amount: 0, categoryId: null, icon: "↩️", group: "income" },
-        { id: uid(), type: "income", desc: "Gift received", amount: 0, categoryId: null, icon: "🎁", group: "income" },
-        { id: uid(), type: "income", desc: "Cashback", amount: 0, categoryId: null, icon: "💸", group: "income" },
-      ];
+      state.presets = buildDefaultPresets();
       migrated = true;
     }
 
@@ -345,6 +313,43 @@
     });
 
     if (migrated) saveData();
+  }
+
+  /* ---------- Default preset library ---------- */
+  function buildDefaultPresets() {
+    const findCat = (name) => state.categories.find((c) => c.name === name)?.id;
+    return [
+      // Daily expenses
+      { id: uid(), type: "expense", desc: "Coffee", amount: 5, categoryId: findCat("Eating Out"), icon: "☕", group: "daily", favorite: true },
+      { id: uid(), type: "expense", desc: "Lunch", amount: 15, categoryId: findCat("Eating Out"), icon: "🥗", group: "daily", favorite: true },
+      { id: uid(), type: "expense", desc: "Dinner Out", amount: 35, categoryId: findCat("Eating Out"), icon: "🍽️", group: "daily" },
+      { id: uid(), type: "expense", desc: "Groceries", amount: 75, categoryId: findCat("Groceries"), icon: "🛒", group: "daily", favorite: true },
+      { id: uid(), type: "expense", desc: "Gas", amount: 50, categoryId: findCat("Transport"), icon: "⛽", group: "daily", favorite: true },
+      { id: uid(), type: "expense", desc: "Uber/Lyft", amount: 18, categoryId: findCat("Transport"), icon: "🚗", group: "daily" },
+      { id: uid(), type: "expense", desc: "Public transit", amount: 5, categoryId: findCat("Transport"), icon: "🚇", group: "daily" },
+      { id: uid(), type: "expense", desc: "Snacks", amount: 8, categoryId: findCat("Eating Out"), icon: "🍿", group: "daily" },
+
+      // Subscriptions
+      { id: uid(), type: "expense", desc: "Netflix", amount: 15.49, categoryId: findCat("Other"), icon: "🎬", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Spotify", amount: 11.99, categoryId: findCat("Other"), icon: "🎵", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Amazon Prime", amount: 14.99, categoryId: findCat("Other"), icon: "📦", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Disney+", amount: 13.99, categoryId: findCat("Other"), icon: "✨", group: "subscription" },
+      { id: uid(), type: "expense", desc: "YouTube Premium", amount: 13.99, categoryId: findCat("Other"), icon: "▶️", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Apple iCloud", amount: 2.99, categoryId: findCat("Other"), icon: "☁️", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Gym", amount: 30, categoryId: findCat("Other"), icon: "💪", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Phone bill", amount: 75, categoryId: findCat("Utilities"), icon: "📱", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Internet", amount: 60, categoryId: findCat("Utilities"), icon: "📡", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Electric bill", amount: 120, categoryId: findCat("Utilities"), icon: "💡", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Water bill", amount: 40, categoryId: findCat("Utilities"), icon: "💧", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Rent", amount: 1500, categoryId: findCat("Rent"), icon: "🏠", group: "subscription" },
+
+      // Income
+      { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null, icon: "💼", group: "income", favorite: true },
+      { id: uid(), type: "income", desc: "Side gig", amount: 0, categoryId: null, icon: "💻", group: "income" },
+      { id: uid(), type: "income", desc: "Refund", amount: 0, categoryId: null, icon: "↩️", group: "income" },
+      { id: uid(), type: "income", desc: "Gift received", amount: 0, categoryId: null, icon: "🎁", group: "income" },
+      { id: uid(), type: "income", desc: "Cashback", amount: 0, categoryId: null, icon: "💸", group: "income" },
+    ];
   }
 
   /* ---------- Save (encrypted when available, plaintext as fallback) ---------- */
@@ -3325,6 +3330,27 @@
       renderPresets();
       renderPresetsManage();
       showToast("Preset saved");
+    });
+
+    // Restore default preset library (merge, no duplicates)
+    $("#restorePresetsBtn").addEventListener("click", () => {
+      const defaults = buildDefaultPresets();
+      let added = 0;
+      const existingKeys = new Set(
+        state.presets.map((p) => `${p.type}|${p.desc.toLowerCase()}`)
+      );
+      defaults.forEach((d) => {
+        const key = `${d.type}|${d.desc.toLowerCase()}`;
+        if (!existingKeys.has(key)) {
+          state.presets.push(d);
+          existingKeys.add(key);
+          added += 1;
+        }
+      });
+      saveData();
+      renderPresetsManage();
+      renderPresets();
+      showToast(added > 0 ? `Added ${added} default preset${added === 1 ? "" : "s"}` : "All defaults already present");
     });
 
     // Theme toggle in settings
