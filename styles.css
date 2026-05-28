@@ -1531,3 +1531,46 @@ label {
 @media (max-width: 480px) {
   .payoff-summary { grid-template-columns: 1fr; }
 }
+
+/* ================ Subscription detector & statement alerts ================ */
+.subscription-suggest {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: linear-gradient(135deg, #ede9fb 0%, #fef3c7 100%);
+  border: 1px solid var(--primary-soft);
+  border-radius: var(--radius-sm);
+}
+.sub-title { font-weight: 700; color: var(--primary); margin-bottom: 0.2rem; }
+.sub-sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 0.75rem; }
+.sub-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.4rem;
+}
+.sub-info { flex: 1; min-width: 0; }
+.sub-name { font-weight: 600; }
+.sub-detail { font-size: 0.8rem; color: var(--text-dim); }
+.sub-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+.sub-actions button { padding: 0.4rem 0.85rem; font-size: 0.85rem; }
+
+.stmt-alert {
+  margin-top: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.stmt-alert.alert-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+.stmt-alert.alert-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger);
+}

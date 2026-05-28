@@ -59,6 +59,9 @@
   let lastDeleted = null;     // { items: [...txns], at: timestamp }
   let lastDeletedTimer = null;
 
+  // Subscription detector — dismissed during this session
+  const dismissedSubs = new Set();
+
   // Period for insights
   let insightsPeriod = "monthly";
 
@@ -548,27 +551,111 @@
     if (!list) return;
     if (!state.recurring.length) {
       list.innerHTML = '<li class="empty">No recurring transactions yet.</li>';
+    } else {
+      list.innerHTML = state.recurring
+        .map((r) => {
+          const cat = state.categories.find((c) => c.id === r.categoryId);
+          const catName = cat ? cat.name : (r.type === "income" ? "Income" : "—");
+          const typeLabel = r.type === "income" ? "💰" : "💸";
+          const status = r.active ? "Active" : "Paused";
+          return `
+            <li class="list-item">
+              <div class="list-item-main">
+                <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)}</div>
+                <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)} · ${status}</div>
+              </div>
+              <div class="list-item-actions">
+                <button data-action="toggle-rec" data-id="${r.id}" title="${r.active ? "Pause" : "Resume"}">${r.active ? "⏸️" : "▶️"}</button>
+                <button data-action="del-rec" data-id="${r.id}" title="Delete">🗑️</button>
+              </div>
+            </li>`;
+        })
+        .join("");
+    }
+
+    // Subscription suggestions
+    renderSubscriptionSuggestions();
+  }
+
+  /* ---------- Subscription detector ---------- */
+  function detectSubscriptions() {
+    // Group expenses by description (lowercased) and look for same amounts repeating monthly
+    const byDesc = new Map();
+    state.expenses.forEach((e) => {
+      if (e.type === "income") return;
+      if (e.recurringId) return; // already linked to a recurring
+      const key = e.desc.toLowerCase().trim();
+      if (!key) return;
+      if (dismissedSubs.has(key)) return;
+      if (!byDesc.has(key)) byDesc.set(key, []);
+      byDesc.get(key).push(e);
+    });
+
+    const suggestions = [];
+    byDesc.forEach((items, desc) => {
+      if (items.length < 2) return;
+      // Group by amount (rounded to cents) — find amounts that appear 2+ times across different months
+      const byAmount = new Map();
+      items.forEach((it) => {
+        const amt = Number(it.amount).toFixed(2);
+        if (!byAmount.has(amt)) byAmount.set(amt, new Set());
+        byAmount.get(amt).add(monthKey(it.date));
+      });
+      byAmount.forEach((months, amt) => {
+        if (months.size < 2) return;
+        // Looks like a recurring charge
+        const sample = items.find((i) => Number(i.amount).toFixed(2) === amt);
+        suggestions.push({
+          desc: sample.desc,
+          amount: Number(amt),
+          monthsSeen: months.size,
+          categoryId: sample.categoryId,
+          dayOfMonth: Number(sample.date.slice(8, 10)) || 1,
+        });
+      });
+    });
+
+    // Skip ones that already match an existing recurring
+    return suggestions.filter((s) => {
+      return !state.recurring.some(
+        (r) =>
+          r.desc.toLowerCase() === s.desc.toLowerCase() &&
+          Math.abs(Number(r.amount) - Number(s.amount)) < 0.01
+      );
+    });
+  }
+
+  function renderSubscriptionSuggestions() {
+    const el = $("#subscriptionSuggestions");
+    if (!el) return;
+    const suggestions = detectSubscriptions();
+    if (!suggestions.length) {
+      el.hidden = true;
+      el.innerHTML = "";
       return;
     }
-    list.innerHTML = state.recurring
-      .map((r) => {
-        const cat = state.categories.find((c) => c.id === r.categoryId);
-        const catName = cat ? cat.name : (r.type === "income" ? "Income" : "—");
-        const typeLabel = r.type === "income" ? "💰" : "💸";
-        const status = r.active ? "Active" : "Paused";
+    el.hidden = false;
+    el.innerHTML = `
+      <div class="sub-title">💡 Possible subscriptions detected (${suggestions.length})</div>
+      <div class="sub-sub">These charges appear monthly. Convert any to recurring?</div>
+      ${suggestions.map((s, i) => {
+        const cat = state.categories.find((c) => c.id === s.categoryId);
+        const catName = cat ? cat.name : "Uncategorized";
         return `
-          <li class="list-item">
-            <div class="list-item-main">
-              <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)}</div>
-              <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)} · ${status}</div>
+          <div class="sub-item">
+            <div class="sub-info">
+              <div class="sub-name">${escapeHtml(s.desc)}</div>
+              <div class="sub-detail">${fmt(s.amount)} · seen ${s.monthsSeen} months · ${escapeHtml(catName)}</div>
             </div>
-            <div class="list-item-actions">
-              <button data-action="toggle-rec" data-id="${r.id}" title="${r.active ? "Pause" : "Resume"}">${r.active ? "⏸️" : "▶️"}</button>
-              <button data-action="del-rec" data-id="${r.id}" title="Delete">🗑️</button>
+            <div class="sub-actions">
+              <button class="btn-primary" data-action="convert-sub" data-idx="${i}">Convert</button>
+              <button class="btn-secondary" data-action="dismiss-sub" data-idx="${i}">Dismiss</button>
             </div>
-          </li>`;
-      })
-      .join("");
+          </div>`;
+      }).join("")}
+    `;
+    // Stash for handlers
+    el.dataset.suggestionsJson = JSON.stringify(suggestions);
   }
 
   function populateRecurringCategorySelect() {
@@ -1922,7 +2009,9 @@
       .map((c) => {
         const lim = Number(c.limit) || 0;
         const bal = Number(c.balance) || 0;
+        const stmt = Number(c.statement) || 0;
         const util = lim > 0 ? (bal / lim) * 100 : 0;
+        const stmtUtil = lim > 0 && stmt > 0 ? (stmt / lim) * 100 : 0;
         let cls = "success";
         if (util >= 50) cls = "danger";
         else if (util >= 30) cls = "warning";
@@ -1931,6 +2020,11 @@
         const due = c.dueDay ? `Due day ${c.dueDay}` : "No due date";
         const apr = c.apr ? ` · ${c.apr}% APR` : "";
         const autopay = c.autopay ? '<span class="rollover-tag">Autopay</span>' : "";
+        let stmtAlert = "";
+        if (stmtUtil >= 30) {
+          const cls2 = stmtUtil >= 50 ? "alert-danger" : "alert-warning";
+          stmtAlert = `<div class="stmt-alert ${cls2}">⚠️ Statement balance is ${stmtUtil.toFixed(0)}% — this is what gets reported. Pay before statement closes.</div>`;
+        }
         return `
           <li class="card-item">
             <div class="card-item-head">
@@ -1942,12 +2036,13 @@
             </div>
             <div class="card-item-sub">${issuer}${due}${apr}</div>
             <div class="card-item-bal">
-              <span>${fmt(bal)} of ${fmt(lim)}</span>
+              <span>${fmt(bal)} of ${fmt(lim)}${stmt > 0 ? ` · stmt ${fmt(stmt)}` : ""}</span>
               <span class="${util >= 30 ? (util >= 50 ? "negative" : "") : "positive"}">${util.toFixed(0)}% util</span>
             </div>
             <div class="progress-bar">
               <div class="progress-fill ${cls}" style="width: ${Math.min(util, 100)}%"></div>
             </div>
+            ${stmtAlert}
           </li>`;
       })
       .join("");
@@ -2981,6 +3076,34 @@
           state.creditScores = state.creditScores.filter((s) => s.id !== id);
           saveData();
           renderCredit();
+        }
+      } else if (action === "convert-sub") {
+        const idx = Number(btn.dataset.idx);
+        const el = $("#subscriptionSuggestions");
+        const suggestions = JSON.parse(el.dataset.suggestionsJson || "[]");
+        const s = suggestions[idx];
+        if (!s) return;
+        state.recurring.push({
+          id: uid(),
+          type: "expense",
+          desc: s.desc,
+          amount: s.amount,
+          categoryId: s.categoryId || null,
+          dayOfMonth: s.dayOfMonth || 1,
+          active: true,
+          lastRunMonth: currentMonth(),
+        });
+        saveData();
+        renderRecurringList();
+        showToast("Converted to recurring");
+      } else if (action === "dismiss-sub") {
+        const idx = Number(btn.dataset.idx);
+        const el = $("#subscriptionSuggestions");
+        const suggestions = JSON.parse(el.dataset.suggestionsJson || "[]");
+        const s = suggestions[idx];
+        if (s) {
+          dismissedSubs.add(s.desc.toLowerCase().trim());
+          renderSubscriptionSuggestions();
         }
       } else if (action === "del-goal") {
         if (confirm("Delete this goal?")) {
