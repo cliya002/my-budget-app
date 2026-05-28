@@ -1866,3 +1866,20 @@ input[type="color"] {
   border-radius: var(--radius-sm);
   margin-top: 0.5rem;
 }
+
+/* ================ Branding tagline ================ */
+.brand-tagline {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.75);
+  margin-top: 0.25rem;
+  padding-left: 36px; /* aligned roughly with brand text */
+  font-weight: 500;
+  letter-spacing: 0.3px;
+}
+.lock-tagline {
+  font-size: 0.78rem;
+  color: var(--text-dim);
+  margin: 0 0 0.85rem 0;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
