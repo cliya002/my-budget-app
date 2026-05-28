@@ -173,7 +173,7 @@
   }
 
   function unlock() {
-    $("#lockScreen").hidden = true;
+    $("#lockScreen").classList.remove("open");
     $("#app").hidden = false;
     loadData();
     renderAll();
@@ -181,7 +181,7 @@
 
   function lockNow() {
     $("#app").hidden = true;
-    $("#lockScreen").hidden = false;
+    $("#lockScreen").classList.add("open");
     $("#passwordInput").value = "";
     $("#passwordConfirm").value = "";
     $("#lockError").hidden = true;
@@ -389,7 +389,7 @@
     container.querySelectorAll("[data-receipt]").forEach((img) => {
       img.addEventListener("click", () => {
         $("#modalImage").src = img.src;
-        $("#modal").hidden = false;
+        $("#modal").classList.add("open");
       });
     });
   }
@@ -628,9 +628,9 @@
     });
 
     // Modal close
-    $("#modalClose").addEventListener("click", () => ($("#modal").hidden = true));
+    $("#modalClose").addEventListener("click", () => $("#modal").classList.remove("open"));
     $("#modal").addEventListener("click", (e) => {
-      if (e.target.id === "modal") $("#modal").hidden = true;
+      if (e.target.id === "modal") $("#modal").classList.remove("open");
     });
   }
 

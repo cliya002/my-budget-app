@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#1e293b" />
   <title>My Budget</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=3" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%B0%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
   <!-- Lock Screen -->
-  <section id="lockScreen" class="lock-screen">
+  <section id="lockScreen" class="lock-screen open">
     <div class="lock-card">
       <div class="lock-icon">🔒</div>
       <h1 id="lockTitle">My Budget</h1>
@@ -249,7 +249,7 @@
   </main>
 
   <!-- Receipt Modal -->
-  <div id="modal" class="modal" hidden>
+  <div id="modal" class="modal">
     <div class="modal-content">
       <button class="modal-close" id="modalClose">×</button>
       <img id="modalImage" alt="Receipt" />
@@ -259,6 +259,6 @@
   <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>
