@@ -2,251 +2,325 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <meta name="theme-color" content="#1e293b" />
-  <title>My Budget</title>
-  <link rel="stylesheet" href="styles.css?v=3" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%B0%3C/text%3E%3C/svg%3E" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#5b3fb8" />
+  <title>Pursenal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%92%9C%3C/text%3E%3C/svg%3E" />
 </head>
 <body>
   <!-- Lock Screen -->
   <section id="lockScreen" class="lock-screen open">
     <div class="lock-card">
-      <div class="lock-icon">🔒</div>
-      <h1 id="lockTitle">My Budget</h1>
+      <div class="lock-logo">💜</div>
+      <h1 id="lockTitle">Pursenal</h1>
       <p id="lockSubtitle" class="lock-sub">Enter your password to continue</p>
-
       <form id="lockForm" autocomplete="off">
-        <input
-          type="password"
-          id="passwordInput"
-          placeholder="Password"
-          autocomplete="current-password"
-          required
-        />
-        <input
-          type="password"
-          id="passwordConfirm"
-          placeholder="Confirm password"
-          autocomplete="new-password"
-          style="display:none"
-        />
-        <button type="submit" id="unlockBtn" class="primary">Unlock</button>
+        <input type="password" id="passwordInput" placeholder="Password" autocomplete="current-password" required />
+        <input type="password" id="passwordConfirm" placeholder="Confirm password" autocomplete="new-password" style="display:none" />
+        <button type="submit" id="unlockBtn" class="btn-primary">Unlock</button>
         <p id="lockError" class="error" hidden></p>
       </form>
-
-      <button id="resetBtn" class="link" type="button" hidden>
-        Forgot password? Reset app
-      </button>
+      <button id="resetBtn" class="link" type="button" hidden>Forgot password? Reset app</button>
     </div>
   </section>
 
   <!-- Main App -->
   <main id="app" class="app" hidden>
-    <header class="app-header">
-      <div class="brand">💰 <span>My Budget</span></div>
-      <div class="header-actions">
-        <span id="monthLabel" class="month-pill"></span>
-        <button id="lockNowBtn" class="icon-btn" title="Lock">🔒</button>
-      </div>
-    </header>
+    <!-- Top bar (mobile) -->
+    <div class="topbar">
+      <button id="menuToggle" class="icon-btn" aria-label="Menu">☰</button>
+      <div class="brand">💜 Pursenal</div>
+      <button id="lockNowBtn" class="icon-btn" aria-label="Lock">🔒</button>
+    </div>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="overview">Overview</button>
-      <button class="tab" data-tab="budget">Budget</button>
-      <button class="tab" data-tab="expenses">Expenses</button>
-      <button class="tab" data-tab="savings">Savings</button>
-      <button class="tab" data-tab="settings">Settings</button>
-    </nav>
+    <div class="layout">
+      <!-- Sidebar -->
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <div class="brand">💜 Pursenal</div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active" data-tab="dashboard">
+            <span class="nav-icon">▦</span> Dashboard
+          </button>
+          <button class="nav-item" data-tab="balances">
+            <span class="nav-icon">💳</span> Balances
+          </button>
+          <button class="nav-item" data-tab="transactions">
+            <span class="nav-icon">≡</span> Transactions
+          </button>
+          <button class="nav-item" data-tab="insights">
+            <span class="nav-icon">📊</span> Insights
+          </button>
+          <button class="nav-item" data-tab="settings">
+            <span class="nav-icon">⚙</span> Settings
+          </button>
+        </nav>
+        <div class="sidebar-footer">
+          <button id="lockNowBtnDesktop" class="lock-btn">🔒 Lock</button>
+        </div>
+      </aside>
+      <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 
-    <!-- Overview -->
-    <section class="tab-panel active" id="overview">
-      <div class="card stat-grid">
-        <div class="stat">
-          <div class="stat-label">Income</div>
-          <div class="stat-value" id="statIncome">$0</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Spent</div>
-          <div class="stat-value" id="statSpent">$0</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Remaining</div>
-          <div class="stat-value" id="statRemaining">$0</div>
-        </div>
-        <div class="stat">
-          <div class="stat-label">Saved</div>
-          <div class="stat-value" id="statSaved">$0</div>
-        </div>
-      </div>
+      <!-- Content -->
+      <section class="content">
 
-      <div class="card">
-        <div class="card-header">
-          <h2>Budget Progress</h2>
-        </div>
-        <div id="budgetProgress" class="progress-list">
-          <p class="empty">No budget categories yet. Add some in the Budget tab.</p>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h2>Recent Expenses</h2>
-        </div>
-        <ul id="recentExpenses" class="list">
-          <li class="empty">No expenses recorded yet.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- Budget -->
-    <section class="tab-panel" id="budget">
-      <div class="card">
-        <div class="card-header">
-          <h2>Monthly Income</h2>
-        </div>
-        <form id="incomeForm" class="row-form">
-          <input type="number" id="incomeAmount" placeholder="Monthly income" step="0.01" min="0" required />
-          <button type="submit" class="primary">Save</button>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h2>Categories</h2>
-        </div>
-        <form id="categoryForm" class="row-form">
-          <input type="text" id="catName" placeholder="Category (e.g. Groceries)" required />
-          <input type="number" id="catLimit" placeholder="Limit" step="0.01" min="0" required />
-          <button type="submit" class="primary">Add</button>
-        </form>
-        <ul id="categoryList" class="list">
-          <li class="empty">No categories added yet.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- Expenses -->
-    <section class="tab-panel" id="expenses">
-      <div class="card">
-        <div class="card-header">
-          <h2>Add Expense</h2>
-        </div>
-        <form id="expenseForm" class="stack-form">
-          <div class="form-row">
-            <label>Description</label>
-            <input type="text" id="expDesc" placeholder="What did you buy?" required />
+        <!-- Dashboard -->
+        <div class="page active" id="dashboard">
+          <div class="page-header">
+            <h1>My Dashboard</h1>
+            <span id="monthLabel" class="month-pill"></span>
           </div>
-          <div class="form-row two-col">
-            <div>
-              <label>Amount</label>
-              <input type="number" id="expAmount" placeholder="0.00" step="0.01" min="0" required />
+
+          <div class="stat-grid">
+            <div class="stat-card stat-income">
+              <div class="stat-label">Income</div>
+              <div class="stat-value" id="statIncome">$0</div>
             </div>
-            <div>
-              <label>Date</label>
-              <input type="date" id="expDate" required />
+            <div class="stat-card stat-spent">
+              <div class="stat-label">Spent</div>
+              <div class="stat-value" id="statSpent">$0</div>
+            </div>
+            <div class="stat-card stat-remaining">
+              <div class="stat-label">Remaining</div>
+              <div class="stat-value" id="statRemaining">$0</div>
+            </div>
+            <div class="stat-card stat-saved">
+              <div class="stat-label">Saved</div>
+              <div class="stat-value" id="statSaved">$0</div>
             </div>
           </div>
-          <div class="form-row">
-            <label>Category</label>
-            <select id="expCategory" required>
-              <option value="">Select category</option>
+
+          <div class="card">
+            <div class="card-title">Budget Progress</div>
+            <div id="budgetProgress" class="progress-list">
+              <p class="empty">No budget categories yet. Add some in Balances.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Recent Transactions</div>
+            <ul id="recentExpenses" class="txn-list">
+              <li class="empty">No expenses recorded yet.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Savings Goals</div>
+            <div id="dashGoals" class="progress-list">
+              <p class="empty">No savings goals yet. Add some in Balances.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Balances (income, categories, goals) -->
+        <div class="page" id="balances">
+          <div class="page-header"><h1>Balances</h1></div>
+
+          <div class="card">
+            <div class="card-title">Monthly Income</div>
+            <form id="incomeForm" class="row-form">
+              <input type="number" id="incomeAmount" placeholder="Monthly income" step="0.01" min="0" required />
+              <button type="submit" class="btn-primary">Save</button>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Categories</div>
+            <form id="categoryForm" class="row-form">
+              <input type="text" id="catName" placeholder="Category (e.g. Groceries)" required />
+              <input type="number" id="catLimit" placeholder="Limit" step="0.01" min="0" required />
+              <button type="submit" class="btn-primary">Add</button>
+            </form>
+            <ul id="categoryList" class="list">
+              <li class="empty">No categories yet.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Savings Goals</div>
+            <form id="goalForm" class="stack-form">
+              <div class="form-row">
+                <label>Goal name</label>
+                <input type="text" id="goalName" placeholder="e.g. Vacation, Emergency fund" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>Target amount</label>
+                  <input type="number" id="goalTarget" placeholder="0.00" step="0.01" min="0" required />
+                </div>
+                <div>
+                  <label>Target date</label>
+                  <input type="date" id="goalDate" />
+                </div>
+              </div>
+              <button type="submit" class="btn-primary block">Add Goal</button>
+            </form>
+            <ul id="goalList" class="list" style="margin-top:1rem">
+              <li class="empty">No savings goals yet.</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Transactions -->
+        <div class="page" id="transactions">
+          <div class="page-header">
+            <h1>My Transactions</h1>
+          </div>
+
+          <div class="txn-layout">
+            <aside class="filters">
+              <div class="filters-title">Filters</div>
+
+              <div class="filter-group">
+                <div class="filter-label">Dates</div>
+                <div class="date-input">
+                  <label>Start Date</label>
+                  <input type="date" id="filterStart" />
+                </div>
+                <div class="date-input">
+                  <label>End Date</label>
+                  <input type="date" id="filterEnd" />
+                </div>
+              </div>
+
+              <div class="filter-group">
+                <div class="filter-label">Categories</div>
+                <div id="filterChips" class="chip-row">
+                  <span class="empty-chip">Add categories first</span>
+                </div>
+              </div>
+
+              <button id="clearFilters" class="link">Clear filters</button>
+            </aside>
+
+            <div class="txn-main">
+              <div class="search-box">
+                <input type="text" id="txnSearch" placeholder="Search transactions" />
+                <span class="search-icon">🔍</span>
+              </div>
+              <div id="txnRange" class="txn-range"></div>
+              <ul id="expenseList" class="txn-list">
+                <li class="empty">No transactions recorded yet.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Insights -->
+        <div class="page" id="insights">
+          <div class="page-header"><h1>My Insights</h1></div>
+
+          <div class="period-selector">
+            <button class="period-btn active" data-period="monthly">Monthly</button>
+            <button class="period-btn" data-period="all">All Time</button>
+          </div>
+
+          <div class="charts-grid">
+            <div class="card chart-card">
+              <div class="card-title">Expenses Split</div>
+              <div class="chart-wrap"><canvas id="chartSplit"></canvas></div>
+              <div id="splitEmpty" class="empty" hidden>No expenses to chart yet.</div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-title">Daily Transactions</div>
+              <div class="chart-wrap"><canvas id="chartDaily"></canvas></div>
+              <div id="dailyEmpty" class="empty" hidden>No expenses to chart yet.</div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-title">Funds Balance</div>
+              <div class="chart-wrap"><canvas id="chartBalance"></canvas></div>
+              <div id="balanceEmpty" class="empty" hidden>No data to chart yet.</div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-title">Average by Day of Week</div>
+              <div class="chart-wrap"><canvas id="chartWeekday"></canvas></div>
+              <div id="weekdayEmpty" class="empty" hidden>No expenses to chart yet.</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="page" id="settings">
+          <div class="page-header"><h1>Settings</h1></div>
+
+          <div class="card">
+            <div class="card-title">Currency</div>
+            <select id="currencySelect" class="block">
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+              <option value="GBP">GBP (£)</option>
+              <option value="JPY">JPY (¥)</option>
+              <option value="INR">INR (₹)</option>
+              <option value="AUD">AUD ($)</option>
+              <option value="CAD">CAD ($)</option>
             </select>
           </div>
-          <div class="form-row">
-            <label>Receipt (optional)</label>
-            <input type="file" id="expReceipt" accept="image/*" capture="environment" />
-            <div id="receiptPreview" class="receipt-preview" hidden></div>
-          </div>
-          <button type="submit" class="primary block">Add Expense</button>
-        </form>
-      </div>
 
-      <div class="card">
-        <div class="card-header">
-          <h2>All Expenses</h2>
-          <select id="expFilter" class="filter">
-            <option value="">All months</option>
+          <div class="card">
+            <div class="card-title">Security</div>
+            <button id="changePasswordBtn" class="btn-secondary block">Change Password</button>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Data</div>
+            <button id="exportBtn" class="btn-secondary block">Export Data (JSON)</button>
+            <button id="importBtn" class="btn-secondary block" style="margin-top:0.5rem">Import Data</button>
+            <input type="file" id="importFile" accept="application/json" hidden />
+            <button id="clearAllBtn" class="btn-danger block" style="margin-top:0.5rem">Clear All Data</button>
+          </div>
+
+          <p class="footer-note">All data is stored locally in your browser.</p>
+        </div>
+
+      </section>
+    </div>
+
+    <!-- Floating Action Button -->
+    <button id="fab" class="fab" aria-label="Add expense">+</button>
+  </main>
+
+  <!-- Add Expense Modal -->
+  <div id="expenseModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Add Transaction</h2>
+        <button class="modal-close" id="expenseModalClose">×</button>
+      </div>
+      <form id="expenseForm" class="stack-form">
+        <div class="form-row">
+          <label>Description</label>
+          <input type="text" id="expDesc" placeholder="What did you buy?" required />
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Amount</label>
+            <input type="number" id="expAmount" placeholder="0.00" step="0.01" min="0" required />
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" id="expDate" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Category</label>
+          <select id="expCategory" required>
+            <option value="">Select category</option>
           </select>
         </div>
-        <ul id="expenseList" class="list">
-          <li class="empty">No expenses recorded yet.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- Savings -->
-    <section class="tab-panel" id="savings">
-      <div class="card">
-        <div class="card-header">
-          <h2>Add Savings Goal</h2>
+        <div class="form-row">
+          <label>Receipt (optional)</label>
+          <input type="file" id="expReceipt" accept="image/*" capture="environment" />
+          <div id="receiptPreview" class="receipt-preview" hidden></div>
         </div>
-        <form id="goalForm" class="stack-form">
-          <div class="form-row">
-            <label>Goal name</label>
-            <input type="text" id="goalName" placeholder="e.g. Vacation, Emergency fund" required />
-          </div>
-          <div class="form-row two-col">
-            <div>
-              <label>Target amount</label>
-              <input type="number" id="goalTarget" placeholder="0.00" step="0.01" min="0" required />
-            </div>
-            <div>
-              <label>Target date</label>
-              <input type="date" id="goalDate" />
-            </div>
-          </div>
-          <button type="submit" class="primary block">Add Goal</button>
-        </form>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h2>Goals</h2>
-        </div>
-        <ul id="goalList" class="list">
-          <li class="empty">No savings goals yet.</li>
-        </ul>
-      </div>
-    </section>
-
-    <!-- Settings -->
-    <section class="tab-panel" id="settings">
-      <div class="card">
-        <div class="card-header">
-          <h2>Currency</h2>
-        </div>
-        <select id="currencySelect" class="block">
-          <option value="USD">USD ($)</option>
-          <option value="EUR">EUR (€)</option>
-          <option value="GBP">GBP (£)</option>
-          <option value="JPY">JPY (¥)</option>
-          <option value="INR">INR (₹)</option>
-          <option value="AUD">AUD ($)</option>
-          <option value="CAD">CAD ($)</option>
-        </select>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h2>Security</h2>
-        </div>
-        <button id="changePasswordBtn" class="secondary block">Change Password</button>
-      </div>
-
-      <div class="card">
-        <div class="card-header">
-          <h2>Data</h2>
-        </div>
-        <button id="exportBtn" class="secondary block">Export Data (JSON)</button>
-        <button id="importBtn" class="secondary block">Import Data</button>
-        <input type="file" id="importFile" accept="application/json" hidden />
-        <button id="clearAllBtn" class="danger block">Clear All Data</button>
-      </div>
-
-      <p class="footer-note">All data is stored locally in your browser.</p>
-    </section>
-  </main>
+        <button type="submit" class="btn-primary block">Add Transaction</button>
+      </form>
+    </div>
+  </div>
 
   <!-- Receipt Modal -->
   <div id="modal" class="modal">
@@ -259,6 +333,7 @@
   <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
 
-  <script src="app.js?v=3"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

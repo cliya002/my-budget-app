@@ -1,30 +1,26 @@
 /* ============================================================
- * My Budget — local-only budgeting app
- * Data persists in localStorage. Receipts stored as data URLs.
- * Password is stored as SHA-256 hash (not encryption — see README).
+ * Pursenal — local-only budget app
+ * Data persists in localStorage. Receipts as data URLs.
+ * Password stored as SHA-256 hash (see README — not encryption).
  * ============================================================ */
 
 (() => {
   "use strict";
 
-  /* ---------- Storage keys ---------- */
   const KEYS = {
     pwd: "mb_password_hash",
     data: "mb_data",
     currency: "mb_currency",
   };
 
-  /* Default password hash (SHA-256 of the preset password).
-   * Used when no password has been set yet in this browser. */
   const DEFAULT_PWD_HASH =
     "32ea448e581deafe4684d8bffce21c999be2b68f67440c165496b47ca0eb8f1f";
 
-  /* ---------- State ---------- */
   let state = {
     income: 0,
-    categories: [],   // { id, name, limit }
-    expenses: [],     // { id, desc, amount, date, categoryId, receipt }
-    goals: [],        // { id, name, target, saved, date }
+    categories: [],
+    expenses: [],
+    goals: [],
   };
 
   let currency = "USD";
@@ -32,10 +28,23 @@
     USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", AUD: "$", CAD: "$",
   };
 
+  // Filter state for transactions
+  const filters = {
+    start: "",
+    end: "",
+    categories: new Set(),  // empty = all
+    search: "",
+  };
+
+  // Period for insights
+  let insightsPeriod = "monthly";
+
+  // Chart instances (so we can destroy them before re-render)
+  const charts = {};
+
   /* ---------- Helpers ---------- */
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
-
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
   const fmt = (n) => {
@@ -55,7 +64,7 @@
     return `${d.getFullYear()}-${m}-${day}`;
   };
 
-  const monthKey = (dateStr) => (dateStr || "").slice(0, 7); // YYYY-MM
+  const monthKey = (dateStr) => (dateStr || "").slice(0, 7);
   const currentMonth = () => todayStr().slice(0, 7);
 
   const monthLabel = (key) => {
@@ -63,6 +72,17 @@
     const [y, m] = key.split("-");
     const date = new Date(Number(y), Number(m) - 1, 1);
     return date.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  };
+
+  const formatDateShort = (dateStr) => {
+    if (!dateStr) return { day: "?", mo: "" };
+    const [y, m, d] = dateStr.split("-");
+    const dt = new Date(Number(y), Number(m) - 1, Number(d));
+    return {
+      day: String(Number(d)),
+      mo: dt.toLocaleDateString(undefined, { month: "short" }),
+      year: y,
+    };
   };
 
   async function sha256(text) {
@@ -95,14 +115,20 @@
     localStorage.setItem(KEYS.data, JSON.stringify(state));
   }
 
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   /* ---------- Lock screen ---------- */
   async function initLock() {
-    // If no password is set yet in this browser, seed the default hash
-    // so the user is prompted to unlock instead of creating a password.
     if (!localStorage.getItem(KEYS.pwd)) {
       localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
     }
-
     const stored = localStorage.getItem(KEYS.pwd);
     const lockTitle = $("#lockTitle");
     const lockSubtitle = $("#lockSubtitle");
@@ -126,13 +152,13 @@
       errEl.hidden = true;
 
       if (!stored) {
-        const confirm = confirmInput.value;
+        const confirmVal = confirmInput.value;
         if (pwd.length < 4) {
           errEl.textContent = "Password must be at least 4 characters";
           errEl.hidden = false;
           return;
         }
-        if (pwd !== confirm) {
+        if (pwd !== confirmVal) {
           errEl.textContent = "Passwords do not match";
           errEl.hidden = false;
           return;
@@ -153,23 +179,14 @@
     });
 
     resetBtn.addEventListener("click", () => {
-      if (
-        confirm(
-          "This will erase your data and reset the password to the preset. Continue?"
-        )
-      ) {
+      if (confirm("This will erase your data and reset the password to the preset. Continue?")) {
         localStorage.removeItem(KEYS.data);
         localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
         location.reload();
       }
     });
 
-    // Auto-focus the password input so the user can type without clicking,
-    // helpful when browser overlays cover parts of the page.
-    setTimeout(() => {
-      const input = $("#passwordInput");
-      if (input) input.focus();
-    }, 100);
+    setTimeout(() => $("#passwordInput")?.focus(), 100);
   }
 
   function unlock() {
@@ -187,31 +204,47 @@
     $("#lockError").hidden = true;
   }
 
-  /* ---------- Tabs ---------- */
-  function initTabs() {
-    $$(".tab").forEach((btn) => {
+  /* ---------- Navigation ---------- */
+  function initNav() {
+    $$(".nav-item").forEach((btn) => {
       btn.addEventListener("click", () => {
-        $$(".tab").forEach((b) => b.classList.remove("active"));
-        $$(".tab-panel").forEach((p) => p.classList.remove("active"));
+        $$(".nav-item").forEach((b) => b.classList.remove("active"));
+        $$(".page").forEach((p) => p.classList.remove("active"));
         btn.classList.add("active");
         $(`#${btn.dataset.tab}`).classList.add("active");
+        // Close mobile sidebar
+        $("#sidebar").classList.remove("open");
+        $("#sidebarBackdrop").classList.remove("open");
+        // Re-render charts when entering insights so canvases size correctly
+        if (btn.dataset.tab === "insights") {
+          setTimeout(renderInsights, 50);
+        }
       });
+    });
+
+    $("#menuToggle").addEventListener("click", () => {
+      $("#sidebar").classList.add("open");
+      $("#sidebarBackdrop").classList.add("open");
+    });
+    $("#sidebarBackdrop").addEventListener("click", () => {
+      $("#sidebar").classList.remove("open");
+      $("#sidebarBackdrop").classList.remove("open");
     });
   }
 
   /* ---------- Renderers ---------- */
   function renderAll() {
     $("#monthLabel").textContent = monthLabel(currentMonth());
-    renderOverview();
-    renderBudget();
-    renderExpenses();
-    renderSavings();
-    renderSettings();
+    renderDashboard();
+    renderBalances();
+    renderTransactions();
+    renderInsights();
     populateExpenseCategorySelect();
-    populateMonthFilter();
+    renderFilterChips();
+    $("#currencySelect").value = currency;
   }
 
-  function renderOverview() {
+  function renderDashboard() {
     const month = currentMonth();
     const monthExpenses = state.expenses.filter((e) => monthKey(e.date) === month);
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
@@ -226,7 +259,7 @@
     // Budget progress
     const progressEl = $("#budgetProgress");
     if (!state.categories.length) {
-      progressEl.innerHTML = '<p class="empty">No budget categories yet. Add some in the Budget tab.</p>';
+      progressEl.innerHTML = '<p class="empty">No budget categories yet. Add some in Balances.</p>';
     } else {
       progressEl.innerHTML = state.categories
         .map((cat) => {
@@ -251,7 +284,7 @@
         .join("");
     }
 
-    // Recent expenses
+    // Recent
     const recentEl = $("#recentExpenses");
     const recent = [...state.expenses]
       .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id))
@@ -259,108 +292,419 @@
     if (!recent.length) {
       recentEl.innerHTML = '<li class="empty">No expenses recorded yet.</li>';
     } else {
-      recentEl.innerHTML = recent.map(renderExpenseItem).join("");
+      recentEl.innerHTML = recent.map(renderTxnItem).join("");
       attachReceiptClicks(recentEl);
+      attachTxnDelete(recentEl);
+    }
+
+    // Goals on dashboard
+    const dashGoals = $("#dashGoals");
+    if (!state.goals.length) {
+      dashGoals.innerHTML = '<p class="empty">No savings goals yet. Add some in Balances.</p>';
+    } else {
+      dashGoals.innerHTML = state.goals
+        .map((g) => {
+          const saved = Number(g.saved) || 0;
+          const target = Number(g.target) || 0;
+          const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+          return `
+          <div class="progress-item">
+            <div class="progress-header">
+              <span class="progress-name">${escapeHtml(g.name)}</span>
+              <span class="progress-amount">${fmt(saved)} / ${fmt(target)}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill success" style="width: ${pct}%"></div>
+            </div>
+          </div>`;
+        })
+        .join("");
     }
   }
 
-  function renderBudget() {
+  function renderBalances() {
     $("#incomeAmount").value = state.income || "";
 
     const list = $("#categoryList");
     if (!state.categories.length) {
-      list.innerHTML = '<li class="empty">No categories added yet.</li>';
-      return;
+      list.innerHTML = '<li class="empty">No categories yet.</li>';
+    } else {
+      list.innerHTML = state.categories
+        .map(
+          (cat) => `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(cat.name)}</div>
+              <div class="list-item-sub">Limit: ${fmt(cat.limit)}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="edit-cat" data-id="${cat.id}" title="Edit">✏️</button>
+              <button data-action="del-cat" data-id="${cat.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`
+        )
+        .join("");
     }
-    list.innerHTML = state.categories
-      .map(
-        (cat) => `
-        <li class="list-item">
-          <div class="list-item-main">
-            <div class="list-item-title">${escapeHtml(cat.name)}</div>
-            <div class="list-item-sub">Limit: ${fmt(cat.limit)}</div>
-          </div>
-          <div class="list-item-actions">
-            <button data-action="edit-cat" data-id="${cat.id}" title="Edit">✏️</button>
-            <button data-action="del-cat" data-id="${cat.id}" title="Delete">🗑️</button>
-          </div>
-        </li>`
-      )
-      .join("");
+
+    const goalList = $("#goalList");
+    if (!state.goals.length) {
+      goalList.innerHTML = '<li class="empty">No savings goals yet.</li>';
+    } else {
+      goalList.innerHTML = state.goals
+        .map((g) => {
+          const saved = Number(g.saved) || 0;
+          const target = Number(g.target) || 0;
+          const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+          const dateStr = g.date ? ` · by ${g.date}` : "";
+          return `
+          <li class="progress-item">
+            <div class="progress-header">
+              <span class="progress-name">${escapeHtml(g.name)}${dateStr}</span>
+              <span class="progress-amount">${fmt(saved)} / ${fmt(target)}</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill success" style="width: ${pct}%"></div>
+            </div>
+            <div class="goal-actions">
+              <input type="number" placeholder="Add to savings" step="0.01" min="0" data-goal-input="${g.id}" />
+              <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
+              <button class="btn-secondary" data-action="del-goal" data-id="${g.id}">Delete</button>
+            </div>
+          </li>`;
+        })
+        .join("");
+    }
   }
 
-  function renderExpenses() {
-    const filterMonth = $("#expFilter").value;
-    const list = $("#expenseList");
-    let items = [...state.expenses].sort((a, b) =>
-      (b.date + b.id).localeCompare(a.date + a.id)
-    );
-    if (filterMonth) {
-      items = items.filter((e) => monthKey(e.date) === filterMonth);
-    }
-    if (!items.length) {
-      list.innerHTML = '<li class="empty">No expenses recorded yet.</li>';
-      return;
-    }
-    list.innerHTML = items.map(renderExpenseItem).join("");
-    attachReceiptClicks(list);
-  }
-
-  function renderExpenseItem(exp) {
+  function renderTxnItem(exp) {
     const cat = state.categories.find((c) => c.id === exp.categoryId);
     const catName = cat ? cat.name : "Uncategorized";
+    const d = formatDateShort(exp.date);
     const receiptHtml = exp.receipt
-      ? `<img src="${exp.receipt}" class="receipt-thumb" data-receipt="${exp.id}" alt="Receipt" />`
-      : "";
+      ? `<img src="${exp.receipt}" class="txn-receipt" data-receipt="${exp.id}" alt="Receipt" />`
+      : `<div class="txn-receipt-placeholder">🧾</div>`;
     return `
-      <li class="list-item">
+      <li class="txn-item">
         ${receiptHtml}
-        <div class="list-item-main">
-          <div class="list-item-title">${escapeHtml(exp.desc)}</div>
-          <div class="list-item-sub">${escapeHtml(catName)} · ${exp.date}</div>
+        <div class="txn-date">
+          <span class="day">${d.day}</span>
+          <span class="mo">${d.mo}</span>
         </div>
-        <div class="list-item-amount">${fmt(exp.amount)}</div>
-        <div class="list-item-actions">
-          <button data-action="del-exp" data-id="${exp.id}" title="Delete">🗑️</button>
+        <div class="txn-info">
+          <div class="txn-id">#${exp.id.slice(-4).toUpperCase()}</div>
+          <div class="txn-name">${escapeHtml(exp.desc)}</div>
+          <div class="txn-cat">${escapeHtml(catName)}</div>
+        </div>
+        <div class="txn-right">
+          <div class="txn-tag">Spent</div>
+          <div class="txn-amount negative">- ${fmt(exp.amount)}</div>
+          <div class="txn-actions">
+            <button data-action="del-exp" data-id="${exp.id}" title="Delete">🗑️</button>
+          </div>
         </div>
       </li>`;
   }
 
-  function renderSavings() {
-    const list = $("#goalList");
-    if (!state.goals.length) {
-      list.innerHTML = '<li class="empty">No savings goals yet.</li>';
+  function renderTransactions() {
+    let items = [...state.expenses];
+
+    if (filters.start) items = items.filter((e) => e.date >= filters.start);
+    if (filters.end) items = items.filter((e) => e.date <= filters.end);
+    if (filters.categories.size > 0) {
+      items = items.filter((e) => filters.categories.has(e.categoryId));
+    }
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      items = items.filter((e) => {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        const catName = cat ? cat.name.toLowerCase() : "";
+        return (
+          e.desc.toLowerCase().includes(q) ||
+          catName.includes(q) ||
+          String(e.amount).includes(q)
+        );
+      });
+    }
+
+    items.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+
+    const list = $("#expenseList");
+    if (!items.length) {
+      list.innerHTML = '<li class="empty">No transactions match your filters.</li>';
+    } else {
+      list.innerHTML = items.map(renderTxnItem).join("");
+      attachReceiptClicks(list);
+      attachTxnDelete(list);
+    }
+
+    const range = $("#txnRange");
+    if (filters.start || filters.end) {
+      const from = filters.start || "earliest";
+      const to = filters.end || "today";
+      range.textContent = `From ${from} to ${to}`;
+    } else {
+      range.textContent = `${items.length} transaction${items.length === 1 ? "" : "s"}`;
+    }
+  }
+
+  function renderFilterChips() {
+    const chips = $("#filterChips");
+    if (!state.categories.length) {
+      chips.innerHTML = '<span class="empty-chip">Add categories first</span>';
       return;
     }
-    list.innerHTML = state.goals
-      .map((g) => {
-        const saved = Number(g.saved) || 0;
-        const target = Number(g.target) || 0;
-        const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
-        const dateStr = g.date ? ` · by ${g.date}` : "";
-        return `
-        <li class="progress-item">
-          <div class="progress-header">
-            <span class="progress-name">${escapeHtml(g.name)}${dateStr}</span>
-            <span class="progress-amount">${fmt(saved)} / ${fmt(target)}</span>
-          </div>
-          <div class="progress-bar">
-            <div class="progress-fill" style="width: ${pct}%"></div>
-          </div>
-          <div class="row-form" style="margin-top:0.6rem">
-            <input type="number" placeholder="Add to savings" step="0.01" min="0" data-goal-input="${g.id}" />
-            <button class="primary" data-action="add-saving" data-id="${g.id}">Add</button>
-            <button class="secondary" data-action="del-goal" data-id="${g.id}">Delete</button>
-          </div>
-        </li>`;
+    chips.innerHTML = state.categories
+      .map((cat) => {
+        const on = filters.categories.has(cat.id);
+        return `<button class="chip ${on ? "" : "off"}" data-chip="${cat.id}">${
+          on ? "✓ " : ""
+        }${escapeHtml(cat.name)}</button>`;
       })
       .join("");
   }
 
-  function renderSettings() {
-    $("#currencySelect").value = currency;
+  /* ---------- Insights / Charts ---------- */
+  function renderInsights() {
+    if (typeof Chart === "undefined") return;
+
+    const expenses = filterExpensesForInsights();
+    renderSplitChart(expenses);
+    renderDailyChart(expenses);
+    renderBalanceChart(expenses);
+    renderWeekdayChart(expenses);
   }
 
+  function filterExpensesForInsights() {
+    if (insightsPeriod === "monthly") {
+      const m = currentMonth();
+      return state.expenses.filter((e) => monthKey(e.date) === m);
+    }
+    return [...state.expenses];
+  }
+
+  const palette = [
+    "#5b3fb8", "#ec4899", "#f59e0b", "#3b82f6",
+    "#14b8a6", "#22c55e", "#ef4444", "#8b5cf6",
+    "#06b6d4", "#f97316", "#84cc16", "#d946ef",
+  ];
+
+  function destroyChart(name) {
+    if (charts[name]) { charts[name].destroy(); charts[name] = null; }
+  }
+
+  function showEmpty(id, show) {
+    const el = $(`#${id}`);
+    if (el) el.hidden = !show;
+  }
+
+  function renderSplitChart(expenses) {
+    destroyChart("split");
+    const ctx = $("#chartSplit");
+    if (!ctx) return;
+
+    const totals = {};
+    expenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      totals[name] = (totals[name] || 0) + Number(e.amount);
+    });
+    const labels = Object.keys(totals);
+    const data = Object.values(totals);
+
+    if (!labels.length) {
+      showEmpty("splitEmpty", true);
+      ctx.style.display = "none";
+      return;
+    }
+    showEmpty("splitEmpty", false);
+    ctx.style.display = "block";
+
+    charts.split = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: labels.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2,
+          borderColor: "#fff",
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: {
+            callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` },
+          },
+        },
+      },
+    });
+  }
+
+  function renderDailyChart(expenses) {
+    destroyChart("daily");
+    const ctx = $("#chartDaily");
+    if (!ctx) return;
+
+    if (!expenses.length) {
+      showEmpty("dailyEmpty", true);
+      ctx.style.display = "none";
+      return;
+    }
+    showEmpty("dailyEmpty", false);
+    ctx.style.display = "block";
+
+    // Aggregate by day-of-month for the period
+    const dayTotals = {};
+    expenses.forEach((e) => {
+      const day = Number((e.date || "").slice(8, 10));
+      if (!day) return;
+      dayTotals[day] = (dayTotals[day] || 0) + Number(e.amount);
+    });
+
+    const days = Object.keys(dayTotals).map(Number).sort((a, b) => a - b);
+    const data = days.map((d) => dayTotals[d]);
+
+    charts.daily = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: days,
+        datasets: [{
+          data,
+          backgroundColor: data.map(() => "#ec4899"),
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  function renderBalanceChart(expenses) {
+    destroyChart("balance");
+    const ctx = $("#chartBalance");
+    if (!ctx) return;
+
+    if (!expenses.length) {
+      showEmpty("balanceEmpty", true);
+      ctx.style.display = "none";
+      return;
+    }
+    showEmpty("balanceEmpty", false);
+    ctx.style.display = "block";
+
+    // Cumulative remaining balance throughout the period
+    const sorted = [...expenses].sort((a, b) => a.date.localeCompare(b.date));
+    let running = Number(state.income) || 0;
+    const labels = [];
+    const data = [];
+    // Start point
+    if (sorted.length) {
+      labels.push(sorted[0].date.slice(8, 10) || "1");
+      data.push(running);
+    }
+    sorted.forEach((e) => {
+      running -= Number(e.amount);
+      labels.push(e.date.slice(8, 10));
+      data.push(running);
+    });
+
+    charts.balance = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          borderColor: "#3b82f6",
+          backgroundColor: "rgba(59, 130, 246, 0.1)",
+          tension: 0.3,
+          fill: true,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  function renderWeekdayChart(expenses) {
+    destroyChart("weekday");
+    const ctx = $("#chartWeekday");
+    if (!ctx) return;
+
+    if (!expenses.length) {
+      showEmpty("weekdayEmpty", true);
+      ctx.style.display = "none";
+      return;
+    }
+    showEmpty("weekdayEmpty", false);
+    ctx.style.display = "block";
+
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const totals = [0, 0, 0, 0, 0, 0, 0];
+    const counts = [0, 0, 0, 0, 0, 0, 0];
+
+    expenses.forEach((e) => {
+      const [y, m, d] = e.date.split("-").map(Number);
+      if (!y) return;
+      const dt = new Date(y, m - 1, d);
+      // JS: Sunday=0 .. Saturday=6 → remap so Mon=0 .. Sun=6
+      const idx = (dt.getDay() + 6) % 7;
+      totals[idx] += Number(e.amount);
+      counts[idx] += 1;
+    });
+
+    const avgs = totals.map((t, i) => (counts[i] ? t / counts[i] : 0));
+
+    charts.weekday = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: days,
+        datasets: [{
+          data: avgs,
+          backgroundColor: "#06b6d4",
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.y) } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  /* ---------- Misc helpers ---------- */
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -368,21 +712,6 @@
       state.categories
         .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
         .join("");
-  }
-
-  function populateMonthFilter() {
-    const sel = $("#expFilter");
-    const months = [...new Set(state.expenses.map((e) => monthKey(e.date)))]
-      .filter(Boolean)
-      .sort()
-      .reverse();
-    const current = sel.value;
-    sel.innerHTML =
-      '<option value="">All months</option>' +
-      months
-        .map((m) => `<option value="${m}">${monthLabel(m)}</option>`)
-        .join("");
-    sel.value = current;
   }
 
   function attachReceiptClicks(container) {
@@ -393,14 +722,20 @@
       });
     });
   }
+  function attachTxnDelete() { /* handled by global delegated click */ }
 
-  function escapeHtml(s) {
-    return String(s)
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  function openExpenseModal() {
+    $("#expDate").value = todayStr();
+    $("#expenseModal").classList.add("open");
+    setTimeout(() => $("#expDesc")?.focus(), 50);
+  }
+  function closeExpenseModal() {
+    $("#expenseModal").classList.remove("open");
+    $("#expenseForm").reset();
+    const preview = $("#receiptPreview");
+    preview.hidden = true;
+    preview.innerHTML = "";
+    delete preview.dataset.dataUrl;
   }
 
   /* ---------- Forms & actions ---------- */
@@ -428,9 +763,7 @@
       showToast("Category added");
     });
 
-    // Expense form
-    $("#expDate").value = todayStr();
-
+    // Receipt preview
     $("#expReceipt").addEventListener("change", (e) => {
       const file = e.target.files[0];
       const preview = $("#receiptPreview");
@@ -446,6 +779,7 @@
       });
     });
 
+    // Expense form
     $("#expenseForm").addEventListener("submit", (e) => {
       e.preventDefault();
       const desc = $("#expDesc").value.trim();
@@ -456,24 +790,29 @@
 
       if (!desc || isNaN(amount) || !date || !categoryId) return;
 
-      state.expenses.push({
-        id: uid(), desc, amount, date, categoryId, receipt,
-      });
+      state.expenses.push({ id: uid(), desc, amount, date, categoryId, receipt });
       saveData();
-
-      e.target.reset();
-      $("#expDate").value = todayStr();
-      const preview = $("#receiptPreview");
-      preview.hidden = true;
-      preview.innerHTML = "";
-      delete preview.dataset.dataUrl;
-
+      closeExpenseModal();
       renderAll();
-      showToast("Expense added");
+      showToast("Transaction added");
     });
 
-    // Filter
-    $("#expFilter").addEventListener("change", renderExpenses);
+    // FAB and modal close
+    $("#fab").addEventListener("click", () => {
+      if (!state.categories.length) {
+        showToast("Add a category first in Balances");
+        $$(".nav-item").forEach((b) => b.classList.remove("active"));
+        $$(".page").forEach((p) => p.classList.remove("active"));
+        $('[data-tab="balances"]').classList.add("active");
+        $("#balances").classList.add("active");
+        return;
+      }
+      openExpenseModal();
+    });
+    $("#expenseModalClose").addEventListener("click", closeExpenseModal);
+    $("#expenseModal").addEventListener("click", (e) => {
+      if (e.target.id === "expenseModal") closeExpenseModal();
+    });
 
     // Goals
     $("#goalForm").addEventListener("submit", (e) => {
@@ -489,16 +828,63 @@
       showToast("Goal added");
     });
 
-    // Delegated clicks (categories, expenses, goals)
+    // Filters
+    $("#filterStart").addEventListener("change", (e) => {
+      filters.start = e.target.value;
+      renderTransactions();
+    });
+    $("#filterEnd").addEventListener("change", (e) => {
+      filters.end = e.target.value;
+      renderTransactions();
+    });
+    $("#txnSearch").addEventListener("input", (e) => {
+      filters.search = e.target.value.trim();
+      renderTransactions();
+    });
+    $("#clearFilters").addEventListener("click", () => {
+      filters.start = "";
+      filters.end = "";
+      filters.categories.clear();
+      filters.search = "";
+      $("#filterStart").value = "";
+      $("#filterEnd").value = "";
+      $("#txnSearch").value = "";
+      renderFilterChips();
+      renderTransactions();
+    });
+
+    // Insights period selector
+    $$(".period-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $$(".period-btn").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        insightsPeriod = btn.dataset.period;
+        renderInsights();
+      });
+    });
+
+    // Delegated clicks
     document.addEventListener("click", (e) => {
+      // Filter chips
+      const chip = e.target.closest("[data-chip]");
+      if (chip) {
+        const id = chip.dataset.chip;
+        if (filters.categories.has(id)) filters.categories.delete(id);
+        else filters.categories.add(id);
+        renderFilterChips();
+        renderTransactions();
+        return;
+      }
+
       const btn = e.target.closest("[data-action]");
       if (!btn) return;
       const action = btn.dataset.action;
       const id = btn.dataset.id;
 
       if (action === "del-cat") {
-        if (confirm("Delete this category? Expenses will keep their record but show 'Uncategorized'.")) {
+        if (confirm("Delete this category? Transactions will show 'Uncategorized'.")) {
           state.categories = state.categories.filter((c) => c.id !== id);
+          filters.categories.delete(id);
           saveData();
           renderAll();
         }
@@ -515,7 +901,7 @@
         saveData();
         renderAll();
       } else if (action === "del-exp") {
-        if (confirm("Delete this expense?")) {
+        if (confirm("Delete this transaction?")) {
           state.expenses = state.expenses.filter((x) => x.id !== id);
           saveData();
           renderAll();
@@ -539,8 +925,9 @@
       }
     });
 
-    // Header lock button
+    // Lock buttons
     $("#lockNowBtn").addEventListener("click", lockNow);
+    $("#lockNowBtnDesktop").addEventListener("click", lockNow);
 
     // Currency
     $("#currencySelect").addEventListener("change", (e) => {
@@ -560,28 +947,20 @@
       }
       const newPwd = prompt("New password (min 4 characters):");
       if (newPwd === null) return;
-      if (newPwd.length < 4) {
-        alert("Password too short.");
-        return;
-      }
+      if (newPwd.length < 4) { alert("Password too short."); return; }
       const confirmPwd = prompt("Confirm new password:");
-      if (newPwd !== confirmPwd) {
-        alert("Passwords do not match.");
-        return;
-      }
+      if (newPwd !== confirmPwd) { alert("Passwords do not match."); return; }
       localStorage.setItem(KEYS.pwd, await sha256(newPwd));
       showToast("Password changed");
     });
 
     // Export
     $("#exportBtn").addEventListener("click", () => {
-      const blob = new Blob([JSON.stringify(state, null, 2)], {
-        type: "application/json",
-      });
+      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `my-budget-${todayStr()}.json`;
+      a.download = `pursenal-${todayStr()}.json`;
       a.click();
       URL.revokeObjectURL(url);
     });
@@ -615,11 +994,7 @@
 
     // Clear all
     $("#clearAllBtn").addEventListener("click", () => {
-      if (
-        confirm(
-          "Delete ALL budget data (categories, expenses, goals, receipts)? This cannot be undone."
-        )
-      ) {
+      if (confirm("Delete ALL budget data? This cannot be undone.")) {
         state = { income: 0, categories: [], expenses: [], goals: [] };
         saveData();
         renderAll();
@@ -627,14 +1002,14 @@
       }
     });
 
-    // Modal close
+    // Receipt modal close
     $("#modalClose").addEventListener("click", () => $("#modal").classList.remove("open"));
     $("#modal").addEventListener("click", (e) => {
       if (e.target.id === "modal") $("#modal").classList.remove("open");
     });
   }
 
-  /* ---------- Image compression for receipts ---------- */
+  /* ---------- Image compression ---------- */
   function compressImage(file, maxDim = 1200, quality = 0.75) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -664,7 +1039,7 @@
   /* ---------- Init ---------- */
   document.addEventListener("DOMContentLoaded", () => {
     initLock();
-    initTabs();
+    initNav();
     initForms();
   });
 })();
