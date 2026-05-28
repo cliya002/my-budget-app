@@ -23,12 +23,13 @@
   let state = {
     income: 0,             // legacy "monthly income" target
     categories: [],
-    expenses: [],          // each: { id, type, desc, amount, date, categoryId, receipt }
+    expenses: [],          // each: { id, type, desc, amount, date, categoryId, accountId, tags, receipt }
     goals: [],
     presets: [],           // each: { id, type, desc, amount, categoryId }
     recurring: [],         // each: { id, type, desc, amount, categoryId, dayOfMonth, lastRunMonth, active }
     cards: [],             // each: { id, name, issuer, last4, limit, balance, apr, dueDay, autopay }
     creditScores: [],      // each: { id, score, date, source, type, note }
+    accounts: [],          // each: { id, name, type, balance, color }
     settings: {
       rollover: false,     // when true, unused budget rolls over to next month
       alertsShown: {},     // map "YYYY-MM:catId:level" -> true (already alerted)
@@ -241,6 +242,24 @@
     if (!Array.isArray(state.recurring)) state.recurring = [];
     if (!Array.isArray(state.cards)) state.cards = [];
     if (!Array.isArray(state.creditScores)) state.creditScores = [];
+    if (!Array.isArray(state.accounts)) state.accounts = [];
+
+    // Seed default accounts on first launch
+    if (!state.accounts.length) {
+      state.accounts = [
+        { id: uid(), name: "Cash", type: "cash", balance: 0, color: "#22c55e" },
+        { id: uid(), name: "Checking", type: "checking", balance: 0, color: "#3b82f6" },
+        { id: uid(), name: "Credit Card", type: "credit", balance: 0, color: "#ec4899" },
+        { id: uid(), name: "Savings", type: "savings", balance: 0, color: "#f59e0b" },
+      ];
+      migrated = true;
+    }
+
+    // Ensure each transaction has tags array (migrate old data)
+    state.expenses = state.expenses.map((e) => {
+      if (!Array.isArray(e.tags)) { migrated = true; return { ...e, tags: [] }; }
+      return e;
+    });
     if (!state.settings) state.settings = { rollover: false, alertsShown: {} };
     if (!state.settings.alertsShown) state.settings.alertsShown = {};
     if (typeof state.settings.rollover !== "boolean") state.settings.rollover = false;
@@ -538,8 +557,11 @@
     renderCredit();
     renderPresetsManage();
     renderRecurringList();
+    renderAccountList();
+    renderDashAccounts();
     renderThemeButtons();
     populateExpenseCategorySelect();
+    populateAccountSelect("#expAccount", true);
     populateRecurringCategorySelect();
     renderFilterChips();
     $("#currencySelect").value = currency;
@@ -575,6 +597,110 @@
 
     // Subscription suggestions
     renderSubscriptionSuggestions();
+  }
+
+  /* ---------- Accounts ---------- */
+  function accountBalance(accId) {
+    const acc = state.accounts.find((a) => a.id === accId);
+    if (!acc) return 0;
+    const starting = Number(acc.balance) || 0;
+    const txns = state.expenses.filter((e) => e.accountId === accId);
+    const delta = txns.reduce((s, t) => {
+      if (t.type === "income") return s + Number(t.amount);
+      if (t.type === "transfer-out") return s - Number(t.amount);
+      if (t.type === "transfer-in") return s + Number(t.amount);
+      return s - Number(t.amount); // expense
+    }, 0);
+    return starting + delta;
+  }
+
+  function netWorth() {
+    return state.accounts.reduce((s, a) => s + accountBalance(a.id), 0);
+  }
+
+  function renderAccountList() {
+    const list = $("#accountList");
+    if (!list) return;
+    if (!state.accounts.length) {
+      list.innerHTML = '<li class="empty">No accounts yet.</li>';
+      return;
+    }
+    list.innerHTML = state.accounts
+      .map((a) => {
+        const bal = accountBalance(a.id);
+        const balClass = bal < 0 ? "negative" : "";
+        return `
+          <li class="list-item account-item" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(a.name)}</div>
+              <div class="list-item-sub">${escapeHtml(a.type)}</div>
+            </div>
+            <div class="list-item-amount ${balClass}">${fmt(bal)}</div>
+            <div class="list-item-actions">
+              <button data-action="edit-acc" data-id="${a.id}" title="Edit">✏️</button>
+              <button data-action="del-acc" data-id="${a.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function renderDashAccounts() {
+    const el = $("#dashAccounts");
+    if (!el) return;
+    if (!state.accounts.length) {
+      el.innerHTML = '<p class="empty">No accounts yet.</p>';
+      return;
+    }
+    const total = netWorth();
+    let html = `
+      <div class="account-net">
+        <span class="account-net-label">Net Worth</span>
+        <span class="account-net-value ${total < 0 ? "negative" : ""}">${fmt(total)}</span>
+      </div>
+      <div class="account-grid">
+    `;
+    state.accounts.forEach((a) => {
+      const bal = accountBalance(a.id);
+      html += `
+        <div class="account-pill" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
+          <div class="account-pill-name">${escapeHtml(a.name)}</div>
+          <div class="account-pill-bal ${bal < 0 ? "negative" : ""}">${fmt(bal)}</div>
+        </div>`;
+    });
+    html += "</div>";
+    el.innerHTML = html;
+  }
+
+  function populateAccountSelect(selectId, includeBlank) {
+    const sel = $(selectId);
+    if (!sel) return;
+    const options = state.accounts.map(
+      (a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`
+    ).join("");
+    sel.innerHTML = (includeBlank ? '<option value="">Select account</option>' : "") + options;
+  }
+
+  function openTransferModal() {
+    if (state.accounts.length < 2) {
+      showToast("Add at least 2 accounts to transfer");
+      return;
+    }
+    populateAccountSelect("#transferFrom", false);
+    populateAccountSelect("#transferTo", false);
+    $("#transferDate").value = todayStr();
+    $("#transferAmount").value = "";
+    $("#transferNote").value = "";
+    const fromSel = $("#transferFrom");
+    const toSel = $("#transferTo");
+    if (fromSel.options.length >= 2) {
+      fromSel.value = state.accounts[0].id;
+      toSel.value = state.accounts[1].id;
+    }
+    $("#transferModal").classList.add("open");
+  }
+  function closeTransferModal() {
+    $("#transferModal").classList.remove("open");
   }
 
   /* ---------- Subscription detector ---------- */
@@ -876,7 +1002,9 @@
   function renderDashboard() {
     const month = currentMonth();
     const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
-    const monthExpenses = monthTxns.filter((e) => e.type !== "income");
+    const monthExpenses = monthTxns.filter(
+      (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
     const monthIncomes = monthTxns.filter((e) => e.type === "income");
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const totalIncomeReal = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
@@ -1030,10 +1158,17 @@
       receiptHtml = `<div class="txn-receipt-placeholder ${exp.type === "income" ? "income" : ""}">${exp.type === "income" ? "💵" : "🧾"}</div>`;
     }
     const isIncome = exp.type === "income";
-    const sign = isIncome ? "+" : "-";
-    const amountClass = isIncome ? "positive" : "negative";
-    const tag = isIncome ? "Received" : "Spent";
+    const isTransferIn = exp.type === "transfer-in";
+    const isTransferOut = exp.type === "transfer-out";
+    let sign, amountClass, tag;
+    if (isIncome) { sign = "+"; amountClass = "positive"; tag = "Received"; }
+    else if (isTransferIn) { sign = "+"; amountClass = "positive"; tag = "Transfer in"; }
+    else if (isTransferOut) { sign = "-"; amountClass = "negative"; tag = "Transfer out"; }
+    else { sign = "-"; amountClass = "negative"; tag = "Spent"; }
     const isSelected = selectedTxns.has(exp.id);
+    const tagsHtml = (exp.tags && exp.tags.length)
+      ? `<div class="txn-tags">${exp.tags.map((t) => `<span class="txn-tag-chip">${escapeHtml(t)}</span>`).join("")}</div>`
+      : "";
     return `
       <li class="txn-item ${isSelected ? "selected" : ""}" data-txn-row="${exp.id}">
         <input type="checkbox" class="txn-check" data-action="select-txn" data-id="${exp.id}" ${isSelected ? "checked" : ""} aria-label="Select transaction" />
@@ -1046,6 +1181,7 @@
           <div class="txn-id">#${exp.id.slice(-4).toUpperCase()}</div>
           <div class="txn-name">${escapeHtml(exp.desc)}</div>
           <div class="txn-cat">${escapeHtml(catName)}</div>
+          ${tagsHtml}
         </div>
         <div class="txn-right">
           <div class="txn-tag">${tag}</div>
@@ -1071,9 +1207,11 @@
       items = items.filter((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
         const catName = cat ? cat.name.toLowerCase() : "";
+        const tagsStr = (e.tags || []).join(" ").toLowerCase();
         return (
           e.desc.toLowerCase().includes(q) ||
           catName.includes(q) ||
+          tagsStr.includes(q) ||
           String(e.amount).includes(q)
         );
       });
@@ -1185,7 +1323,9 @@
   }
 
   function filterExpensesForInsights() {
-    let exps = state.expenses.filter((e) => e.type !== "income");
+    let exps = state.expenses.filter(
+      (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
     const m = currentMonth();
     if (insightsPeriod === "monthly") {
       exps = exps.filter((e) => monthKey(e.date) === m);
@@ -2519,10 +2659,15 @@
     $("#expDesc").value = (prefill && prefill.desc) || "";
     $("#expAmount").value = prefill && prefill.amount ? prefill.amount : "";
     $("#expEditId").value = editingTxnId || "";
+    $("#expTags").value = (prefill && Array.isArray(prefill.tags)) ? prefill.tags.join(", ") : "";
 
     populateExpenseCategorySelect();
+    populateAccountSelect("#expAccount", true);
     if (prefill && prefill.categoryId) {
       $("#expCategory").value = prefill.categoryId;
+    }
+    if (prefill && prefill.accountId) {
+      $("#expAccount").value = prefill.accountId;
     }
 
     // Receipt prefill (only when editing)
@@ -2678,6 +2823,11 @@
       const amount = parseFloat($("#expAmount").value);
       const date = $("#expDate").value;
       const categoryId = $("#expCategory").value;
+      const accountId = $("#expAccount").value;
+      const tagsRaw = $("#expTags").value.trim();
+      const tags = tagsRaw
+        ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
+        : [];
       const receipt = $("#receiptPreview").dataset.dataUrl || null;
       const editId = $("#expEditId").value;
       const type = currentModalType;
@@ -2692,6 +2842,8 @@
             ...state.expenses[idx],
             type, desc, amount, date,
             categoryId: categoryId || null,
+            accountId: accountId || null,
+            tags,
             receipt,
           };
         }
@@ -2699,6 +2851,8 @@
         state.expenses.push({
           id: uid(), type, desc, amount, date,
           categoryId: categoryId || null,
+          accountId: accountId || null,
+          tags,
           receipt,
         });
       }
@@ -2866,6 +3020,75 @@
 
     // Debt payoff
     $("#payoffCalcBtn").addEventListener("click", calculatePayoff);
+
+    // Account form
+    $("#accountForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = $("#accName").value.trim();
+      const type = $("#accType").value;
+      const balance = parseFloat($("#accBalance").value) || 0;
+      if (!name) return;
+      const colors = ["#22c55e", "#3b82f6", "#ec4899", "#f59e0b", "#8b5cf6", "#14b8a6", "#06b6d4", "#ef4444"];
+      const color = colors[state.accounts.length % colors.length];
+      state.accounts.push({ id: uid(), name, type, balance, color });
+      saveData();
+      e.target.reset();
+      renderAll();
+      showToast("Account added");
+    });
+
+    // Transfer
+    $("#transferBtn").addEventListener("click", openTransferModal);
+    $("#transferModalClose").addEventListener("click", closeTransferModal);
+    $("#transferModal").addEventListener("click", (e) => {
+      if (e.target.id === "transferModal") closeTransferModal();
+    });
+    $("#transferForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const fromId = $("#transferFrom").value;
+      const toId = $("#transferTo").value;
+      const amount = parseFloat($("#transferAmount").value);
+      const date = $("#transferDate").value;
+      const note = $("#transferNote").value.trim();
+      if (!fromId || !toId || fromId === toId) {
+        showToast("Pick two different accounts");
+        return;
+      }
+      if (isNaN(amount) || amount <= 0 || !date) return;
+      const fromAcc = state.accounts.find((a) => a.id === fromId);
+      const toAcc = state.accounts.find((a) => a.id === toId);
+      const desc = note || `Transfer: ${fromAcc.name} → ${toAcc.name}`;
+      // Two linked transactions
+      const transferGroupId = uid();
+      state.expenses.push({
+        id: uid(),
+        type: "transfer-out",
+        desc,
+        amount,
+        date,
+        accountId: fromId,
+        categoryId: null,
+        tags: ["transfer"],
+        receipt: null,
+        transferGroupId,
+      });
+      state.expenses.push({
+        id: uid(),
+        type: "transfer-in",
+        desc,
+        amount,
+        date,
+        accountId: toId,
+        categoryId: null,
+        tags: ["transfer"],
+        receipt: null,
+        transferGroupId,
+      });
+      saveData();
+      closeTransferModal();
+      renderAll();
+      showToast("Transfer recorded");
+    });
 
     // Card form
     $("#cardForm").addEventListener("submit", (e) => {
@@ -3065,6 +3288,24 @@
       } else if (action === "edit-card") {
         const card = state.cards.find((c) => c.id === id);
         if (card) openCardModal(card);
+      } else if (action === "edit-acc") {
+        const acc = state.accounts.find((a) => a.id === id);
+        if (!acc) return;
+        const newName = prompt("Account name:", acc.name);
+        if (newName === null) return;
+        const newBal = prompt("Starting balance:", acc.balance);
+        if (newBal === null) return;
+        acc.name = newName.trim() || acc.name;
+        const b = parseFloat(newBal);
+        if (!isNaN(b)) acc.balance = b;
+        saveData();
+        renderAll();
+      } else if (action === "del-acc") {
+        if (confirm("Delete this account? Transactions assigned to it will keep their record.")) {
+          state.accounts = state.accounts.filter((a) => a.id !== id);
+          saveData();
+          renderAll();
+        }
       } else if (action === "del-card") {
         if (confirm("Delete this card?")) {
           state.cards = state.cards.filter((c) => c.id !== id);
@@ -3177,12 +3418,17 @@
           state = {
             income: data.income || 0,
             categories: data.categories || [],
-            expenses: (data.expenses || []).map((e) => ({ ...e, type: e.type || "expense" })),
+            expenses: (data.expenses || []).map((e) => ({
+              ...e,
+              type: e.type || "expense",
+              tags: Array.isArray(e.tags) ? e.tags : [],
+            })),
             goals: data.goals || [],
             presets: data.presets || [],
             recurring: data.recurring || [],
             cards: data.cards || [],
             creditScores: data.creditScores || [],
+            accounts: data.accounts || [],
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -3208,6 +3454,7 @@
           recurring: [],
           cards: [],
           creditScores: [],
+          accounts: [],
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();
