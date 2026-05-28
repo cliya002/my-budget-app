@@ -1997,3 +1997,164 @@ input[type="color"] {
 .insight-icon { font-size: 1.4rem; flex-shrink: 0; }
 .insight-text { font-size: 0.9rem; line-height: 1.5; }
 .insight-text strong { color: var(--primary); }
+
+/* ================ Credit additions ================ */
+.list-item.faded { opacity: 0.55; }
+
+.freeze-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; }
+.freeze-item {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font-weight: 600;
+}
+.freeze-item input[type="checkbox"] {
+  width: 22px; height: 22px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.freeze-status { font-size: 0.75rem; color: var(--text-dim); }
+.freeze-name { color: var(--primary); }
+
+.annual-reports {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.annual-report-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.7rem 0.85rem;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.pay-by-calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.payby-row {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 0.85rem;
+  align-items: center;
+  padding: 0.7rem 0.85rem;
+  background: var(--card-soft);
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--border);
+}
+.payby-row.urgent { border-left-color: var(--danger); }
+.payby-row.soon { border-left-color: var(--warning); }
+.payby-days {
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.4rem;
+}
+.payby-num { font-weight: 700; font-size: 1.2rem; color: var(--primary); }
+.payby-unit { font-size: 0.7rem; color: var(--text-dim); }
+.payby-event { font-weight: 600; }
+.payby-card { font-size: 0.85rem; color: var(--text-dim); }
+.payby-date { font-size: 0.85rem; color: var(--text-dim); }
+
+.age-summary {
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+.age-row {
+  display: grid;
+  grid-template-columns: 120px 1fr 60px;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.4rem 0;
+}
+.age-name { font-weight: 600; font-size: 0.9rem; }
+.age-bar {
+  position: relative;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+}
+.age-marker {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  background: var(--primary);
+  border-radius: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+.age-years { font-weight: 600; text-align: right; font-size: 0.85rem; color: var(--primary); }
+
+.education-item {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.5rem;
+}
+.education-item summary {
+  cursor: pointer;
+  font-weight: 600;
+  outline: none;
+}
+.education-item summary strong { color: var(--primary); }
+.education-item p {
+  margin: 0.5rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+.education-item p strong { color: var(--primary); }
+
+/* Confetti */
+.confetti-container {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  overflow: hidden;
+}
+.confetti-container span {
+  position: absolute;
+  top: -30px;
+  font-size: 1.6rem;
+  animation: confettiFall linear forwards;
+}
+@keyframes confettiFall {
+  0% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(110vh) rotate(720deg); opacity: 0; }
+}
+
+.toast.toast-success {
+  background: var(--success);
+  color: #fff;
+}
+
+.list-item-amount.positive { color: var(--success); }
+.list-item-amount.negative { color: var(--danger); }
+.progress-amount.positive { color: var(--success); }
+.progress-amount.negative { color: var(--danger); }
+
+@media (max-width: 600px) {
+  .freeze-grid { grid-template-columns: 1fr; }
+  .age-row { grid-template-columns: 80px 1fr 50px; }
+}

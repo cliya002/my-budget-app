@@ -34,6 +34,13 @@
     accounts: [],
     people: [],            // each: { id, name, relation, color, notes }
     netWorthHistory: [],   // each: { date: 'YYYY-MM-DD', value: number }
+    creditInquiries: [],   // each: { id, date, reason, bureau, type ('hard'|'soft') }
+    negativeItems: [],     // each: { id, type, creditor, amount, dateOpened, fallOffDate, note }
+    limitIncreases: [],    // each: { id, cardId, oldLimit, newLimit, date, note }
+    creditGoals: [],       // each: { id, targetScore, targetDate, note }
+    creditFreezes: {},     // map: bureau -> { frozen: bool, date: 'YYYY-MM-DD' }
+    annualReports: {},     // map: bureau -> { lastPulled: 'YYYY-MM-DD' }
+    utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
     settings: {
       rollover: false,
       alertsShown: {},
@@ -258,6 +265,13 @@
     if (!Array.isArray(state.accounts)) state.accounts = [];
     if (!Array.isArray(state.people)) state.people = [];
     if (!Array.isArray(state.netWorthHistory)) state.netWorthHistory = [];
+    if (!Array.isArray(state.creditInquiries)) state.creditInquiries = [];
+    if (!Array.isArray(state.negativeItems)) state.negativeItems = [];
+    if (!Array.isArray(state.limitIncreases)) state.limitIncreases = [];
+    if (!Array.isArray(state.creditGoals)) state.creditGoals = [];
+    if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
+    if (typeof state.creditFreezes !== "object" || !state.creditFreezes) state.creditFreezes = {};
+    if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -364,6 +378,7 @@
   function saveData() {
     // Always update today's net-worth snapshot so the chart stays current
     try { snapshotNetWorth(); } catch (e) { /* netWorth uses functions defined later; ignore in early-init save */ }
+    try { snapshotUtilization(); } catch (e) { /* same */ }
     if (cryptoKey) {
       // Encrypt asynchronously and write to localStorage; remove plaintext on success
       encryptState(state).then((b64) => {
@@ -708,6 +723,21 @@
     // Keep last 365 entries max
     if (state.netWorthHistory.length > 365) {
       state.netWorthHistory = state.netWorthHistory.slice(-365);
+    }
+  }
+
+  function snapshotUtilization() {
+    const today = todayStr();
+    const util = utilizationPct();
+    if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
+    const idx = state.utilHistory.findIndex((s) => s.date === today);
+    if (idx >= 0) {
+      state.utilHistory[idx].util = util;
+    } else {
+      state.utilHistory.push({ date: today, util });
+    }
+    if (state.utilHistory.length > 365) {
+      state.utilHistory = state.utilHistory.slice(-365);
     }
   }
 
@@ -2483,11 +2513,529 @@
     renderCreditTrend();
     renderCreditTips();
     renderPayoffEmpty();
+    renderInquiriesList();
+    renderNegativeList();
+    renderLimitIncreaseList();
+    renderCreditGoalList();
+    renderFreezes();
+    renderAnnualReports();
+    renderPayByCalendar();
+    renderAccountAgeTimeline();
+    renderRewardsList();
+    renderUtilTrendChart();
+    renderScoreProjection();
+    checkScoreMilestones();
   }
 
   function renderPayoffEmpty() {
     const eligible = state.cards.filter((c) => Number(c.balance) > 0);
     $("#payoffEmpty").hidden = eligible.length > 0;
+  }
+
+  /* ---------- Credit additions: inquiries, negatives, limits, goals, freezes, reports ---------- */
+
+  function isInquiryActive(date) {
+    const d = new Date(date);
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 24);
+    return d >= cutoff;
+  }
+
+  function renderInquiriesList() {
+    const list = $("#inquiriesList");
+    if (!list) return;
+    if (!state.creditInquiries.length) {
+      list.innerHTML = '<li class="empty">No inquiries logged.</li>';
+      return;
+    }
+    const sorted = [...state.creditInquiries].sort((a, b) => b.date.localeCompare(a.date));
+    const active = sorted.filter((i) => isInquiryActive(i.date));
+    const pointsCost = active.length * 5;
+
+    let html = `<div class="card-sub" style="margin-bottom:0.5rem">
+      <strong>${active.length}</strong> active inquiries (last 24 mo) · estimated ~${pointsCost} pts impact
+    </div>`;
+    sorted.forEach((i) => {
+      const active = isInquiryActive(i.date);
+      const fallOff = new Date(i.date);
+      fallOff.setMonth(fallOff.getMonth() + 24);
+      const fallOffStr = fallOff.toISOString().slice(0, 10);
+      const monthsLeft = Math.max(0, Math.round((fallOff - new Date()) / (30.44 * 24 * 60 * 60 * 1000)));
+      html += `
+        <li class="list-item ${active ? "" : "faded"}">
+          <div class="list-item-main">
+            <div class="list-item-title">${escapeHtml(i.reason)}${i.bureau ? " · " + escapeHtml(i.bureau) : ""}</div>
+            <div class="list-item-sub">${i.date} · ${active ? `Falls off ${fallOffStr} (${monthsLeft} mo)` : "Faded off"}</div>
+          </div>
+          <div class="list-item-actions">
+            <button data-action="del-inquiry" data-id="${i.id}" title="Delete">🗑️</button>
+          </div>
+        </li>`;
+    });
+    list.innerHTML = html;
+  }
+
+  function renderNegativeList() {
+    const list = $("#negativeList");
+    if (!list) return;
+    if (!state.negativeItems.length) {
+      list.innerHTML = '<li class="empty">None logged.</li>';
+      return;
+    }
+    const typeNames = {
+      late30: "30-day late", late60: "60-day late", late90: "90+ day late",
+      collection: "Collection", chargeoff: "Charge-off",
+      bankruptcy: "Bankruptcy", foreclosure: "Foreclosure",
+      repossession: "Repossession", judgement: "Judgement",
+    };
+    const fallOffYears = (type) => {
+      if (type === "bankruptcy") return 10;
+      return 7;
+    };
+    const sorted = [...state.negativeItems].sort((a, b) => b.date.localeCompare(a.date));
+    list.innerHTML = sorted.map((n) => {
+      const dt = new Date(n.date);
+      const fallOff = new Date(dt);
+      fallOff.setFullYear(fallOff.getFullYear() + fallOffYears(n.type));
+      const fallOffStr = fallOff.toISOString().slice(0, 10);
+      const today = new Date();
+      const months = Math.max(0, Math.round((fallOff - today) / (30.44 * 24 * 60 * 60 * 1000)));
+      const fadedOff = fallOff <= today;
+      const amount = Number(n.amount) > 0 ? ` · ${fmt(n.amount)}` : "";
+      const creditor = n.creditor ? ` · ${escapeHtml(n.creditor)}` : "";
+      const note = n.note ? ` · ${escapeHtml(n.note)}` : "";
+      return `
+        <li class="list-item ${fadedOff ? "faded" : ""}">
+          <div class="list-item-main">
+            <div class="list-item-title">${typeNames[n.type] || n.type}${creditor}</div>
+            <div class="list-item-sub">${n.date}${amount}${note} · ${fadedOff ? "Faded off" : `Falls off ${fallOffStr} (${months} mo)`}</div>
+          </div>
+          <div class="list-item-actions">
+            <button data-action="del-negative" data-id="${n.id}" title="Delete">🗑️</button>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  function renderLimitIncreaseList() {
+    const list = $("#limitIncreaseList");
+    const summary = $("#limitIncreaseSummary");
+    if (!list) return;
+    if (!state.limitIncreases.length) {
+      list.innerHTML = '<li class="empty">No limit increases logged. Edit a card and raise its limit to log one automatically.</li>';
+      if (summary) summary.textContent = "";
+      return;
+    }
+    const totalIncrease = state.limitIncreases.reduce(
+      (s, x) => s + (Number(x.newLimit) - Number(x.oldLimit)), 0
+    );
+    if (summary) summary.innerHTML = `Total credit limit increase: <strong>${fmt(totalIncrease)}</strong>`;
+
+    const sorted = [...state.limitIncreases].sort((a, b) => b.date.localeCompare(a.date));
+    list.innerHTML = sorted.map((x) => {
+      const card = state.cards.find((c) => c.id === x.cardId);
+      const cardName = card ? card.name : "(deleted card)";
+      const diff = Number(x.newLimit) - Number(x.oldLimit);
+      return `
+        <li class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title">${escapeHtml(cardName)}</div>
+            <div class="list-item-sub">${x.date} · ${fmt(x.oldLimit)} → ${fmt(x.newLimit)} (+${fmt(diff)})</div>
+          </div>
+          <div class="list-item-actions">
+            <button data-action="del-limit" data-id="${x.id}" title="Delete">🗑️</button>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  function renderCreditGoalList() {
+    const list = $("#creditGoalList");
+    if (!list) return;
+    if (!state.creditGoals.length) {
+      list.innerHTML = '<li class="empty">No goals yet. Set one to track progress.</li>';
+      return;
+    }
+    const cur = latestScore();
+    const curScore = cur ? Number(cur.score) : 0;
+    list.innerHTML = state.creditGoals.map((g) => {
+      const target = Number(g.targetScore);
+      const pts = target - curScore;
+      const today = new Date();
+      const goalDt = new Date(g.targetDate);
+      const monthsLeft = Math.max(1, Math.round((goalDt - today) / (30.44 * 24 * 60 * 60 * 1000)));
+      const ptsPerMonth = pts > 0 ? (pts / monthsLeft).toFixed(1) : "0";
+      let statusClass = "", statusText;
+      if (curScore >= target) {
+        statusClass = "positive"; statusText = "🎉 Goal reached!";
+      } else if (monthsLeft < 1) {
+        statusClass = "negative"; statusText = `Need ${pts} pts (deadline passed)`;
+      } else {
+        statusText = `Need ${pts} pts in ${monthsLeft} mo (${ptsPerMonth}/mo pace)`;
+      }
+      const note = g.note ? ` · ${escapeHtml(g.note)}` : "";
+      const pct = curScore >= target ? 100
+        : Math.max(0, Math.min(100, ((curScore - 300) / (target - 300)) * 100));
+      return `
+        <li class="progress-item">
+          <div class="progress-header">
+            <span class="progress-name">Reach ${target} by ${g.targetDate}${note}</span>
+            <span class="progress-amount ${statusClass}">${statusText}</span>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill ${curScore >= target ? "success" : ""}" style="width: ${pct}%"></div>
+          </div>
+          <div class="goal-actions">
+            <button class="btn-secondary" data-action="del-credit-goal" data-id="${g.id}">Delete</button>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  function renderFreezes() {
+    document.querySelectorAll('[data-freeze]').forEach((cb) => {
+      const bureau = cb.dataset.freeze;
+      const f = state.creditFreezes[bureau];
+      cb.checked = !!(f && f.frozen);
+      const status = cb.parentElement.querySelector(".freeze-status");
+      if (status) {
+        status.textContent = f && f.frozen
+          ? `🔒 Frozen since ${f.date}`
+          : "🔓 Not frozen";
+      }
+    });
+  }
+
+  function renderAnnualReports() {
+    const el = $("#annualReportStatus");
+    if (!el) return;
+    const bureaus = ["Equifax", "Experian", "TransUnion"];
+    el.innerHTML = bureaus.map((b) => {
+      const r = state.annualReports[b];
+      const lastPulled = r ? r.lastPulled : null;
+      let status;
+      if (!lastPulled) {
+        status = '<span class="negative">Never pulled — get yours free</span>';
+      } else {
+        const months = Math.round((new Date() - new Date(lastPulled)) / (30.44 * 24 * 60 * 60 * 1000));
+        if (months >= 12) {
+          status = `<span class="negative">${months} mo ago — pull a fresh one</span>`;
+        } else {
+          status = `<span class="positive">${months} mo ago</span>`;
+        }
+      }
+      return `
+        <div class="annual-report-row">
+          <div>
+            <strong>${b}</strong>
+            <div class="card-sub">${status}</div>
+          </div>
+          <button class="btn-secondary" data-action="mark-pulled" data-bureau="${b}">Mark Pulled Today</button>
+        </div>`;
+    }).join("");
+  }
+
+  function renderPayByCalendar() {
+    const el = $("#payByCalendar");
+    if (!el) return;
+    const cards = state.cards.filter((c) => c.dueDay || c.closeDay);
+    if (!cards.length) {
+      el.innerHTML = '<p class="empty">Add cards with closing/due days to see the calendar.</p>';
+      return;
+    }
+    const today = new Date();
+    const events = [];
+    cards.forEach((c) => {
+      // Generate next-30-day events for each card's close + due
+      [
+        { day: c.closeDay, label: "Statement closes", icon: "📅", priority: 1 },
+        { day: c.dueDay, label: "Payment due", icon: "💸", priority: 2 },
+      ].forEach((spec) => {
+        if (!spec.day) return;
+        // Find next occurrence of this day
+        const next = new Date(today.getFullYear(), today.getMonth(), spec.day);
+        if (next < today) next.setMonth(next.getMonth() + 1);
+        const days = Math.ceil((next - today) / (24 * 60 * 60 * 1000));
+        if (days <= 30) {
+          events.push({
+            date: next.toISOString().slice(0, 10),
+            days,
+            cardName: c.name,
+            label: spec.label,
+            icon: spec.icon,
+            priority: spec.priority,
+          });
+        }
+      });
+    });
+    if (!events.length) {
+      el.innerHTML = '<p class="empty">No statement or due dates in the next 30 days.</p>';
+      return;
+    }
+    events.sort((a, b) => a.days - b.days);
+    el.innerHTML = events.map((e) => {
+      const cls = e.days <= 3 ? "urgent" : e.days <= 7 ? "soon" : "";
+      return `
+        <div class="payby-row ${cls}">
+          <div class="payby-days">
+            <div class="payby-num">${e.days}</div>
+            <div class="payby-unit">day${e.days === 1 ? "" : "s"}</div>
+          </div>
+          <div class="payby-info">
+            <div class="payby-event">${e.icon} ${e.label}</div>
+            <div class="payby-card">${escapeHtml(e.cardName)}</div>
+          </div>
+          <div class="payby-date">${e.date}</div>
+        </div>`;
+    }).join("");
+  }
+
+  function renderAccountAgeTimeline() {
+    const el = $("#accountAgeTimeline");
+    if (!el) return;
+    const cards = state.cards.filter((c) => c.opened);
+    if (!cards.length) {
+      el.innerHTML = '<p class="empty">Add open dates to your cards to see the timeline.</p>';
+      return;
+    }
+    const sorted = [...cards].sort((a, b) => a.opened.localeCompare(b.opened));
+    const oldest = new Date(sorted[0].opened);
+    const today = new Date();
+    const totalSpan = today - oldest;
+    const ages = sorted.map((c) => (today - new Date(c.opened)) / (365.25 * 24 * 60 * 60 * 1000));
+    const avgAge = ages.reduce((a, b) => a + b, 0) / ages.length;
+    const oldestYears = ages[0];
+
+    let html = `<div class="age-summary">
+      Oldest: <strong>${oldestYears.toFixed(1)} years</strong> · Average: <strong>${avgAge.toFixed(1)} years</strong>
+    </div>`;
+    sorted.forEach((c) => {
+      const age = (today - new Date(c.opened)) / (365.25 * 24 * 60 * 60 * 1000);
+      const offsetPct = totalSpan > 0
+        ? ((new Date(c.opened) - oldest) / totalSpan) * 100
+        : 0;
+      html += `
+        <div class="age-row">
+          <div class="age-name">${escapeHtml(c.name)}</div>
+          <div class="age-bar">
+            <div class="age-marker" style="left: ${offsetPct.toFixed(1)}%" title="${c.opened}"></div>
+          </div>
+          <div class="age-years">${age.toFixed(1)}y</div>
+        </div>`;
+    });
+    el.innerHTML = html;
+  }
+
+  function renderRewardsList() {
+    const list = $("#rewardsList");
+    if (!list) return;
+    const cardsWithRewards = state.cards.filter((c) =>
+      Number(c.cashbackRate) > 0 || Number(c.annualFee) > 0 || Number(c.signupBonus) > 0
+    );
+    if (!cardsWithRewards.length) {
+      list.innerHTML = '<li class="empty">Add cashback rate, annual fee, or sign-up bonus to your cards.</li>';
+      return;
+    }
+    list.innerHTML = cardsWithRewards.map((c) => {
+      const cashback = Number(c.cashbackRate) || 0;
+      const fee = Number(c.annualFee) || 0;
+      const bonus = Number(c.signupBonus) || 0;
+      // Estimated annual cashback: assume balance/2 = monthly spending heuristic, * 12 * cashback%
+      // Better: just show the rate; user can interpret
+      // Net annual value = signup bonus - annual fee + (estimated cashback if user spends average)
+      // Estimate spending: use sum of all expense transactions / 12 if we have them
+      const avgMonthly = state.expenses
+        .filter((e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+        .reduce((s, e) => s + Number(e.amount), 0) / 12;
+      const estCashback = (avgMonthly * 12) * (cashback / 100);
+      const netValue = bonus - fee + estCashback;
+
+      return `
+        <li class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title">${escapeHtml(c.name)}</div>
+            <div class="list-item-sub">
+              ${cashback > 0 ? `${cashback}% cashback · ` : ""}
+              ${fee > 0 ? `${fmt(fee)} annual fee · ` : ""}
+              ${bonus > 0 ? `${fmt(bonus)} bonus earned` : ""}
+            </div>
+          </div>
+          <div class="list-item-amount ${netValue >= 0 ? "positive" : "negative"}">
+            ${netValue >= 0 ? "+" : ""}${fmt(netValue)}
+            <div class="list-item-sub">est annual</div>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  function renderUtilTrendChart() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("utilTrend");
+    const ctx = $("#chartUtilTrend");
+    if (!ctx) return;
+    const history = state.utilHistory || [];
+    if (history.length < 2) {
+      $("#utilTrendEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#utilTrendEmpty").hidden = true;
+    ctx.style.display = "block";
+    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+    const labels = sorted.map((s) => {
+      const [y, m, d] = s.date.split("-");
+      return new Date(Number(y), Number(m) - 1, Number(d))
+        .toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    });
+    const data = sorted.map((s) => Number(s.util));
+    charts.utilTrend = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Utilization %",
+          data,
+          borderColor: "#f59e0b",
+          backgroundColor: "rgba(245, 158, 11, 0.1)",
+          tension: 0.3,
+          fill: true,
+          pointRadius: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)}%` } } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => v + "%" }, grid: { color: "#eee" }, beginAtZero: true, max: 100 },
+        },
+      },
+    });
+  }
+
+  function renderScoreProjection() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("scoreProjection");
+    const ctx = $("#chartScoreProjection");
+    if (!ctx) return;
+    const sorted = [...state.creditScores].sort((a, b) => a.date.localeCompare(b.date));
+    if (sorted.length < 2) {
+      $("#scoreProjectionEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#scoreProjectionEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    // Linear regression on the scores
+    const n = sorted.length;
+    const xs = sorted.map((_, i) => i);
+    const ys = sorted.map((s) => Number(s.score));
+    const meanX = xs.reduce((a, b) => a + b, 0) / n;
+    const meanY = ys.reduce((a, b) => a + b, 0) / n;
+    let num = 0, den = 0;
+    for (let i = 0; i < n; i++) {
+      num += (xs[i] - meanX) * (ys[i] - meanY);
+      den += (xs[i] - meanX) ** 2;
+    }
+    const slope = den === 0 ? 0 : num / den;
+    const intercept = meanY - slope * meanX;
+
+    // Avg interval between data points (in days)
+    const totalDays = (new Date(sorted[n - 1].date) - new Date(sorted[0].date)) / (24 * 60 * 60 * 1000);
+    const avgInterval = totalDays / (n - 1) || 30;
+
+    const labels = sorted.map((s) => s.date.slice(5));
+    const data = ys.slice();
+
+    // Project 6 future points (one per avg interval)
+    const future = [];
+    for (let i = 1; i <= 6; i++) {
+      const projected = Math.max(300, Math.min(850, slope * (n - 1 + i) + intercept));
+      future.push(projected);
+      const futureDate = new Date(sorted[n - 1].date);
+      futureDate.setDate(futureDate.getDate() + Math.round(avgInterval * i));
+      labels.push("→ " + futureDate.toISOString().slice(5, 10));
+    }
+
+    // Build datasets: actual values for 0..n-1, then null; projected null then values
+    const actualData = ys.concat(new Array(future.length).fill(null));
+    const projectedData = new Array(n - 1).fill(null).concat([ys[n - 1], ...future]);
+
+    charts.scoreProjection = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Actual",
+            data: actualData,
+            borderColor: "#5b3fb8",
+            backgroundColor: "rgba(91, 63, 184, 0.1)",
+            tension: 0.3,
+            pointRadius: 4,
+          },
+          {
+            label: "Projected",
+            data: projectedData,
+            borderColor: "#5b3fb8",
+            borderDash: [6, 4],
+            backgroundColor: "rgba(91, 63, 184, 0.05)",
+            tension: 0.3,
+            pointRadius: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: "top", labels: { boxWidth: 12 } } },
+        scales: {
+          x: { grid: { display: false } },
+          y: { min: 300, max: 850, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  /* ---------- Score milestone celebration ---------- */
+  function checkScoreMilestones() {
+    const cur = latestScore();
+    const prev = previousScore();
+    if (!cur || !prev) return;
+    const milestones = [580, 670, 700, 740, 800];
+    for (const m of milestones) {
+      if (Number(prev.score) < m && Number(cur.score) >= m) {
+        // Don't re-celebrate the same milestone in the same session
+        if (cur._celebrated && cur._celebrated[m]) continue;
+        if (!cur._celebrated) cur._celebrated = {};
+        cur._celebrated[m] = true;
+        celebrateMilestone(m);
+      }
+    }
+  }
+
+  function celebrateMilestone(score) {
+    const labels = {
+      580: "Fair", 670: "Good", 700: "🎉 Crossed 700!",
+      740: "Very Good", 800: "🏆 Exceptional",
+    };
+    showAlertToast(`${labels[score] || ""} You hit ${score}!`, "success");
+    // Confetti — simple emoji burst
+    const confetti = ["🎉", "✨", "🎊", "⭐", "🌟"];
+    const container = document.createElement("div");
+    container.className = "confetti-container";
+    for (let i = 0; i < 30; i++) {
+      const e = document.createElement("span");
+      e.textContent = confetti[Math.floor(Math.random() * confetti.length)];
+      e.style.left = Math.random() * 100 + "%";
+      e.style.animationDelay = (Math.random() * 0.5) + "s";
+      e.style.animationDuration = (1.5 + Math.random()) + "s";
+      container.appendChild(e);
+    }
+    document.body.appendChild(container);
+    setTimeout(() => container.remove(), 3500);
   }
 
   function calculatePayoff() {
@@ -3175,6 +3723,10 @@
     $("#cardApr").value = isEdit ? (card.apr || "") : "";
     $("#cardDueDay").value = isEdit ? (card.dueDay || "") : "";
     $("#cardOpened").value = isEdit ? (card.opened || "") : "";
+    $("#cardCloseDay").value = isEdit ? (card.closeDay || "") : "";
+    $("#cardAnnualFee").value = isEdit ? (card.annualFee || "") : "";
+    $("#cardCashback").value = isEdit ? (card.cashbackRate || "") : "";
+    $("#cardBonus").value = isEdit ? (card.signupBonus || "") : "";
     $("#cardType").value = isEdit ? (card.cardType || "credit") : "credit";
     $("#cardAutopay").checked = isEdit ? !!card.autopay : false;
     $("#cardModal").classList.add("open");
@@ -4987,6 +5539,7 @@
     $("#cardForm").addEventListener("submit", (e) => {
       e.preventDefault();
       const editId = $("#cardEditId").value;
+      const oldCard = editId ? state.cards.find((c) => c.id === editId) : null;
       const card = {
         id: editId || uid(),
         name: $("#cardName").value.trim(),
@@ -4997,11 +5550,28 @@
         statement: parseFloat($("#cardStatement").value) || null,
         apr: parseFloat($("#cardApr").value) || null,
         dueDay: parseInt($("#cardDueDay").value, 10) || null,
+        closeDay: parseInt($("#cardCloseDay").value, 10) || null,
         opened: $("#cardOpened").value || null,
         cardType: $("#cardType").value || "credit",
         autopay: $("#cardAutopay").checked,
+        annualFee: parseFloat($("#cardAnnualFee").value) || 0,
+        cashbackRate: parseFloat($("#cardCashback").value) || 0,
+        signupBonus: parseFloat($("#cardBonus").value) || 0,
       };
       if (!card.name) return;
+
+      // Auto-log a limit-increase entry if user raised the limit
+      if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
+        state.limitIncreases.push({
+          id: uid(),
+          cardId: card.id,
+          oldLimit: Number(oldCard.limit),
+          newLimit: Number(card.limit),
+          date: todayStr(),
+          note: "Auto-logged from card edit",
+        });
+      }
+
       if (editId) {
         const idx = state.cards.findIndex((c) => c.id === editId);
         if (idx >= 0) state.cards[idx] = card;
@@ -5032,7 +5602,105 @@
       saveData();
       closeScoreModal();
       renderCredit();
+      checkScoreMilestones();
       showToast("Score logged");
+    });
+
+    // Inquiry modal
+    $("#addInquiryBtn").addEventListener("click", () => {
+      $("#inquiryDate").value = todayStr();
+      $("#inquiryReason").value = "";
+      $("#inquiryBureau").value = "";
+      $("#inquiryModal").classList.add("open");
+    });
+    $("#inquiryClose").addEventListener("click", () => $("#inquiryModal").classList.remove("open"));
+    $("#inquiryModal").addEventListener("click", (e) => {
+      if (e.target.id === "inquiryModal") $("#inquiryModal").classList.remove("open");
+    });
+    $("#inquiryForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const date = $("#inquiryDate").value;
+      const reason = $("#inquiryReason").value.trim();
+      const bureau = $("#inquiryBureau").value || null;
+      if (!date || !reason) return;
+      state.creditInquiries.push({
+        id: uid(), date, reason, bureau, type: "hard",
+      });
+      saveData();
+      $("#inquiryModal").classList.remove("open");
+      renderCredit();
+      showToast("Inquiry logged");
+    });
+
+    // Negative item modal
+    $("#addNegativeBtn").addEventListener("click", () => {
+      $("#negDate").value = todayStr();
+      $("#negCreditor").value = "";
+      $("#negAmount").value = "";
+      $("#negNote").value = "";
+      $("#negativeModal").classList.add("open");
+    });
+    $("#negativeClose").addEventListener("click", () => $("#negativeModal").classList.remove("open"));
+    $("#negativeModal").addEventListener("click", (e) => {
+      if (e.target.id === "negativeModal") $("#negativeModal").classList.remove("open");
+    });
+    $("#negativeForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const type = $("#negType").value;
+      const date = $("#negDate").value;
+      if (!type || !date) return;
+      state.negativeItems.push({
+        id: uid(),
+        type, date,
+        creditor: $("#negCreditor").value.trim(),
+        amount: parseFloat($("#negAmount").value) || 0,
+        note: $("#negNote").value.trim(),
+      });
+      saveData();
+      $("#negativeModal").classList.remove("open");
+      renderCredit();
+      showToast("Negative item logged");
+    });
+
+    // Credit goal modal
+    $("#addGoalBtn").addEventListener("click", () => {
+      $("#goalScore").value = "";
+      $("#goalDate2").value = "";
+      $("#goalNote").value = "";
+      $("#creditGoalModal").classList.add("open");
+    });
+    $("#creditGoalClose").addEventListener("click", () => $("#creditGoalModal").classList.remove("open"));
+    $("#creditGoalModal").addEventListener("click", (e) => {
+      if (e.target.id === "creditGoalModal") $("#creditGoalModal").classList.remove("open");
+    });
+    $("#creditGoalForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const targetScore = parseInt($("#goalScore").value, 10);
+      const targetDate = $("#goalDate2").value;
+      const note = $("#goalNote").value.trim();
+      if (!targetScore || !targetDate) return;
+      state.creditGoals.push({
+        id: uid(), targetScore, targetDate, note,
+      });
+      saveData();
+      $("#creditGoalModal").classList.remove("open");
+      renderCredit();
+      showToast("Goal set");
+    });
+
+    // Freezes
+    document.querySelectorAll('[data-freeze]').forEach((cb) => {
+      cb.addEventListener("change", (e) => {
+        const bureau = e.target.dataset.freeze;
+        if (e.target.checked) {
+          state.creditFreezes[bureau] = { frozen: true, date: todayStr() };
+        } else {
+          state.creditFreezes[bureau] = { frozen: false, date: null };
+        }
+        saveData();
+        renderFreezes();
+        showToast(`${bureau} ${e.target.checked ? "frozen" : "unfrozen"}`);
+      });
     });
 
     // Filters
@@ -5284,6 +5952,36 @@
           saveData();
           renderCredit();
         }
+      } else if (action === "del-inquiry") {
+        if (confirm("Delete this inquiry?")) {
+          state.creditInquiries = state.creditInquiries.filter((x) => x.id !== id);
+          saveData();
+          renderCredit();
+        }
+      } else if (action === "del-negative") {
+        if (confirm("Delete this negative item?")) {
+          state.negativeItems = state.negativeItems.filter((x) => x.id !== id);
+          saveData();
+          renderCredit();
+        }
+      } else if (action === "del-limit") {
+        if (confirm("Delete this limit increase entry?")) {
+          state.limitIncreases = state.limitIncreases.filter((x) => x.id !== id);
+          saveData();
+          renderCredit();
+        }
+      } else if (action === "del-credit-goal") {
+        if (confirm("Delete this credit goal?")) {
+          state.creditGoals = state.creditGoals.filter((x) => x.id !== id);
+          saveData();
+          renderCredit();
+        }
+      } else if (action === "mark-pulled") {
+        const bureau = btn.dataset.bureau;
+        state.annualReports[bureau] = { lastPulled: todayStr() };
+        saveData();
+        renderAnnualReports();
+        showToast(`${bureau} report marked pulled today`);
       } else if (action === "convert-sub") {
         const idx = Number(btn.dataset.idx);
         const el = $("#subscriptionSuggestions");
@@ -5421,6 +6119,14 @@
             creditScores: data.creditScores || [],
             accounts: data.accounts || [],
             people: data.people || [],
+            netWorthHistory: data.netWorthHistory || [],
+            creditInquiries: data.creditInquiries || [],
+            negativeItems: data.negativeItems || [],
+            limitIncreases: data.limitIncreases || [],
+            creditGoals: data.creditGoals || [],
+            utilHistory: data.utilHistory || [],
+            creditFreezes: data.creditFreezes || {},
+            annualReports: data.annualReports || {},
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -5449,6 +6155,14 @@
           creditScores: [],
           accounts: [],
           people: [],
+          netWorthHistory: [],
+          creditInquiries: [],
+          negativeItems: [],
+          limitIncreases: [],
+          creditGoals: [],
+          utilHistory: [],
+          creditFreezes: {},
+          annualReports: {},
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();

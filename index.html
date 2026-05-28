@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=32" />
+  <link rel="stylesheet" href="styles.css?v=33" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -693,6 +693,155 @@
           </div>
 
           <div class="card">
+            <div class="card-title">Pay-By Calendar (Next 30 Days)</div>
+            <p class="card-sub">Statement closing dates and due dates per card. Pay before close to lower reported utilization.</p>
+            <div id="payByCalendar" class="pay-by-calendar">
+              <p class="empty">Add cards with closing/due days to see the calendar.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Account Age Timeline</div>
+            <div id="accountAgeTimeline" class="age-timeline">
+              <p class="empty">Add open dates to your cards to see the timeline.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Card Rewards Summary</div>
+            <ul id="rewardsList" class="list">
+              <li class="empty">Add cashback rate, annual fee, or sign-up bonus to your cards.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Score Projection (Next 6 Months)</div>
+            <div class="chart-wrap"><canvas id="chartScoreProjection"></canvas></div>
+            <div id="scoreProjectionEmpty" class="empty" hidden>Log at least 2 scores to project trends.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Utilization Trend</div>
+            <div class="chart-wrap"><canvas id="chartUtilTrend"></canvas></div>
+            <div id="utilTrendEmpty" class="empty" hidden>Add cards and check back over time.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Credit Goals</div>
+            <button id="addGoalBtn" class="btn-primary block">+ Set Score Goal</button>
+            <ul id="creditGoalList" class="list" style="margin-top:0.75rem">
+              <li class="empty">No goals yet. Set one to track progress.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Hard Inquiries</div>
+            <p class="card-sub">Inquiries fade off your score after 24 months.</p>
+            <button id="addInquiryBtn" class="btn-primary block">+ Log Inquiry</button>
+            <ul id="inquiriesList" class="list" style="margin-top:0.75rem">
+              <li class="empty">No inquiries logged.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Negative Items</div>
+            <p class="card-sub">Late payments, collections, charge-offs. Most fall off after 7 years.</p>
+            <button id="addNegativeBtn" class="btn-primary block">+ Log Negative Item</button>
+            <ul id="negativeList" class="list" style="margin-top:0.75rem">
+              <li class="empty">None logged.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Credit Limit Increase Log</div>
+            <div id="limitIncreaseSummary" class="card-sub" style="margin-bottom:0.5rem"></div>
+            <ul id="limitIncreaseList" class="list">
+              <li class="empty">No limit increases logged.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Credit Freezes</div>
+            <p class="card-sub">A freeze blocks new credit applications. Toggle each bureau as you freeze/unfreeze.</p>
+            <div class="freeze-grid" id="freezeGrid">
+              <label class="freeze-item">
+                <span class="freeze-name">Equifax</span>
+                <input type="checkbox" data-freeze="Equifax" />
+                <span class="freeze-status"></span>
+              </label>
+              <label class="freeze-item">
+                <span class="freeze-name">Experian</span>
+                <input type="checkbox" data-freeze="Experian" />
+                <span class="freeze-status"></span>
+              </label>
+              <label class="freeze-item">
+                <span class="freeze-name">TransUnion</span>
+                <input type="checkbox" data-freeze="TransUnion" />
+                <span class="freeze-status"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Annual Free Credit Reports</div>
+            <p class="card-sub">Federal law lets you pull free reports yearly from <a href="https://annualcreditreport.com" target="_blank" rel="noopener">annualcreditreport.com</a>. Track when you last pulled.</p>
+            <div id="annualReportStatus" class="annual-reports"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📚 Score Education</div>
+            <details class="education-item">
+              <summary><strong>Payment History</strong> · 35% — what is it?</summary>
+              <p>The single biggest factor. Records every on-time and late payment across all your accounts. Even one 30-day late can drop your score 60-100 points.</p>
+              <p><strong>How to improve:</strong> Set up autopay for at least the minimum on every card, never miss a due date, and dispute incorrect late marks.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Credit Utilization</strong> · 30% — what is it?</summary>
+              <p>Your card balances divided by your total credit limit. Reported at statement close, not due date. Aim for under 10% for top scores.</p>
+              <p><strong>How to improve:</strong> Pay balances down before the statement closes, request limit increases, or spread spending across multiple cards.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Length of Credit History</strong> · 15% — what is it?</summary>
+              <p>Average age of all your accounts plus the age of your oldest account. Older = better. Closing your oldest card can hurt this.</p>
+              <p><strong>How to improve:</strong> Don't close old cards even if unused. Use them once a year to keep them active.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Credit Mix</strong> · 10% — what is it?</summary>
+              <p>Variety of credit types: credit cards, auto loans, mortgages, student loans. Lenders like to see you can handle different debt types.</p>
+              <p><strong>How to improve:</strong> Don't take on debt just for mix. This is the smallest factor — focus on payment history and utilization first.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>New Credit</strong> · 10% — what is it?</summary>
+              <p>Hard inquiries (when you apply for new credit) and recently opened accounts. Each hard inquiry costs ~5 points and lasts 24 months.</p>
+              <p><strong>How to improve:</strong> Space out applications by 6+ months, only apply when you actually need credit.</p>
+            </details>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📖 Glossary</div>
+            <details class="education-item">
+              <summary><strong>FICO vs VantageScore</strong></summary>
+              <p>Two competing score models, both 300-850. FICO is used by 90%+ of lenders. VantageScore is what Credit Karma shows. They can differ by 30-50 points. Lenders almost always pull FICO.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Hard vs Soft Inquiry</strong></summary>
+              <p><strong>Hard:</strong> when you apply for credit (loan, new card). Visible to other lenders for 24 months, costs ~5 points. <strong>Soft:</strong> checking your own score, pre-qualifications, employer checks. No score impact.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>APR (Annual Percentage Rate)</strong></summary>
+              <p>The yearly interest rate charged on a balance you carry month-to-month. If you pay in full each month, APR doesn't matter.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Statement Balance vs Current Balance</strong></summary>
+              <p><strong>Statement balance:</strong> what was owed when the billing cycle closed. This is what gets reported to credit bureaus and counts for utilization. <strong>Current balance:</strong> what you owe right now (statement + new charges). Pay statement balance to avoid interest.</p>
+            </details>
+            <details class="education-item">
+              <summary><strong>Credit Utilization</strong></summary>
+              <p>Total card balance / total credit limit. Reported at statement close. Top scorers stay under 10%. Counted both per-card and overall.</p>
+            </details>
+          </div>
+
+          <div class="card">
             <div class="card-title">Score History</div>
             <ul id="scoreList" class="list">
               <li class="empty">No score entries yet.</li>
@@ -1002,12 +1151,32 @@
         </div>
         <div class="form-row two-col">
           <div>
+            <label>Statement closing day (1-28)</label>
+            <input type="number" id="cardCloseDay" min="1" max="28" placeholder="e.g. 22" />
+          </div>
+          <div>
             <label>Statement due day (1-28)</label>
             <input type="number" id="cardDueDay" min="1" max="28" placeholder="15" />
           </div>
+        </div>
+        <div class="form-row two-col">
           <div>
             <label>Account opened (optional)</label>
             <input type="date" id="cardOpened" />
+          </div>
+          <div>
+            <label>Annual fee (optional)</label>
+            <input type="number" id="cardAnnualFee" step="0.01" min="0" placeholder="0.00" />
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Cashback rate % (optional)</label>
+            <input type="number" id="cardCashback" step="0.1" min="0" placeholder="2.0" />
+          </div>
+          <div>
+            <label>Sign-up bonus earned (optional)</label>
+            <input type="number" id="cardBonus" step="0.01" min="0" placeholder="0.00" />
           </div>
         </div>
         <div class="form-row">
@@ -1211,6 +1380,112 @@
     </div>
   </div>
 
+  <!-- Add Inquiry Modal -->
+  <div id="inquiryModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Log Hard Inquiry</h2>
+        <button class="modal-close" id="inquiryClose">×</button>
+      </div>
+      <form id="inquiryForm" class="stack-form">
+        <div class="form-row two-col">
+          <div>
+            <label>Date</label>
+            <input type="date" id="inquiryDate" required />
+          </div>
+          <div>
+            <label>Bureau</label>
+            <select id="inquiryBureau">
+              <option value="">Unknown</option>
+              <option value="Equifax">Equifax</option>
+              <option value="Experian">Experian</option>
+              <option value="TransUnion">TransUnion</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Reason</label>
+          <input type="text" id="inquiryReason" placeholder="e.g. Auto loan app, new card" required />
+        </div>
+        <button type="submit" class="btn-primary block">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Negative Item Modal -->
+  <div id="negativeModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Log Negative Item</h2>
+        <button class="modal-close" id="negativeClose">×</button>
+      </div>
+      <form id="negativeForm" class="stack-form">
+        <div class="form-row two-col">
+          <div>
+            <label>Type</label>
+            <select id="negType" required>
+              <option value="late30">30-day late payment</option>
+              <option value="late60">60-day late payment</option>
+              <option value="late90">90+ day late payment</option>
+              <option value="collection">Collection</option>
+              <option value="chargeoff">Charge-off</option>
+              <option value="bankruptcy">Bankruptcy</option>
+              <option value="foreclosure">Foreclosure</option>
+              <option value="repossession">Repossession</option>
+              <option value="judgement">Judgement</option>
+            </select>
+          </div>
+          <div>
+            <label>Date occurred</label>
+            <input type="date" id="negDate" required />
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Creditor (optional)</label>
+            <input type="text" id="negCreditor" placeholder="Bank name" />
+          </div>
+          <div>
+            <label>Amount (optional)</label>
+            <input type="number" id="negAmount" step="0.01" min="0" placeholder="0.00" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Note (optional)</label>
+          <input type="text" id="negNote" placeholder="Notes for yourself" />
+        </div>
+        <button type="submit" class="btn-primary block">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Credit Goal Modal -->
+  <div id="creditGoalModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Set Credit Goal</h2>
+        <button class="modal-close" id="creditGoalClose">×</button>
+      </div>
+      <form id="creditGoalForm" class="stack-form">
+        <div class="form-row two-col">
+          <div>
+            <label>Target score (300-850)</label>
+            <input type="number" id="goalScore" min="300" max="850" required />
+          </div>
+          <div>
+            <label>Target date</label>
+            <input type="date" id="goalDate2" required />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Note (optional)</label>
+          <input type="text" id="goalNote" placeholder="e.g. Mortgage application" />
+        </div>
+        <button type="submit" class="btn-primary block">Save</button>
+      </form>
+    </div>
+  </div>
+
   <!-- Add Score Modal -->
   <div id="scoreModal" class="modal">
     <div class="modal-card">
@@ -1279,7 +1554,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=32"></script>
+  <script src="app.js?v=33"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
