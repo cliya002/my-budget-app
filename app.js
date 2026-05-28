@@ -16,6 +16,8 @@
     theme: "mb_theme",
     autoLock: "mb_auto_lock",     // minutes; 0 = disabled
     hideAmounts: "mb_hide_amounts",
+    aiProvider: "mb_ai_provider",
+    aiKey: "mb_ai_key",
   };
 
   const DEFAULT_PWD_HASH =
@@ -44,6 +46,8 @@
     settings: {
       rollover: false,
       alertsShown: {},
+      roundUpEnabled: false,
+      roundUpGoalId: null,
     },
   };
 
@@ -300,6 +304,8 @@
     if (!state.settings) state.settings = { rollover: false, alertsShown: {} };
     if (!state.settings.alertsShown) state.settings.alertsShown = {};
     if (typeof state.settings.rollover !== "boolean") state.settings.rollover = false;
+    if (typeof state.settings.roundUpEnabled !== "boolean") state.settings.roundUpEnabled = false;
+    if (typeof state.settings.roundUpGoalId === "undefined") state.settings.roundUpGoalId = null;
 
     // Seed default categories on first launch
     if (!state.categories.length) {
@@ -563,6 +569,7 @@
     renderAll();
     checkBudgetAlerts();
     startAutoLock();
+    maybeStartTour();
   }
 
   function lockNow() {
@@ -1258,6 +1265,32 @@
     el.innerHTML = html;
   }
 
+  function renderRoundUpStats() {
+    const el = $("#roundUpStats");
+    if (!el) return;
+    if (!state.settings.roundUpEnabled) {
+      el.textContent = "";
+      return;
+    }
+    if (!state.settings.roundUpGoalId) {
+      el.textContent = "Pick a destination goal above.";
+      return;
+    }
+    // Estimate this month's round-up amount
+    const m = currentMonth();
+    let total = 0;
+    state.expenses.forEach((e) => {
+      if (e.type !== "expense") return;
+      if (monthKey(e.date) !== m) return;
+      const cents = Math.round(Number(e.amount) * 100) % 100;
+      const ru = cents === 0 ? 0 : (100 - cents) / 100;
+      total += ru;
+    });
+    const goal = state.goals.find((g) => g.id === state.settings.roundUpGoalId);
+    const goalName = goal ? goal.name : "(deleted goal)";
+    el.innerHTML = `Round-up potential this month: <strong>${fmt(total)}</strong> → ${escapeHtml(goalName)}`;
+  }
+
   function renderTaxEstimate() {
     const el = $("#taxEstimate");
     if (!el) return;
@@ -1916,6 +1949,7 @@
     renderYtdIncome();
     renderExpectedIncome();
     renderTaxEstimate();
+    renderRoundUpStats();
 
     const list = $("#categoryList");
     if (!state.categories.length) {
@@ -2178,6 +2212,9 @@
     renderIncomeSourcesChart();
     renderIncomeTypeChart();
     renderNetWorthChart();
+    renderHeatmapCalendar();
+    renderTopVendors();
+    renderTagsChart();
   }
 
   function filterExpensesForInsights() {
@@ -4177,6 +4214,29 @@
         .join("");
   }
 
+  function populateGoalSelect() {
+    const sel = $("#expGoal");
+    if (!sel) return;
+    sel.innerHTML =
+      '<option value="">— No goal —</option>' +
+      state.goals
+        .map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`)
+        .join("");
+
+    // Also populate round-up destination
+    const ruSel = $("#roundUpGoalSelect");
+    if (ruSel) {
+      ruSel.innerHTML =
+        '<option value="">Select goal</option>' +
+        state.goals
+          .map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`)
+          .join("");
+      if (state.settings.roundUpGoalId) {
+        ruSel.value = state.settings.roundUpGoalId;
+      }
+    }
+  }
+
   function openPersonModal(person) {
     const isEdit = !!person;
     $("#personModalTitle").textContent = isEdit ? "Edit Person" : "Add Person";
@@ -4450,6 +4510,189 @@
     });
   }
 
+  /* ---------- Heatmap calendar ---------- */
+  function renderHeatmapCalendar() {
+    const el = $("#heatmapCalendar");
+    if (!el) return;
+    const expenses = state.expenses.filter(
+      (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    if (!expenses.length) {
+      $("#heatmapEmpty").hidden = false;
+      el.innerHTML = "";
+      return;
+    }
+    $("#heatmapEmpty").hidden = true;
+
+    // Aggregate by day for the past 365 days
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const startDate = new Date(today);
+    startDate.setDate(startDate.getDate() - 364);
+
+    const dayTotals = new Map();
+    expenses.forEach((e) => {
+      const d = new Date(e.date);
+      d.setHours(0, 0, 0, 0);
+      if (d < startDate || d > today) return;
+      const key = e.date;
+      dayTotals.set(key, (dayTotals.get(key) || 0) + Number(e.amount));
+    });
+
+    // Find max for intensity scaling
+    const max = Math.max(1, ...Array.from(dayTotals.values()));
+
+    // Build grid: 53 weeks × 7 days
+    const cells = [];
+    // Start on previous Sunday so columns align
+    const start = new Date(startDate);
+    while (start.getDay() !== 0) start.setDate(start.getDate() - 1);
+
+    const monthLabels = [];
+    let lastMonth = -1;
+    for (let week = 0; week < 53; week++) {
+      for (let day = 0; day < 7; day++) {
+        const d = new Date(start);
+        d.setDate(d.getDate() + week * 7 + day);
+        if (d > today) {
+          cells.push({ empty: true });
+          continue;
+        }
+        const dateStr = d.toISOString().slice(0, 10);
+        const amount = dayTotals.get(dateStr) || 0;
+        const intensity = amount === 0 ? 0 : Math.min(4, Math.ceil((amount / max) * 4));
+        cells.push({
+          dateStr,
+          amount,
+          intensity,
+          dow: day,
+          week,
+        });
+        if (day === 0 && d.getMonth() !== lastMonth) {
+          monthLabels.push({
+            week,
+            label: d.toLocaleDateString(undefined, { month: "short" }),
+          });
+          lastMonth = d.getMonth();
+        }
+      }
+    }
+
+    let html = '<div class="heatmap-month-labels">';
+    monthLabels.forEach((m) => {
+      html += `<span style="grid-column-start: ${m.week + 1}">${m.label}</span>`;
+    });
+    html += "</div>";
+
+    html += '<div class="heatmap-grid">';
+    cells.forEach((c) => {
+      if (c.empty) {
+        html += '<div class="heatmap-cell empty"></div>';
+      } else {
+        const tooltip = `${c.dateStr}: ${fmt(c.amount)}`;
+        html += `<div class="heatmap-cell intensity-${c.intensity}" title="${tooltip}"></div>`;
+      }
+    });
+    html += "</div>";
+
+    html += `
+      <div class="heatmap-legend">
+        <span>Less</span>
+        <div class="heatmap-cell intensity-0"></div>
+        <div class="heatmap-cell intensity-1"></div>
+        <div class="heatmap-cell intensity-2"></div>
+        <div class="heatmap-cell intensity-3"></div>
+        <div class="heatmap-cell intensity-4"></div>
+        <span>More</span>
+      </div>
+    `;
+
+    el.innerHTML = html;
+  }
+
+  /* ---------- Top vendors ---------- */
+  function renderTopVendors() {
+    const list = $("#topVendors");
+    if (!list) return;
+    const expenses = filterExpensesForInsights();
+    if (!expenses.length) {
+      list.innerHTML = '<li class="empty">No expenses yet.</li>';
+      return;
+    }
+    const totals = {};
+    const counts = {};
+    expenses.forEach((e) => {
+      const key = e.desc.trim();
+      if (!key) return;
+      totals[key] = (totals[key] || 0) + Number(e.amount);
+      counts[key] = (counts[key] || 0) + 1;
+    });
+    const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    if (!sorted.length) {
+      list.innerHTML = '<li class="empty">No vendor data yet.</li>';
+      return;
+    }
+    const max = sorted[0][1];
+    list.innerHTML = sorted.map(([name, total], i) => {
+      const pct = (total / max) * 100;
+      return `
+        <li class="vendor-row">
+          <span class="vendor-rank">#${i + 1}</span>
+          <div class="vendor-main">
+            <div class="vendor-name">${escapeHtml(name)}</div>
+            <div class="vendor-meta">${counts[name]} txn${counts[name] === 1 ? "" : "s"}</div>
+          </div>
+          <div class="vendor-bar"><div class="vendor-fill" style="width:${pct}%"></div></div>
+          <span class="vendor-amt">${fmt(total)}</span>
+        </li>`;
+    }).join("");
+  }
+
+  /* ---------- Tags chart ---------- */
+  function renderTagsChart() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("tags");
+    const ctx = $("#chartTags");
+    if (!ctx) return;
+    const expenses = filterExpensesForInsights();
+    const totals = {};
+    expenses.forEach((e) => {
+      if (!Array.isArray(e.tags) || !e.tags.length) return;
+      e.tags.forEach((t) => {
+        totals[t] = (totals[t] || 0) + Number(e.amount);
+      });
+    });
+    const labels = Object.keys(totals);
+    if (!labels.length) {
+      $("#tagsEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#tagsEmpty").hidden = true;
+    ctx.style.display = "block";
+    const data = Object.values(totals);
+    charts.tags = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: labels.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2,
+          borderColor: "#fff",
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } },
+        },
+      },
+    });
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -4498,6 +4741,7 @@
     populateExpenseCategorySelect();
     populateAccountSelect("#expAccount", true);
     populatePersonSelect();
+    populateGoalSelect();
     if (prefill && prefill.categoryId) {
       $("#expCategory").value = prefill.categoryId;
     }
@@ -4506,6 +4750,9 @@
     }
     if (prefill && prefill.personId) {
       $("#expPerson").value = prefill.personId;
+    }
+    if (prefill && prefill.goalId) {
+      $("#expGoal").value = prefill.goalId;
     }
 
     // Income-specific prefill
@@ -5126,6 +5373,7 @@
       const categoryId = $("#expCategory").value;
       const accountId = $("#expAccount").value;
       const personId = $("#expPerson").value;
+      const goalId = $("#expGoal").value;
       const tagsRaw = $("#expTags").value.trim();
       const tags = tagsRaw
         ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
@@ -5151,6 +5399,7 @@
             categoryId: categoryId || null,
             accountId: accountId || null,
             personId: personId || null,
+            goalId: goalId || null,
             tags,
             receipt,
             incomeType,
@@ -5164,12 +5413,36 @@
           categoryId: categoryId || null,
           accountId: accountId || null,
           personId: personId || null,
+          goalId: goalId || null,
           tags,
           receipt,
           incomeType,
           source,
           preTax,
         });
+
+        // Apply manual goal contribution: amount goes toward saved
+        if (goalId && type === "expense") {
+          const g = state.goals.find((x) => x.id === goalId);
+          if (g) g.saved = (Number(g.saved) || 0) + Number(amount);
+        }
+
+        // Round-up savings
+        if (
+          state.settings.roundUpEnabled &&
+          state.settings.roundUpGoalId &&
+          type === "expense"
+        ) {
+          const cents = Math.round(Number(amount) * 100) % 100;
+          const roundUp = cents === 0 ? 0 : (100 - cents) / 100;
+          if (roundUp > 0) {
+            const g = state.goals.find((x) => x.id === state.settings.roundUpGoalId);
+            if (g) {
+              g.saved = (Number(g.saved) || 0) + roundUp;
+              showToast(`+${fmt(roundUp)} rounded up to ${g.name}`);
+            }
+          }
+        }
       }
       saveData();
       closeExpenseModal();
@@ -5276,6 +5549,50 @@
     $("#fab").addEventListener("click", () => {
       openExpenseModal();
     });
+    $("#helpBtn")?.addEventListener("click", showShortcutsHelp);
+    $("#replayTourBtn")?.addEventListener("click", () => {
+      localStorage.removeItem(TOUR_KEY);
+      startTour();
+    });
+    $("#showShortcutsBtn")?.addEventListener("click", showShortcutsHelp);
+
+    // Print monthly report
+    $("#printReportBtn")?.addEventListener("click", openPrintReport);
+
+    // AI insights settings
+    const aiProvSel = $("#aiProvider");
+    const aiKeyInput = $("#aiKey");
+    if (aiProvSel) {
+      aiProvSel.value = localStorage.getItem(KEYS.aiProvider) || "";
+      const stored = localStorage.getItem(KEYS.aiKey) || "";
+      // Show only first/last 4 chars masked
+      aiKeyInput.value = stored ? stored.slice(0, 4) + "•••••••••••" + stored.slice(-4) : "";
+      aiKeyInput.addEventListener("focus", () => {
+        if (aiKeyInput.dataset.unlocked !== "true") {
+          aiKeyInput.value = stored;
+          aiKeyInput.dataset.unlocked = "true";
+        }
+      });
+    }
+    $("#saveAiKey")?.addEventListener("click", () => {
+      const provider = $("#aiProvider").value;
+      const key = $("#aiKey").value.trim();
+      if (provider && !key) {
+        showToast("Enter an API key");
+        return;
+      }
+      localStorage.setItem(KEYS.aiProvider, provider);
+      if (key && !key.includes("•")) {
+        localStorage.setItem(KEYS.aiKey, key);
+      }
+      if (!provider) {
+        localStorage.removeItem(KEYS.aiKey);
+      }
+      showToast(provider ? "AI settings saved" : "AI disabled");
+    });
+
+    // Ask AI button
+    $("#askAiBtn")?.addEventListener("click", askAiInsights);
     $("#addTxnBtn").addEventListener("click", () => {
       openExpenseModal();
     });
@@ -5349,6 +5666,28 @@
       renderAll();
       showToast("Goal added");
     });
+
+    // Round-up settings
+    const roundToggle = $("#roundUpToggle");
+    if (roundToggle) {
+      roundToggle.checked = !!state.settings.roundUpEnabled;
+      $("#roundUpGoalRow").style.display = roundToggle.checked ? "block" : "none";
+      roundToggle.addEventListener("change", (e) => {
+        state.settings.roundUpEnabled = e.target.checked;
+        $("#roundUpGoalRow").style.display = e.target.checked ? "block" : "none";
+        saveData();
+        renderRoundUpStats();
+        showToast(e.target.checked ? "Round-up enabled" : "Round-up disabled");
+      });
+    }
+    const ruGoalSel = $("#roundUpGoalSelect");
+    if (ruGoalSel) {
+      ruGoalSel.addEventListener("change", (e) => {
+        state.settings.roundUpGoalId = e.target.value || null;
+        saveData();
+        renderRoundUpStats();
+      });
+    }
 
     // Recurring transactions form
     $("#recurringForm").addEventListener("submit", (e) => {
@@ -6205,10 +6544,450 @@
     });
   }
 
+  /* ---------- Keyboard shortcuts ---------- */
+  function initKeyboardShortcuts() {
+    document.addEventListener("keydown", (e) => {
+      // Don't fire if typing in input/textarea/contenteditable
+      const t = e.target;
+      if (
+        t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" ||
+        t.isContentEditable
+      ) return;
+      // Don't fire if a modal is open
+      if (document.querySelector(".modal.open")) {
+        if (e.key === "Escape") {
+          document.querySelectorAll(".modal.open").forEach((m) => m.classList.remove("open"));
+        }
+        return;
+      }
+      // Don't fire if app is locked
+      if ($("#app").hidden) return;
+
+      const key = e.key.toLowerCase();
+      switch (key) {
+        case "n":
+          e.preventDefault();
+          openExpenseModal();
+          break;
+        case "i":
+          e.preventDefault();
+          openExpenseModal({ type: "income" });
+          break;
+        case "p":
+          if (!e.metaKey && !e.ctrlKey) {
+            e.preventDefault();
+            openPaycheckModal();
+          }
+          break;
+        case "/":
+          e.preventDefault();
+          // Switch to transactions tab and focus search
+          $('[data-tab="transactions"]')?.click();
+          setTimeout(() => $("#txnSearch")?.focus(), 100);
+          break;
+        case "1":
+        case "2":
+        case "3":
+        case "4":
+        case "5":
+        case "6":
+        case "7": {
+          e.preventDefault();
+          const tabs = $$(".nav-item");
+          const idx = parseInt(key, 10) - 1;
+          if (tabs[idx]) tabs[idx].click();
+          break;
+        }
+        case "?":
+          e.preventDefault();
+          showShortcutsHelp();
+          break;
+        case "l":
+          if (e.shiftKey) {
+            e.preventDefault();
+            lockNow();
+          }
+          break;
+      }
+    });
+  }
+
+  function showShortcutsHelp() {
+    const existing = document.getElementById("shortcutsModal");
+    if (existing) {
+      existing.classList.add("open");
+      return;
+    }
+    const div = document.createElement("div");
+    div.id = "shortcutsModal";
+    div.className = "modal open";
+    div.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2>⌨️ Keyboard Shortcuts</h2>
+          <button class="modal-close" id="shortcutsClose">×</button>
+        </div>
+        <div class="shortcuts-list">
+          <div class="shortcut-row"><kbd>N</kbd> <span>New transaction</span></div>
+          <div class="shortcut-row"><kbd>I</kbd> <span>New income</span></div>
+          <div class="shortcut-row"><kbd>P</kbd> <span>Log paycheck</span></div>
+          <div class="shortcut-row"><kbd>/</kbd> <span>Search transactions</span></div>
+          <div class="shortcut-row"><kbd>1</kbd>–<kbd>7</kbd> <span>Switch tabs</span></div>
+          <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>L</kbd> <span>Lock app</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd> <span>Close modal</span></div>
+          <div class="shortcut-row"><kbd>?</kbd> <span>This help</span></div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(div);
+    div.querySelector("#shortcutsClose").addEventListener("click", () => div.classList.remove("open"));
+    div.addEventListener("click", (e) => {
+      if (e.target === div) div.classList.remove("open");
+    });
+  }
+  /* ---------- AI Insights (BYOK) ---------- */
+  async function askAiInsights() {
+    const provider = localStorage.getItem(KEYS.aiProvider);
+    const key = localStorage.getItem(KEYS.aiKey);
+    const responseEl = $("#aiResponse");
+    if (!provider || !key) {
+      responseEl.hidden = false;
+      responseEl.className = "ai-response warn";
+      responseEl.innerHTML = `Add an API key in <strong>Settings → AI Insights</strong> to enable.`;
+      return;
+    }
+
+    responseEl.hidden = false;
+    responseEl.className = "ai-response loading";
+    responseEl.textContent = "🤖 Thinking…";
+
+    const m = currentMonth();
+    const monthExpenses = state.expenses.filter(
+      (e) => monthKey(e.date) === m && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    const monthIncomes = state.expenses.filter((e) => e.type === "income" && monthKey(e.date) === m);
+    const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+
+    const catTotals = {};
+    monthExpenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      catTotals[name] = (catTotals[name] || 0) + Number(e.amount);
+    });
+
+    const top10 = [...monthExpenses]
+      .sort((a, b) => Number(b.amount) - Number(a.amount))
+      .slice(0, 10)
+      .map((e) => `${e.desc}: ${currencySymbols[currency] || "$"}${Number(e.amount).toFixed(2)}`);
+
+    const cardSummary = state.cards.map((c) =>
+      `${c.name}: balance ${currencySymbols[currency] || "$"}${(c.balance || 0).toFixed(0)} of ${(c.limit || 0).toFixed(0)} limit`
+    );
+
+    const latestSc = state.creditScores.length
+      ? [...state.creditScores].sort((a, b) => b.date.localeCompare(a.date))[0].score
+      : null;
+
+    const context = `
+You are a helpful personal finance coach. Give 3-5 concise, actionable insights based on this user's data:
+
+MONTH: ${monthLabel(m)}
+INCOME: ${currencySymbols[currency] || "$"}${totalIncome.toFixed(0)}
+TOTAL SPENT: ${currencySymbols[currency] || "$"}${totalSpent.toFixed(0)}
+SAVINGS RATE: ${totalIncome > 0 ? (((totalIncome - totalSpent) / totalIncome) * 100).toFixed(0) : "0"}%
+${latestSc ? `CREDIT SCORE: ${latestSc}` : ""}
+
+CATEGORIES (this month):
+${Object.entries(catTotals).sort((a, b) => b[1] - a[1]).map(([k, v]) => `- ${k}: ${currencySymbols[currency] || "$"}${v.toFixed(0)}`).join("\n")}
+
+TOP TRANSACTIONS:
+${top10.join("\n")}
+
+${cardSummary.length ? `CREDIT CARDS:\n${cardSummary.join("\n")}` : ""}
+
+Format your response as a numbered list of short, specific recommendations. No fluff. Use plain text, no markdown headers.
+`.trim();
+
+    try {
+      let response;
+      if (provider === "openai") {
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${key}`,
+          },
+          body: JSON.stringify({
+            model: "gpt-4o-mini",
+            messages: [{ role: "user", content: context }],
+            max_tokens: 500,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "OpenAI error");
+        response = data.choices[0].message.content;
+      } else if (provider === "anthropic") {
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "anthropic-dangerous-direct-browser-access": "true",
+          },
+          body: JSON.stringify({
+            model: "claude-haiku-4-5",
+            max_tokens: 500,
+            messages: [{ role: "user", content: context }],
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error?.message || "Anthropic error");
+        response = data.content[0].text;
+      } else {
+        throw new Error("Unknown provider");
+      }
+
+      responseEl.className = "ai-response";
+      responseEl.innerHTML = `<div class="ai-response-header">🤖 AI Insights</div><pre>${escapeHtml(response)}</pre>`;
+    } catch (err) {
+      responseEl.className = "ai-response warn";
+      responseEl.textContent = `❌ ${err.message || "Request failed"}`;
+    }
+  }
+
+  /* ---------- Monthly print report ---------- */
+  function openPrintReport() {
+    const m = currentMonth();
+    const monthExpenses = state.expenses.filter(
+      (e) => monthKey(e.date) === m && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    const monthIncomes = state.expenses.filter((e) => e.type === "income" && monthKey(e.date) === m);
+    const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const target = incomeForMonth(m);
+    const incomeForRate = totalIncome > 0 ? totalIncome : target;
+    const savingsRate = incomeForRate > 0 ? ((incomeForRate - totalSpent) / incomeForRate) * 100 : 0;
+
+    // Top categories
+    const catTotals = {};
+    monthExpenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      catTotals[name] = (catTotals[name] || 0) + Number(e.amount);
+    });
+    const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 5);
+
+    // Top vendors
+    const vendorTotals = {};
+    monthExpenses.forEach((e) => {
+      const v = e.desc.trim();
+      if (!v) return;
+      vendorTotals[v] = (vendorTotals[v] || 0) + Number(e.amount);
+    });
+    const topVendors = Object.entries(vendorTotals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // Biggest single expense
+    const biggest = [...monthExpenses].sort((a, b) => Number(b.amount) - Number(a.amount))[0];
+
+    // Account net worth
+    const nw = netWorth();
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      showToast("Please allow popups to print report");
+      return;
+    }
+    w.document.write(`
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>Pocket Budget — ${monthLabel(m)} Report</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: #2a2a3a; padding: 40px; max-width: 800px; margin: auto; line-height: 1.5; }
+  h1 { color: #5b3fb8; margin: 0 0 0.5rem 0; font-size: 1.85rem; }
+  .meta { color: #7a7a8a; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  h2 { color: #5b3fb8; font-size: 1.2rem; border-bottom: 2px solid #ede9fb; padding-bottom: 0.3rem; margin-top: 1.5rem; }
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin: 1rem 0; }
+  .stat { background: #faf7f1; padding: 0.85rem; border-radius: 8px; border-left: 4px solid #5b3fb8; }
+  .stat-label { font-size: 0.7rem; color: #7a7a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .stat-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #e6e1d5; font-size: 0.9rem; }
+  th { background: #f5f1ea; font-weight: 600; color: #5b3fb8; }
+  td.right { text-align: right; }
+  .footer { margin-top: 2rem; font-size: 0.8rem; color: #7a7a8a; text-align: center; border-top: 1px solid #e6e1d5; padding-top: 1rem; }
+  @media print {
+    body { padding: 20px; }
+    .no-print { display: none; }
+  }
+  .no-print {
+    text-align: center;
+    margin-bottom: 1rem;
+    padding: 0.85rem;
+    background: #ede9fb;
+    border-radius: 8px;
+  }
+  .no-print button {
+    background: #5b3fb8;
+    color: #fff;
+    border: 0;
+    padding: 0.7rem 1.4rem;
+    font-weight: 600;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+  }
+</style>
+</head><body>
+<div class="no-print">
+  <button onclick="window.print()">📄 Print / Save as PDF</button>
+</div>
+<h1>💼 Pocket Budget — Monthly Report</h1>
+<div class="meta">${monthLabel(m)} · Generated ${new Date().toLocaleDateString()}</div>
+
+<h2>Summary</h2>
+<div class="stats-grid">
+  <div class="stat"><div class="stat-label">Income</div><div class="stat-value">${fmt(totalIncome || target)}</div></div>
+  <div class="stat"><div class="stat-label">Spent</div><div class="stat-value">${fmt(totalSpent)}</div></div>
+  <div class="stat"><div class="stat-label">Saved</div><div class="stat-value">${fmt(incomeForRate - totalSpent)}</div></div>
+  <div class="stat"><div class="stat-label">Savings Rate</div><div class="stat-value">${savingsRate.toFixed(0)}%</div></div>
+</div>
+<p><strong>Net worth (today):</strong> ${fmt(nw)}</p>
+${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.desc)} — ${fmt(biggest.amount)} on ${biggest.date}</p>` : ""}
+
+<h2>Top Categories</h2>
+<table>
+  <thead><tr><th>Category</th><th class="right">Spent</th><th class="right">% of total</th></tr></thead>
+  <tbody>
+    ${topCats.map(([name, total]) => `<tr><td>${escapeHtml(name)}</td><td class="right">${fmt(total)}</td><td class="right">${totalSpent > 0 ? ((total / totalSpent) * 100).toFixed(0) : 0}%</td></tr>`).join("")}
+  </tbody>
+</table>
+
+<h2>Top Vendors</h2>
+<table>
+  <thead><tr><th>Vendor</th><th class="right">Total</th></tr></thead>
+  <tbody>
+    ${topVendors.map(([name, total]) => `<tr><td>${escapeHtml(name)}</td><td class="right">${fmt(total)}</td></tr>`).join("")}
+  </tbody>
+</table>
+
+<h2>Budget Performance</h2>
+<table>
+  <thead><tr><th>Category</th><th class="right">Spent</th><th class="right">Budget</th><th class="right">Status</th></tr></thead>
+  <tbody>
+    ${state.categories.map((cat) => {
+      const spent = monthExpenses.filter((e) => e.categoryId === cat.id).reduce((s, e) => s + Number(e.amount), 0);
+      const limit = effectiveLimitFor(cat, m);
+      const pct = limit > 0 ? (spent / limit) * 100 : 0;
+      const status = pct >= 100 ? "Over" : pct >= 80 ? "Watch" : "OK";
+      return `<tr><td>${escapeHtml(cat.name)}</td><td class="right">${fmt(spent)}</td><td class="right">${fmt(limit)}</td><td class="right">${status} (${pct.toFixed(0)}%)</td></tr>`;
+    }).join("")}
+  </tbody>
+</table>
+
+<div class="footer">
+  Generated by Pocket Budget — Made by Chaturanga Liyanage<br/>
+  Data stays in your browser. Print to save as PDF.
+</div>
+
+<script>
+  setTimeout(() => window.print(), 600);
+</script>
+</body></html>
+    `);
+    w.document.close();
+  }
+
+  /* ---------- Onboarding tour ---------- */
+  const TOUR_KEY = "mb_tour_seen";
+
+  function maybeStartTour() {
+    if (localStorage.getItem(TOUR_KEY)) return;
+    setTimeout(() => startTour(), 800);
+  }
+
+  function startTour() {
+    const steps = [
+      {
+        title: "👋 Welcome to Pocket Budget",
+        body: "Quick 60-second tour. You can skip anytime.",
+      },
+      {
+        title: "📥 Add transactions",
+        body: "Tap the floating <strong>+</strong> button (bottom right) anytime to add an expense or income. Or press <kbd>N</kbd>.",
+      },
+      {
+        title: "💰 Log your paycheck",
+        body: "Use <strong>💼 Log Paycheck</strong> on the Dashboard for full pre-tax/post-tax tracking. You can even upload a paystub PDF.",
+      },
+      {
+        title: "📊 Insights tab",
+        body: "Charts of spending split, daily totals, net worth over time, top vendors, and a heatmap of your year.",
+      },
+      {
+        title: "📈 Credit tab",
+        body: "Track scores, cards, hard inquiries, negative items, debt payoff calculator, and more. Import Credit Karma reports.",
+      },
+      {
+        title: "👨‍👩‍👧 Family tab",
+        body: "Track money sent to family members. Tag any expense with a person to see breakdown.",
+      },
+      {
+        title: "⚙️ Settings",
+        body: "Dark mode, currency, presets library, auto-lock, encrypted backup, stealth mode for screenshots.",
+      },
+      {
+        title: "⌨️ Pro tip",
+        body: "Press <kbd>?</kbd> anytime to see all keyboard shortcuts.",
+      },
+    ];
+
+    let idx = 0;
+    const overlay = document.createElement("div");
+    overlay.className = "tour-overlay";
+    overlay.innerHTML = `
+      <div class="tour-card">
+        <div class="tour-progress" id="tourProgress"></div>
+        <h2 id="tourTitle"></h2>
+        <p id="tourBody"></p>
+        <div class="tour-actions">
+          <button class="btn-secondary" id="tourSkip">Skip tour</button>
+          <button class="btn-primary" id="tourNext">Next →</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const render = () => {
+      const s = steps[idx];
+      $("#tourTitle").textContent = s.title;
+      $("#tourBody").innerHTML = s.body;
+      $("#tourNext").textContent = idx === steps.length - 1 ? "Got it 🎉" : "Next →";
+      $("#tourProgress").innerHTML = steps.map((_, i) => `<span class="${i <= idx ? "active" : ""}"></span>`).join("");
+    };
+    const finish = () => {
+      localStorage.setItem(TOUR_KEY, "1");
+      overlay.remove();
+    };
+    $("#tourSkip").addEventListener("click", finish);
+    $("#tourNext").addEventListener("click", () => {
+      idx += 1;
+      if (idx >= steps.length) { finish(); return; }
+      render();
+    });
+    render();
+  }
+
   /* ---------- Init ---------- */
   document.addEventListener("DOMContentLoaded", () => {
     initLock();
     initNav();
     initForms();
+    initKeyboardShortcuts();
   });
 })();

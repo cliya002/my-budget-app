@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=33" />
+  <link rel="stylesheet" href="styles.css?v=34" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -109,6 +109,7 @@
             <h1>My Dashboard</h1>
             <div class="page-actions">
               <span id="monthLabel" class="month-pill"></span>
+              <button id="printReportBtn" class="btn-secondary" title="Generate monthly report (Ctrl+P to save as PDF)">📄 Report</button>
               <button id="paycheckBtn" class="btn-secondary">💼 Log Paycheck</button>
               <button id="addIncomeBtn" class="btn-secondary">+ Income</button>
               <button id="addTxnBtn" class="btn-primary">+ Add Transaction</button>
@@ -124,10 +125,14 @@
           </div>
 
           <div class="card insights-card">
-            <div class="card-title">💡 Smart Insights</div>
+            <div class="card-title">
+              💡 Smart Insights
+              <button id="askAiBtn" class="btn-secondary" style="float:right; padding: 0.3rem 0.85rem; font-size: 0.85rem">🤖 Ask AI</button>
+            </div>
             <div id="smartInsights">
               <p class="empty">Add some transactions to see personalized insights.</p>
             </div>
+            <div id="aiResponse" class="ai-response" hidden></div>
           </div>
 
           <div class="stat-grid">
@@ -363,6 +368,20 @@
             <ul id="goalList" class="list" style="margin-top:1rem">
               <li class="empty">No savings goals yet.</li>
             </ul>
+            <div class="round-up-card">
+              <label class="toggle-row">
+                <span>
+                  <strong>🪙 Round-up savings</strong><br />
+                  <span class="card-sub">Round every expense up to the nearest dollar; difference auto-saved to a goal.</span>
+                </span>
+                <input type="checkbox" id="roundUpToggle" />
+              </label>
+              <div class="form-row" id="roundUpGoalRow" style="display:none">
+                <label>Round-up destination goal</label>
+                <select id="roundUpGoalSelect"></select>
+              </div>
+              <div class="card-sub" id="roundUpStats" style="margin-top:0.5rem"></div>
+            </div>
           </div>
         </div>
 
@@ -473,6 +492,23 @@
               <div class="card-title">Net Worth Over Time</div>
               <div class="chart-wrap"><canvas id="chartNetWorth"></canvas></div>
               <div id="netWorthEmpty" class="empty" hidden>Add accounts and transactions to start tracking net worth.</div>
+            </div>
+            <div class="card chart-card chart-wide">
+              <div class="card-title">Spending Heatmap (Past Year)</div>
+              <p class="card-sub">Each square is a day — darker means more spent. Hover for details.</p>
+              <div id="heatmapCalendar" class="heatmap-calendar"></div>
+              <div id="heatmapEmpty" class="empty" hidden>No expenses to chart yet.</div>
+            </div>
+            <div class="card chart-card">
+              <div class="card-title">Top Vendors</div>
+              <ul id="topVendors" class="list">
+                <li class="empty">No expenses yet.</li>
+              </ul>
+            </div>
+            <div class="card chart-card">
+              <div class="card-title">Spending by Tag</div>
+              <div class="chart-wrap"><canvas id="chartTags"></canvas></div>
+              <div id="tagsEmpty" class="empty" hidden>Tag your transactions to see breakdown.</div>
             </div>
             <div class="card chart-card chart-wide">
               <div class="card-title">Monthly Trend</div>
@@ -979,6 +1015,35 @@
             <button id="clearAllBtn" class="btn-danger block" style="margin-top:0.5rem">Clear All Data</button>
           </div>
 
+          <div class="card">
+            <div class="card-title">AI Insights (Optional)</div>
+            <p class="card-sub">Add an API key to get AI-powered spending advice. Your key stays in your browser.</p>
+            <div class="form-row two-col" style="margin-top:0.85rem">
+              <div>
+                <label>Provider</label>
+                <select id="aiProvider">
+                  <option value="">Disabled</option>
+                  <option value="openai">OpenAI (GPT-4o-mini)</option>
+                  <option value="anthropic">Anthropic (Claude Haiku)</option>
+                </select>
+              </div>
+              <div>
+                <label>API Key</label>
+                <input type="password" id="aiKey" placeholder="sk-... or sk-ant-..." autocomplete="off" />
+              </div>
+            </div>
+            <button id="saveAiKey" class="btn-secondary block" style="margin-top:0.5rem">Save AI Settings</button>
+            <p class="footer-note" style="margin-top:0.5rem; text-align:left">
+              ⚠️ Adding an API key sends your transaction data to the AI provider when you ask. Costs typically &lt;$0.01 per question.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Help</div>
+            <button id="replayTourBtn" class="btn-secondary block">🎓 Replay welcome tour</button>
+            <button id="showShortcutsBtn" class="btn-secondary block" style="margin-top:0.5rem">⌨️ Keyboard shortcuts</button>
+          </div>
+
           <p class="footer-note">All data is stored locally in your browser.</p>
         </div>
 
@@ -987,6 +1052,7 @@
 
     <!-- Floating Action Button -->
     <button id="fab" class="fab" aria-label="Add expense">+</button>
+    <button id="helpBtn" class="help-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   </main>
 
   <!-- Add Expense Modal -->
@@ -1045,6 +1111,12 @@
           <label>Sent to family member (optional)</label>
           <select id="expPerson">
             <option value="">— Not for a family member —</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <label>Apply to savings goal (optional)</label>
+          <select id="expGoal">
+            <option value="">— No goal —</option>
           </select>
         </div>
 
@@ -1554,7 +1626,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=33"></script>
+  <script src="app.js?v=34"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
