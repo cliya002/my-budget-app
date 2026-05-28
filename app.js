@@ -6195,6 +6195,63 @@
     $("#syncPushBtn")?.addEventListener("click", syncPush);
     $("#syncPullBtn")?.addEventListener("click", syncPull);
 
+    // Sync diagnostic — runs a forced full cycle with detailed alerts so the
+    // user can verify each step is working.
+    $("#syncDiagBtn")?.addEventListener("click", async () => {
+      const lines = [];
+      const log = (s) => lines.push(s);
+      log(`Device: ${getDeviceLabel()}`);
+      log(`Auto-sync: ${localStorage.getItem("mb_auto_sync") === "true" ? "ON" : "OFF"}`);
+      log(`Token: ${localStorage.getItem(KEYS.syncToken) ? "set" : "MISSING"}`);
+      log(`Gist ID: ${localStorage.getItem(KEYS.syncGistId) || "MISSING"}`);
+      log(`Online: ${navigator.onLine ? "yes" : "NO"}`);
+      log(`Crypto key: ${cryptoKey ? "ready" : "MISSING"}`);
+      log(`Categories: ${state.categories.length}`);
+      log(`Expenses: ${state.expenses.length}`);
+      log(`Last synced: ${lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : "never"}`);
+
+      const token = localStorage.getItem(KEYS.syncToken);
+      const gistId = localStorage.getItem(KEYS.syncGistId);
+      if (token && gistId) {
+        try {
+          const r = await fetch(`https://api.github.com/gists/${gistId}`, {
+            headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+          });
+          log(`GitHub fetch: HTTP ${r.status}`);
+          if (r.ok) {
+            const d = await r.json();
+            log(`Cloud updated_at: ${d.updated_at}`);
+            const f = d.files && d.files[SYNC_FILENAME];
+            log(`Cloud has data file: ${f ? "yes (" + f.size + " bytes)" : "NO"}`);
+            if (f) {
+              try {
+                const p = JSON.parse(f.content);
+                log(`Cloud last device: ${p.device || "unknown"}`);
+                log(`Cloud last push at: ${p.updatedAt || "?"}`);
+              } catch (e) { log(`Cloud parse failed: ${e.message}`); }
+            }
+          } else {
+            const txt = await r.text();
+            log(`Error body: ${txt.slice(0, 200)}`);
+          }
+        } catch (e) {
+          log(`Network error: ${e.message}`);
+        }
+      }
+
+      log("\n--- Forcing push & pull now ---");
+      try {
+        await syncPush({ silent: false, force: true });
+        log("Push: completed");
+      } catch (e) { log(`Push failed: ${e.message}`); }
+      try {
+        await syncPull({ skipConfirm: true, silent: false });
+        log("Pull: completed");
+      } catch (e) { log(`Pull failed: ${e.message}`); }
+
+      alert(lines.join("\n"));
+    });
+
     // CSV upload
     $("#csvUploadBtn")?.addEventListener("click", () => $("#csvFile").click());
     $("#csvFile")?.addEventListener("change", (e) => {
