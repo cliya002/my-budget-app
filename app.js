@@ -5819,6 +5819,17 @@
     if (syncGistIdInput) {
       syncGistIdInput.value = localStorage.getItem(KEYS.syncGistId) || "";
     }
+    const deviceLabelInput = $("#deviceLabelInput");
+    if (deviceLabelInput) {
+      deviceLabelInput.value = localStorage.getItem("mb_device_label") || getDeviceLabel();
+      deviceLabelInput.addEventListener("change", (e) => {
+        const label = e.target.value.trim();
+        if (label) {
+          localStorage.setItem("mb_device_label", label);
+          showToast("Device name saved");
+        }
+      });
+    }
     $("#syncSaveBtn")?.addEventListener("click", () => {
       const token = $("#syncToken").value.trim();
       const gistId = $("#syncGistId").value.trim();
@@ -7382,6 +7393,7 @@
         action,    // 'push' | 'pull' | 'check'
         status,    // 'success' | 'error' | 'conflict' | 'offline'
         message: String(message || "").slice(0, 200),
+        device: getDeviceLabel(),
       });
       localStorage.setItem(SYNC_HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
     } catch (e) { /* ignore */ }
@@ -7471,7 +7483,7 @@
     if (dashBadge) dashBadge.hidden = false;
 
     const pretty = {
-      synced: { icon: "🟢", text: "Synced", title: lastSyncedAt ? "Last synced " + new Date(lastSyncedAt).toLocaleTimeString() : "Synced" },
+      synced: { icon: "🟢", text: "Synced", title: lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleTimeString()} from ${getDeviceLabel()}` : "Synced" },
       dirty: { icon: "🟡", text: "Pending", title: "Local changes pending sync" },
       syncing: { icon: "🔄", text: "Syncing…", title: "Sync in progress" },
       error: { icon: "🔴", text: "Sync error", title: "Last sync failed" },
@@ -7801,10 +7813,11 @@
       const cls = ev.status === "success" ? "positive"
         : ev.status === "error" ? "negative"
         : "";
+      const dev = ev.device ? ` · ${escapeHtml(ev.device)}` : "";
       return `
         <li class="list-item">
           <div class="list-item-main">
-            <div class="list-item-title ${cls}">${icon} ${ev.action.toUpperCase()}</div>
+            <div class="list-item-title ${cls}">${icon} ${ev.action.toUpperCase()}${dev}</div>
             <div class="list-item-sub">${time} · ${escapeHtml(ev.message)}</div>
           </div>
         </li>`;
