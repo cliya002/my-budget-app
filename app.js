@@ -5800,6 +5800,22 @@
       showToast(added > 0 ? `Added ${added} default preset${added === 1 ? "" : "s"}` : "All defaults already present");
     });
 
+    // Delete all presets
+    $("#deleteAllPresetsBtn")?.addEventListener("click", () => {
+      if (!state.presets.length) {
+        showToast("No presets to delete.");
+        return;
+      }
+      if (!confirm(`Delete all ${state.presets.length} presets? You can restore the default library afterwards.`)) return;
+      // Tombstone each so deletion propagates across devices
+      state.presets.forEach((p) => tombstoneRecord("presets", p.id));
+      state.presets = [];
+      saveData();
+      renderPresetsManage();
+      renderPresets();
+      showToast("All presets deleted");
+    });
+
     // Theme toggle in settings
     $$(".theme-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
