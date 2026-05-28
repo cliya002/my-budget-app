@@ -1269,7 +1269,26 @@
         <span class="sync-card-time">${syncedText}</span>
       </div>
       ${devicesHtml}
+      <button id="syncNowBtn" class="btn-primary block" style="margin-top:0.75rem">🔄 Sync Now</button>
     `;
+
+    // Wire the button (re-attached on every render)
+    const btn = $("#syncNowBtn");
+    if (btn) {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "🔄 Syncing…";
+        try {
+          // Pull-merge first, then push so all devices converge
+          await syncPull({ skipConfirm: true, silent: false });
+          await syncPush({ silent: false });
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "🔄 Sync Now";
+          renderDashSyncCard();
+        }
+      });
+    }
   }
 
   function renderSmartInsights() {
@@ -7585,6 +7604,16 @@
       }
     }, 5 * 60 * 1000);
 
+    // Pull every 30 seconds when app is visible (so other devices' changes show up)
+    if (window._pullPollTimer) clearInterval(window._pullPollTimer);
+    window._pullPollTimer = setInterval(() => {
+      if (document.hidden) return;
+      if (!navigator.onLine) return;
+      if (!localStorage.getItem(KEYS.syncGistId)) return;
+      // Silent pull-merge — only updates if remote has newer/different data
+      syncPull({ skipConfirm: true, silent: true });
+    }, 30 * 1000);
+
     // Refresh "X min ago" badge every minute
     setInterval(() => {
       if (lastSyncedAt) updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
@@ -7619,6 +7648,8 @@
   function stopAutoSync() {
     if (autoSyncTimer) clearInterval(autoSyncTimer);
     autoSyncTimer = null;
+    if (window._pullPollTimer) clearInterval(window._pullPollTimer);
+    window._pullPollTimer = null;
   }
 
   function markDirty() {
@@ -7637,7 +7668,7 @@
     clearTimeout(pushDebounceTimer);
     pushDebounceTimer = setTimeout(() => {
       if (dirtyForSync) syncPush({ silent: true });
-    }, 30000); // 30 seconds after last change
+    }, 10000); // 10 seconds after last change
   }
 
   function updateSyncIndicator(status) {
