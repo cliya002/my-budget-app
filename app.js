@@ -319,17 +319,24 @@
       }
     }
 
-    // First-run seeding: only run once per install, AND only when there's no
-    // existing data on this device. Prevents respawning defaults after a user
-    // intentionally cleared everything (or after sync wipes them).
+    // First-run seeding: seed defaults whenever this device has zero existing
+    // data. We previously gated this on a one-shot flag, but that broke recovery
+    // after a decrypt failure left state empty: the flag would already be set
+    // from a prior successful launch, so no defaults populated and the user saw
+    // empty dropdowns.
     const alreadySeeded = localStorage.getItem(KEYS.seeded) === "true";
     const hasAnyData = state.expenses.length > 0 ||
                        state.accounts.length > 0 ||
                        state.categories.length > 0 ||
                        state.presets.length > 0;
 
+    // Seed when there's no data at all on this device. The seeded flag is now
+    // only used to skip seeding when we would otherwise re-seed on a wiped
+    // device that genuinely intended to stay empty.
+    const shouldSeed = !hasAnyData && !alreadySeeded;
+
     // Seed default accounts on first launch
-    if (!alreadySeeded && !hasAnyData && !state.accounts.length) {
+    if (shouldSeed && !state.accounts.length) {
       state.accounts = [
         { id: uid(), name: "Cash", type: "cash", balance: 0, color: "#22c55e" },
         { id: uid(), name: "Checking", type: "checking", balance: 0, color: "#3b82f6" },
@@ -351,7 +358,7 @@
     if (typeof state.settings.roundUpGoalId === "undefined") state.settings.roundUpGoalId = null;
 
     // Seed default categories on first launch
-    if (!alreadySeeded && !hasAnyData && !state.categories.length) {
+    if (shouldSeed && !state.categories.length) {
       state.categories = [
         { id: uid(), name: "Groceries", limit: 400 },
         { id: uid(), name: "Rent", limit: 1500 },
@@ -364,13 +371,13 @@
     }
 
     // Seed quick-add presets on first launch with built-in library
-    if (!alreadySeeded && !hasAnyData && !state.presets.length) {
+    if (shouldSeed && !state.presets.length) {
       state.presets = buildDefaultPresets();
       migrated = true;
     }
 
     // Mark this install as seeded so we don't respawn defaults later
-    if (!alreadySeeded) {
+    if (shouldSeed) {
       localStorage.setItem(KEYS.seeded, "true");
     }
 
@@ -5138,6 +5145,7 @@
 
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
+    if (!sel) return;
     sel.innerHTML =
       '<option value="">Select category</option>' +
       state.categories
@@ -5763,6 +5771,48 @@
       $("#catLimit").value = "";
       renderAll();
       showToast("Category added");
+    });
+
+    // Restore default categories
+    $("#restoreCategoriesBtn")?.addEventListener("click", () => {
+      const defaults = [
+        { name: "Groceries", limit: 400 },
+        { name: "Rent", limit: 1500 },
+        { name: "Utilities", limit: 200 },
+        { name: "Transport", limit: 150 },
+        { name: "Eating Out", limit: 200 },
+        { name: "Other", limit: 200 },
+      ];
+      const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
+      let added = 0;
+      defaults.forEach((d) => {
+        if (existingNames.has(d.name.toLowerCase())) return;
+        state.categories.push(touchRecord({ id: uid(), name: d.name, limit: d.limit }));
+        added += 1;
+      });
+      saveData();
+      renderAll();
+      showToast(added > 0 ? `Added ${added} default categor${added === 1 ? "y" : "ies"}` : "All defaults already present");
+    });
+
+    // Restore default accounts
+    $("#restoreAccountsBtn")?.addEventListener("click", () => {
+      const defaults = [
+        { name: "Cash", type: "cash", color: "#22c55e" },
+        { name: "Checking", type: "checking", color: "#3b82f6" },
+        { name: "Credit Card", type: "credit", color: "#ec4899" },
+        { name: "Savings", type: "savings", color: "#f59e0b" },
+      ];
+      const existingNames = new Set(state.accounts.map((a) => a.name.toLowerCase()));
+      let added = 0;
+      defaults.forEach((d) => {
+        if (existingNames.has(d.name.toLowerCase())) return;
+        state.accounts.push(touchRecord({ id: uid(), name: d.name, type: d.type, balance: 0, color: d.color }));
+        added += 1;
+      });
+      saveData();
+      renderAll();
+      showToast(added > 0 ? `Added ${added} default account${added === 1 ? "" : "s"}` : "All defaults already present");
     });
 
     // Receipt preview — three input sources
