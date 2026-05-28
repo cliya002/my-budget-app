@@ -109,6 +109,19 @@
       console.error("Failed to load data", e);
     }
     currency = localStorage.getItem(KEYS.currency) || "USD";
+
+    // Seed sensible defaults on first launch so the + FAB works immediately
+    if (!state.categories.length) {
+      state.categories = [
+        { id: uid(), name: "Groceries", limit: 400 },
+        { id: uid(), name: "Rent", limit: 1500 },
+        { id: uid(), name: "Utilities", limit: 200 },
+        { id: uid(), name: "Transport", limit: 150 },
+        { id: uid(), name: "Eating Out", limit: 200 },
+        { id: uid(), name: "Other", limit: 200 },
+      ];
+      saveData();
+    }
   }
 
   function saveData() {
@@ -255,6 +268,10 @@
     $("#statSpent").textContent = fmt(totalSpent);
     $("#statRemaining").textContent = fmt(remaining);
     $("#statSaved").textContent = fmt(totalSaved);
+
+    // Hide first-use hint once any transactions exist
+    const hint = $("#firstUseHint");
+    if (hint) hint.hidden = state.expenses.length > 0;
 
     // Budget progress
     const progressEl = $("#budgetProgress");
@@ -844,14 +861,9 @@
 
     // FAB and modal close
     $("#fab").addEventListener("click", () => {
-      if (!state.categories.length) {
-        showToast("Add a category first in Balances");
-        $$(".nav-item").forEach((b) => b.classList.remove("active"));
-        $$(".page").forEach((p) => p.classList.remove("active"));
-        $('[data-tab="balances"]').classList.add("active");
-        $("#balances").classList.add("active");
-        return;
-      }
+      openExpenseModal();
+    });
+    $("#addTxnBtn").addEventListener("click", () => {
       openExpenseModal();
     });
     $("#expenseModalClose").addEventListener("click", closeExpenseModal);

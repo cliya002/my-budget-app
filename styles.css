@@ -268,7 +268,7 @@ label {
   min-width: 0;
 }
 
-.page { display: none; }
+.page { display: none; padding-bottom: 6rem; }
 .page.active { display: block; }
 
 .page-header {
@@ -284,6 +284,13 @@ label {
   font-size: 1.85rem;
   font-weight: 700;
   color: var(--primary);
+}
+
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .month-pill {
@@ -704,12 +711,12 @@ label {
   position: fixed;
   right: 1.5rem;
   bottom: calc(1.5rem + var(--safe-bottom));
-  width: 56px;
-  height: 56px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
   background: var(--primary);
   color: #fff;
-  font-size: 1.75rem;
+  font-size: 2rem;
   font-weight: 300;
   box-shadow: 0 8px 20px rgba(91, 63, 184, 0.4);
   z-index: 50;
@@ -717,9 +724,28 @@ label {
   align-items: center;
   justify-content: center;
   transition: transform 0.15s, box-shadow 0.15s;
+  animation: fabPulse 2.5s ease-in-out infinite;
 }
 .fab:hover { transform: scale(1.05); box-shadow: 0 10px 24px rgba(91, 63, 184, 0.5); }
 .fab:active { transform: scale(0.95); }
+
+@keyframes fabPulse {
+  0%, 100% { box-shadow: 0 8px 20px rgba(91, 63, 184, 0.4); }
+  50% { box-shadow: 0 8px 20px rgba(91, 63, 184, 0.4), 0 0 0 12px rgba(91, 63, 184, 0); }
+}
+
+/* ================ First-use hint ================ */
+.hint-card {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  background: linear-gradient(135deg, #ede9fb 0%, #f5e9fa 100%);
+  border: 1px solid var(--primary-soft);
+  padding: 1rem 1.25rem;
+}
+.hint-icon { font-size: 2rem; }
+.hint-title { font-weight: 600; color: var(--primary); margin-bottom: 0.25rem; }
+.hint-sub { font-size: 0.85rem; color: var(--text-dim); }
 
 /* ================ Toast ================ */
 .toast {
