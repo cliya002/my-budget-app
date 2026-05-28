@@ -421,16 +421,44 @@
       // Encrypt asynchronously and write to localStorage; remove plaintext on success
       encryptState(state).then((b64) => {
         if (b64) {
-          localStorage.setItem(KEYS.dataEnc, b64);
-          // Once encrypted blob exists, drop plaintext
-          localStorage.removeItem(KEYS.data);
+          try {
+            localStorage.setItem(KEYS.dataEnc, b64);
+            // Once encrypted blob exists, drop plaintext
+            localStorage.removeItem(KEYS.data);
+          } catch (e) {
+            handleStorageQuotaError(e);
+          }
         }
       }).catch((e) => {
         console.error("Encrypt save failed, writing plaintext", e);
-        localStorage.setItem(KEYS.data, JSON.stringify(state));
+        try {
+          localStorage.setItem(KEYS.data, JSON.stringify(state));
+        } catch (e2) {
+          handleStorageQuotaError(e2);
+        }
       });
     } else {
-      localStorage.setItem(KEYS.data, JSON.stringify(state));
+      try {
+        localStorage.setItem(KEYS.data, JSON.stringify(state));
+      } catch (e) {
+        handleStorageQuotaError(e);
+      }
+    }
+  }
+
+  // Best-effort handler for localStorage quota errors. Warns the user once per
+  // session that the device is full, usually because of receipt images.
+  let _storageQuotaWarned = false;
+  function handleStorageQuotaError(err) {
+    console.error("Storage save failed", err);
+    const msg = String((err && err.message) || err || "").toLowerCase();
+    const isQuota = msg.includes("quota") || msg.includes("exceeded") ||
+                    (err && err.name && /quota/i.test(err.name));
+    if (isQuota && !_storageQuotaWarned) {
+      _storageQuotaWarned = true;
+      try {
+        showAlertToast("⚠️ Device storage is full. Recent changes may not save. Delete old receipts to free space.", "danger");
+      } catch (e) { /* ignore */ }
     }
   }
 
@@ -2449,8 +2477,9 @@
         const tagsStr = (e.tags || []).join(" ").toLowerCase();
         const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
         const personName = person ? person.name.toLowerCase() : "";
+        const desc = String(e.desc || "").toLowerCase();
         return (
-          e.desc.toLowerCase().includes(q) ||
+          desc.includes(q) ||
           catName.includes(q) ||
           tagsStr.includes(q) ||
           personName.includes(q) ||
@@ -6801,11 +6830,23 @@
         if (confirm("Delete this category? Transactions will show 'Uncategorized'.")) {
           tombstoneRecord("categories", id);
           state.categories = state.categories.filter((c) => c.id !== id);
-          // Clear orphan references on transactions and remove from filter chip set
+          // Clear orphan references on transactions and recurring rules, then remove from filter chip set
           state.expenses.forEach((e) => {
             if (e.categoryId === id) {
               e.categoryId = null;
               touchRecord(e);
+            }
+          });
+          state.recurring.forEach((r) => {
+            if (r.categoryId === id) {
+              r.categoryId = null;
+              touchRecord(r);
+            }
+          });
+          state.presets.forEach((p) => {
+            if (p.categoryId === id) {
+              p.categoryId = null;
+              touchRecord(p);
             }
           });
           filters.categories.delete(id);
@@ -7195,6 +7236,43 @@
     // Clear all
     $("#clearAllBtn").addEventListener("click", () => {
       if (confirm("Delete ALL budget data? This cannot be undone.")) {
+        // Tombstone every existing record so sync doesn't resurrect it from another device.
+        const now = Date.now();
+        const tomb = (collection, ids) => {
+          if (!ids.length) return;
+          if (!state.deletions[collection]) state.deletions[collection] = {};
+          ids.forEach((id) => { state.deletions[collection][id] = now; });
+        };
+        const newDeletions = { ...(state.deletions || {}) };
+        const collectionMap = {
+          categories: state.categories,
+          expenses: state.expenses,
+          goals: state.goals,
+          presets: state.presets,
+          recurring: state.recurring,
+          cards: state.cards,
+          creditScores: state.creditScores,
+          accounts: state.accounts,
+          people: state.people,
+          creditInquiries: state.creditInquiries,
+          negativeItems: state.negativeItems,
+          limitIncreases: state.limitIncreases,
+          creditGoals: state.creditGoals,
+        };
+        Object.keys(collectionMap).forEach((key) => {
+          if (!newDeletions[key]) newDeletions[key] = {};
+          (collectionMap[key] || []).forEach((rec) => {
+            newDeletions[key][rec.id] = now;
+          });
+        });
+        // Tombstone map-collection keys too
+        ["monthlyIncome", "creditFreezes", "annualReports"].forEach((key) => {
+          if (!newDeletions[key]) newDeletions[key] = {};
+          Object.keys(state[key] || {}).forEach((mk) => {
+            newDeletions[key][mk] = now;
+          });
+        });
+
         state = {
           income: 0,
           monthlyIncome: {},
@@ -7215,7 +7293,7 @@
           utilHistory: [],
           creditFreezes: {},
           annualReports: {},
-          deletions: {},
+          deletions: newDeletions,
           mapTimestamps: {},
           settingsTimestamps: {},
           settings: { rollover: false, alertsShown: {} },
