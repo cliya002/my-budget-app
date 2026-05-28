@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=15" />
+  <link rel="stylesheet" href="styles.css?v=16" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -280,6 +280,25 @@
                 <input type="text" id="txnSearch" placeholder="Search transactions" />
                 <span class="search-icon">🔍</span>
               </div>
+              <div class="txn-toolbar">
+                <select id="txnSort" class="filter">
+                  <option value="date-desc">Newest first</option>
+                  <option value="date-asc">Oldest first</option>
+                  <option value="amount-desc">Highest amount</option>
+                  <option value="amount-asc">Lowest amount</option>
+                </select>
+                <label class="toolbar-toggle">
+                  <input type="checkbox" id="groupByDayToggle" checked />
+                  Group by day
+                </label>
+              </div>
+              <div id="bulkBar" class="bulk-bar" hidden>
+                <span id="bulkCount">0 selected</span>
+                <div class="bulk-actions">
+                  <button id="bulkClearBtn" class="btn-secondary">Clear</button>
+                  <button id="bulkDeleteBtn" class="btn-danger">Delete</button>
+                </div>
+              </div>
               <div id="txnRange" class="txn-range"></div>
               <ul id="expenseList" class="txn-list">
                 <li class="empty">No transactions recorded yet.</li>
@@ -470,7 +489,7 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=15"></script>
+  <script src="app.js?v=16"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

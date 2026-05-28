@@ -45,7 +45,14 @@
     end: "",
     categories: new Set(),  // empty = all
     search: "",
+    sort: "date-desc",      // 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'
+    groupByDay: true,
   };
+
+  // Bulk-select & undo state
+  const selectedTxns = new Set();
+  let lastDeleted = null;     // { items: [...txns], at: timestamp }
+  let lastDeletedTimer = null;
 
   // Period for insights
   let insightsPeriod = "monthly";
@@ -572,6 +579,64 @@
     }, 3500);
   }
 
+  /* ---------- Bulk select & undo ---------- */
+  function updateBulkBar() {
+    const bar = $("#bulkBar");
+    if (!bar) return;
+    if (selectedTxns.size === 0) {
+      bar.hidden = true;
+      return;
+    }
+    bar.hidden = false;
+    $("#bulkCount").textContent = `${selectedTxns.size} selected`;
+  }
+
+  function showUndoToast(items) {
+    if (!items || !items.length) return;
+    lastDeleted = { items, at: Date.now() };
+    const toast = $("#toast");
+    const word = items.length === 1 ? "Transaction" : `${items.length} transactions`;
+    toast.innerHTML = `${word} deleted <button id="undoBtn" class="toast-action">Undo</button>`;
+    toast.className = "toast toast-undo";
+    toast.hidden = false;
+    clearTimeout(lastDeletedTimer);
+    clearTimeout(showToast._t);
+
+    const undoBtn = $("#undoBtn");
+    if (undoBtn) {
+      undoBtn.addEventListener("click", () => {
+        if (!lastDeleted) return;
+        state.expenses.push(...lastDeleted.items);
+        lastDeleted = null;
+        saveData();
+        renderAll();
+        toast.hidden = true;
+        toast.className = "toast";
+      });
+    }
+
+    lastDeletedTimer = setTimeout(() => {
+      toast.hidden = true;
+      toast.className = "toast";
+      lastDeleted = null;
+    }, 6000);
+  }
+
+  /* ---------- Auto-suggest category ---------- */
+  function suggestCategory(desc) {
+    const q = String(desc || "").toLowerCase().trim();
+    if (q.length < 2) return null;
+    // Find past transactions whose description starts with or contains the query
+    const matches = state.expenses
+      .filter((e) => e.categoryId && e.desc && e.desc.toLowerCase().includes(q));
+    if (!matches.length) return null;
+    // Pick the most-used category among matches
+    const counts = {};
+    matches.forEach((m) => { counts[m.categoryId] = (counts[m.categoryId] || 0) + 1; });
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best ? best[0] : null;
+  }
+
   function renderDashboard() {
     const month = currentMonth();
     const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
@@ -732,8 +797,10 @@
     const sign = isIncome ? "+" : "-";
     const amountClass = isIncome ? "positive" : "negative";
     const tag = isIncome ? "Received" : "Spent";
+    const isSelected = selectedTxns.has(exp.id);
     return `
-      <li class="txn-item" data-txn-row="${exp.id}">
+      <li class="txn-item ${isSelected ? "selected" : ""}" data-txn-row="${exp.id}">
+        <input type="checkbox" class="txn-check" data-action="select-txn" data-id="${exp.id}" ${isSelected ? "checked" : ""} aria-label="Select transaction" />
         ${receiptHtml}
         <div class="txn-date">
           <span class="day">${d.day}</span>
@@ -776,15 +843,26 @@
       });
     }
 
-    items.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+    // Sort
+    items.sort((a, b) => {
+      switch (filters.sort) {
+        case "date-asc": return (a.date + a.id).localeCompare(b.date + b.id);
+        case "amount-desc": return Number(b.amount) - Number(a.amount);
+        case "amount-asc": return Number(a.amount) - Number(b.amount);
+        case "date-desc":
+        default: return (b.date + b.id).localeCompare(a.date + a.id);
+      }
+    });
 
     const list = $("#expenseList");
     if (!items.length) {
       list.innerHTML = '<li class="empty">No transactions match your filters.</li>';
+    } else if (filters.groupByDay && (filters.sort === "date-desc" || filters.sort === "date-asc")) {
+      list.innerHTML = renderGroupedTxns(items);
+      attachReceiptClicks(list);
     } else {
       list.innerHTML = items.map(renderTxnItem).join("");
       attachReceiptClicks(list);
-      attachTxnDelete(list);
     }
 
     const range = $("#txnRange");
@@ -795,6 +873,51 @@
     } else {
       range.textContent = `${items.length} transaction${items.length === 1 ? "" : "s"}`;
     }
+
+    updateBulkBar();
+  }
+
+  function renderGroupedTxns(items) {
+    const groups = new Map();
+    items.forEach((it) => {
+      if (!groups.has(it.date)) groups.set(it.date, []);
+      groups.get(it.date).push(it);
+    });
+    let html = "";
+    for (const [date, list] of groups) {
+      const total = list.reduce(
+        (sum, t) => sum + (t.type === "income" ? Number(t.amount) : -Number(t.amount)),
+        0
+      );
+      const totalStr = total >= 0 ? `+${fmt(total)}` : `-${fmt(Math.abs(total))}`;
+      const totalCls = total >= 0 ? "positive" : "negative";
+      html += `
+        <li class="txn-day-header">
+          <span>${formatLongDate(date)}</span>
+          <span class="${totalCls}">${totalStr}</span>
+        </li>`;
+      html += list.map(renderTxnItem).join("");
+    }
+    return html;
+  }
+
+  function formatLongDate(dateStr) {
+    if (!dateStr) return "";
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const dt = new Date(y, m - 1, d);
+    const today = todayStr();
+    if (dateStr === today) return "Today";
+    // Yesterday
+    const yest = new Date();
+    yest.setDate(yest.getDate() - 1);
+    const yestStr = `${yest.getFullYear()}-${String(yest.getMonth() + 1).padStart(2, "0")}-${String(yest.getDate()).padStart(2, "0")}`;
+    if (dateStr === yestStr) return "Yesterday";
+    return dt.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: dt.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined,
+    });
   }
 
   function renderFilterChips() {
@@ -1525,6 +1648,40 @@
       renderTransactions();
     });
 
+    // Sort & group toolbar
+    $("#txnSort").addEventListener("change", (e) => {
+      filters.sort = e.target.value;
+      renderTransactions();
+    });
+    $("#groupByDayToggle").addEventListener("change", (e) => {
+      filters.groupByDay = e.target.checked;
+      renderTransactions();
+    });
+
+    // Bulk actions
+    $("#bulkClearBtn").addEventListener("click", () => {
+      selectedTxns.clear();
+      renderTransactions();
+    });
+    $("#bulkDeleteBtn").addEventListener("click", () => {
+      if (!selectedTxns.size) return;
+      const ids = [...selectedTxns];
+      if (!confirm(`Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}?`)) return;
+      const removed = state.expenses.filter((e) => ids.includes(e.id));
+      state.expenses = state.expenses.filter((e) => !ids.includes(e.id));
+      selectedTxns.clear();
+      saveData();
+      renderAll();
+      showUndoToast(removed);
+    });
+
+    // Description input -> auto-suggest category from past transactions
+    $("#expDesc").addEventListener("input", (e) => {
+      const cat = suggestCategory(e.target.value);
+      const sel = $("#expCategory");
+      if (cat && sel.value === "") sel.value = cat;
+    });
+
     // Insights period selector
     $$(".period-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -1573,11 +1730,19 @@
         saveData();
         renderAll();
       } else if (action === "del-exp") {
-        if (confirm("Delete this transaction?")) {
+        const txn = state.expenses.find((x) => x.id === id);
+        if (txn && confirm("Delete this transaction?")) {
           state.expenses = state.expenses.filter((x) => x.id !== id);
           saveData();
           renderAll();
+          showUndoToast([txn]);
         }
+      } else if (action === "select-txn") {
+        if (selectedTxns.has(id)) selectedTxns.delete(id);
+        else selectedTxns.add(id);
+        const li = btn.closest(".txn-item");
+        if (li) li.classList.toggle("selected", selectedTxns.has(id));
+        updateBulkBar();
       } else if (action === "edit-exp") {
         const exp = state.expenses.find((x) => x.id === id);
         if (exp) openExpenseModal(exp);
