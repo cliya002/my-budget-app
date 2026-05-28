@@ -3623,6 +3623,176 @@
     }, 400);
   }
 
+  /* ---------- Paycheck Logger ---------- */
+  function openPaycheckModal() {
+    $("#pcDate").value = todayStr();
+    $("#pcEmployer").value = "";
+    ["#pcGross", "#pcNet", "#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
+      const el = $(id); if (el) el.value = "";
+    });
+    populateIncomeSourceList();
+    initPaycheckSplits();
+    $("#paycheckModal").classList.add("open");
+    setTimeout(() => $("#pcEmployer")?.focus(), 50);
+  }
+  function closePaycheckModal() {
+    $("#paycheckModal").classList.remove("open");
+  }
+
+  function initPaycheckSplits() {
+    const container = $("#paycheckSplits");
+    container.innerHTML = "";
+    if (state.accounts.length === 0) {
+      container.innerHTML = '<p class="empty">Add accounts in Balances first.</p>';
+      return;
+    }
+    // Default: one row, full net pay to first account
+    addSplitRow(state.accounts[0].id, "");
+    updateSplitRemaining();
+  }
+
+  function addSplitRow(accountId, amount) {
+    const container = $("#paycheckSplits");
+    const idx = container.children.length;
+    const div = document.createElement("div");
+    div.className = "paycheck-split-row";
+    div.dataset.idx = String(idx);
+    div.innerHTML = `
+      <select class="split-account">
+        ${state.accounts.map((a) =>
+          `<option value="${a.id}" ${a.id === accountId ? "selected" : ""}>${escapeHtml(a.name)}</option>`
+        ).join("")}
+      </select>
+      <input type="number" class="split-amount" step="0.01" min="0" placeholder="0.00" value="${amount}" />
+      <button type="button" class="icon-btn split-remove" aria-label="Remove">×</button>
+    `;
+    container.appendChild(div);
+    div.querySelector(".split-amount").addEventListener("input", updateSplitRemaining);
+    div.querySelector(".split-remove").addEventListener("click", () => {
+      div.remove();
+      updateSplitRemaining();
+    });
+  }
+
+  function updateSplitRemaining() {
+    const net = parseFloat($("#pcNet").value) || 0;
+    const inputs = $$(".split-amount");
+    let assigned = 0;
+    inputs.forEach((i) => assigned += parseFloat(i.value) || 0);
+    const remaining = net - assigned;
+    const el = $("#splitRemaining");
+    if (Math.abs(remaining) < 0.01) {
+      el.innerHTML = `<span class="positive">✓ All ${fmt(net)} assigned</span>`;
+    } else if (remaining > 0) {
+      el.innerHTML = `<span style="color:var(--warning)">${fmt(remaining)} unassigned</span>`;
+    } else {
+      el.innerHTML = `<span class="negative">Over-assigned by ${fmt(Math.abs(remaining))}</span>`;
+    }
+  }
+
+  function savePaycheck() {
+    const employer = $("#pcEmployer").value.trim();
+    const date = $("#pcDate").value;
+    const gross = parseFloat($("#pcGross").value);
+    const net = parseFloat($("#pcNet").value);
+    if (!employer || !date || isNaN(gross) || isNaN(net)) return false;
+
+    const fedTax = parseFloat($("#pcFedTax").value) || 0;
+    const stateTax = parseFloat($("#pcStateTax").value) || 0;
+    const fica = parseFloat($("#pcFica").value) || 0;
+    const health = parseFloat($("#pcHealth").value) || 0;
+    const k401 = parseFloat($("#pc401k").value) || 0;
+    const hsa = parseFloat($("#pcHsa").value) || 0;
+
+    // Collect splits
+    const splits = [];
+    $$(".paycheck-split-row").forEach((row) => {
+      const accountId = row.querySelector(".split-account").value;
+      const amount = parseFloat(row.querySelector(".split-amount").value) || 0;
+      if (amount > 0 && accountId) splits.push({ accountId, amount });
+    });
+    const splitTotal = splits.reduce((s, x) => s + x.amount, 0);
+    if (Math.abs(splitTotal - net) > 0.01) {
+      if (!confirm(`Split total (${fmt(splitTotal)}) doesn't match net pay (${fmt(net)}). Save anyway?`)) {
+        return false;
+      }
+    }
+
+    const paycheckId = uid();
+
+    // Create the income transaction (gross amount, pre-tax flag true)
+    state.expenses.push({
+      id: uid(),
+      type: "income",
+      desc: `Paycheck — ${employer}`,
+      amount: gross,
+      date,
+      categoryId: null,
+      accountId: null, // gross goes nowhere directly; net is split below
+      personId: null,
+      tags: ["paycheck"],
+      receipt: null,
+      incomeType: "salary",
+      source: employer,
+      preTax: true,
+      paycheckId,
+      paycheckMeta: {
+        gross, net, fedTax, stateTax, fica, health, k401, hsa,
+      },
+    });
+
+    // Create deduction expenses (categorized as Tax / Benefits where possible)
+    const taxCat = state.categories.find((c) => /tax/i.test(c.name))?.id || null;
+    const otherCat = state.categories.find((c) => c.name === "Other")?.id || null;
+    const deductions = [
+      ["Federal tax", fedTax, taxCat],
+      ["State tax", stateTax, taxCat],
+      ["FICA", fica, taxCat],
+      ["Health insurance", health, otherCat],
+      ["401(k)", k401, otherCat],
+      ["HSA/FSA", hsa, otherCat],
+    ];
+    deductions.forEach(([name, amount, catId]) => {
+      if (amount <= 0) return;
+      state.expenses.push({
+        id: uid(),
+        type: "expense",
+        desc: `${name} (${employer})`,
+        amount,
+        date,
+        categoryId: catId,
+        accountId: null,
+        personId: null,
+        tags: ["paycheck-deduction"],
+        receipt: null,
+        paycheckId,
+      });
+    });
+
+    // Create transfer-in transactions for each account split
+    splits.forEach((split) => {
+      state.expenses.push({
+        id: uid(),
+        type: "transfer-in",
+        desc: `Paycheck split — ${employer}`,
+        amount: split.amount,
+        date,
+        categoryId: null,
+        accountId: split.accountId,
+        personId: null,
+        tags: ["paycheck"],
+        receipt: null,
+        paycheckId,
+      });
+    });
+
+    saveData();
+    closePaycheckModal();
+    renderAll();
+    showToast(`Paycheck logged: ${fmt(gross)} gross, ${fmt(net)} net`);
+    return true;
+  }
+
   function setModalType(type) {
     currentModalType = type;
     $$(".type-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
@@ -3960,6 +4130,47 @@
     });
     $("#addIncomeBtn").addEventListener("click", () => {
       openExpenseModal({ type: "income" });
+    });
+
+    // Paycheck logger
+    $("#paycheckBtn").addEventListener("click", openPaycheckModal);
+    $("#paycheckClose").addEventListener("click", closePaycheckModal);
+    $("#paycheckModal").addEventListener("click", (e) => {
+      if (e.target.id === "paycheckModal") closePaycheckModal();
+    });
+    $("#addSplitBtn").addEventListener("click", () => {
+      if (state.accounts.length === 0) {
+        showToast("Add accounts in Balances first");
+        return;
+      }
+      addSplitRow(state.accounts[0].id, "");
+      updateSplitRemaining();
+    });
+    $("#pcNet").addEventListener("input", updateSplitRemaining);
+    $("#pcGross").addEventListener("input", () => {
+      // Auto-fill net = gross minus deductions if user hasn't set it
+      const gross = parseFloat($("#pcGross").value) || 0;
+      const totalDed = ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"]
+        .reduce((s, id) => s + (parseFloat($(id).value) || 0), 0);
+      if (gross > 0 && !$("#pcNet").value) {
+        $("#pcNet").value = (gross - totalDed).toFixed(2);
+        updateSplitRemaining();
+      }
+    });
+    ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
+      $(id).addEventListener("input", () => {
+        const gross = parseFloat($("#pcGross").value) || 0;
+        const totalDed = ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"]
+          .reduce((s, sid) => s + (parseFloat($(sid).value) || 0), 0);
+        if (gross > 0) {
+          $("#pcNet").value = Math.max(0, gross - totalDed).toFixed(2);
+          updateSplitRemaining();
+        }
+      });
+    });
+    $("#paycheckForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      savePaycheck();
     });
     $("#expenseModalClose").addEventListener("click", closeExpenseModal);
     $("#expenseModal").addEventListener("click", (e) => {
