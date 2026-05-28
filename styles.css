@@ -1883,3 +1883,27 @@ input[type="color"] {
   letter-spacing: 0.5px;
   font-weight: 500;
 }
+
+/* ================ Paystub upload ================ */
+.upload-paystub {
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+.paystub-status {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+.paystub-status.warn {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+}
+.paystub-status.success {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}

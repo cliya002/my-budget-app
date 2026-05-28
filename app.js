@@ -3630,6 +3630,12 @@
     ["#pcGross", "#pcNet", "#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
       const el = $(id); if (el) el.value = "";
     });
+    const status = $("#paystubStatus");
+    if (status) {
+      status.hidden = true;
+      status.textContent = "";
+      status.className = "paystub-status";
+    }
     populateIncomeSourceList();
     initPaycheckSplits();
     $("#paycheckModal").classList.add("open");
@@ -3688,6 +3694,187 @@
     } else {
       el.innerHTML = `<span class="negative">Over-assigned by ${fmt(Math.abs(remaining))}</span>`;
     }
+  }
+
+  /* ---------- Paystub upload & parsing ---------- */
+  async function handlePaystubUpload(file) {
+    const status = $("#paystubStatus");
+    status.hidden = false;
+    status.className = "paystub-status";
+    status.textContent = "Reading paystub…";
+    try {
+      let text = "";
+      if (file.type === "application/pdf") {
+        if (!window.pdfjsLib) {
+          status.textContent = "PDF library not loaded. Try image instead.";
+          return;
+        }
+        const buf = await file.arrayBuffer();
+        const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+        for (let i = 1; i <= pdf.numPages; i++) {
+          const page = await pdf.getPage(i);
+          const content = await page.getTextContent();
+          text += content.items.map((it) => it.str).join(" ") + "\n";
+        }
+      } else if (file.type.startsWith("image/")) {
+        status.textContent = "Loading OCR engine (one-time, ~10MB)…";
+        text = await ocrImage(file, (progress) => {
+          status.textContent = `OCR scanning… ${Math.round(progress * 100)}%`;
+        });
+      } else {
+        status.textContent = "Unsupported file type. Use PDF or image.";
+        return;
+      }
+
+      status.textContent = "Parsing paystub data…";
+      const parsed = parsePaystub(text);
+      applyPaystubToForm(parsed);
+
+      const found = [];
+      if (parsed.employer) found.push("employer");
+      if (parsed.date) found.push("date");
+      if (parsed.gross) found.push("gross");
+      if (parsed.net) found.push("net");
+      if (parsed.fedTax || parsed.stateTax || parsed.fica) found.push("taxes");
+      if (parsed.k401 || parsed.hsa) found.push("retirement");
+
+      if (found.length === 0) {
+        status.className = "paystub-status warn";
+        status.textContent = "Couldn't auto-detect fields. Fill them in manually.";
+      } else {
+        status.className = "paystub-status success";
+        status.textContent = `✓ Found: ${found.join(", ")}. Review and adjust before saving.`;
+      }
+    } catch (e) {
+      console.error(e);
+      status.className = "paystub-status warn";
+      status.textContent = "Failed to read this file. Try a different one or fill manually.";
+    }
+  }
+
+  // Lazy-load Tesseract.js for image OCR
+  let tesseractLoaded = null;
+  async function ocrImage(file, progressCb) {
+    if (!window.Tesseract) {
+      if (!tesseractLoaded) {
+        tesseractLoaded = new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.0.4/dist/tesseract.min.js";
+          s.onload = resolve;
+          s.onerror = reject;
+          document.head.appendChild(s);
+        });
+      }
+      await tesseractLoaded;
+    }
+    const result = await window.Tesseract.recognize(file, "eng", {
+      logger: (m) => {
+        if (m.status === "recognizing text" && progressCb) progressCb(m.progress);
+      },
+    });
+    return result.data.text || "";
+  }
+
+  function parsePaystub(rawText) {
+    const text = rawText.replace(/\s+/g, " ").trim();
+    const lines = rawText.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
+    const result = {
+      employer: null, date: null,
+      gross: null, net: null,
+      fedTax: null, stateTax: null, fica: null,
+      health: null, k401: null, hsa: null,
+    };
+
+    // --- Employer: look for Company Name pattern, often at top of document
+    // Heuristic: first line that has "Inc", "LLC", "Corp", "Co.", "Company", "Group", "Ltd"
+    // Otherwise, the first line that's all caps or title-case 2+ words and not "Pay Stub" etc.
+    const companyKeywords = /(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings)/;
+    for (const line of lines.slice(0, 10)) {
+      if (companyKeywords.test(line) && line.length < 100) {
+        result.employer = line.replace(/Pay\s*stub/i, "").trim();
+        break;
+      }
+    }
+
+    // Date: Pay date / Period end / Check date
+    const dateRegexes = [
+      /Pay\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+      /Check\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+      /Period\s*End(?:ing)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
+      /(\d{1,2}\/\d{1,2}\/\d{2,4})/, // fallback
+    ];
+    for (const re of dateRegexes) {
+      const m = text.match(re);
+      if (m) {
+        result.date = normalizeDate(m[1]);
+        if (result.date) break;
+      }
+    }
+
+    // Field amounts — match common labels then the next dollar amount
+    const fieldPatterns = [
+      ["gross", /(?:Gross\s*(?:Pay|Earnings|Wages))\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["net", /(?:Net\s*(?:Pay|Wages|Check)|Take[\s\-]?Home)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["fedTax", /(?:Federal\s*(?:Income\s*)?Tax|Fed\.?\s*W\/H|FIT)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["stateTax", /(?:State\s*(?:Income\s*)?Tax|State\s*W\/H|SIT)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["fica", /(?:FICA|Social\s*Security|OASDI)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["health", /(?:Health\s*(?:Insurance)?|Medical|Dental|Vision)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["k401", /(?:401\s*\(?k\)?|Retirement|Pension)\s*\$?\s*([\d,]+\.\d{2})/i],
+      ["hsa", /(?:HSA|FSA|Health\s*Savings)\s*\$?\s*([\d,]+\.\d{2})/i],
+    ];
+
+    fieldPatterns.forEach(([key, re]) => {
+      const m = text.match(re);
+      if (m) {
+        result[key] = Number(m[1].replace(/,/g, ""));
+      }
+    });
+
+    // If we found Medicare separately and FICA missed, add Medicare to FICA
+    const med = text.match(/Medicare\s*\$?\s*([\d,]+\.\d{2})/i);
+    if (med && result.fica !== null) {
+      result.fica += Number(med[1].replace(/,/g, ""));
+    } else if (med && result.fica === null) {
+      result.fica = Number(med[1].replace(/,/g, ""));
+    }
+
+    return result;
+  }
+
+  function normalizeDate(d) {
+    // d like "12/31/2024" or "12/31/24"
+    const parts = d.split("/");
+    if (parts.length !== 3) return null;
+    let [mm, dd, yy] = parts;
+    if (yy.length === 2) yy = "20" + yy;
+    if (mm.length === 1) mm = "0" + mm;
+    if (dd.length === 1) dd = "0" + dd;
+    const result = `${yy}-${mm}-${dd}`;
+    // Sanity: must be parseable
+    if (isNaN(new Date(result).getTime())) return null;
+    return result;
+  }
+
+  function applyPaystubToForm(p) {
+    if (p.employer) $("#pcEmployer").value = p.employer;
+    if (p.date) $("#pcDate").value = p.date;
+    if (p.gross !== null) $("#pcGross").value = p.gross.toFixed(2);
+    if (p.net !== null) $("#pcNet").value = p.net.toFixed(2);
+    if (p.fedTax !== null) $("#pcFedTax").value = p.fedTax.toFixed(2);
+    if (p.stateTax !== null) $("#pcStateTax").value = p.stateTax.toFixed(2);
+    if (p.fica !== null) $("#pcFica").value = p.fica.toFixed(2);
+    if (p.health !== null) $("#pcHealth").value = p.health.toFixed(2);
+    if (p.k401 !== null) $("#pc401k").value = p.k401.toFixed(2);
+    if (p.hsa !== null) $("#pcHsa").value = p.hsa.toFixed(2);
+
+    // If gross + deductions known but not net, compute it
+    if (p.gross !== null && p.net === null) {
+      const totalDed = (p.fedTax || 0) + (p.stateTax || 0) + (p.fica || 0)
+        + (p.health || 0) + (p.k401 || 0) + (p.hsa || 0);
+      $("#pcNet").value = Math.max(0, p.gross - totalDed).toFixed(2);
+    }
+
+    updateSplitRemaining();
   }
 
   function savePaycheck() {
@@ -4171,6 +4358,14 @@
     $("#paycheckForm").addEventListener("submit", (e) => {
       e.preventDefault();
       savePaycheck();
+    });
+
+    // Paystub upload
+    $("#paystubUploadBtn").addEventListener("click", () => $("#paystubFile").click());
+    $("#paystubFile").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) handlePaystubUpload(file);
+      e.target.value = ""; // allow re-uploading same file
     });
     $("#expenseModalClose").addEventListener("click", closeExpenseModal);
     $("#expenseModal").addEventListener("click", (e) => {
