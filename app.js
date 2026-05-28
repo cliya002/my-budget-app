@@ -14,6 +14,11 @@
     currency: "mb_currency",
   };
 
+  /* Default password hash (SHA-256 of the preset password).
+   * Used when no password has been set yet in this browser. */
+  const DEFAULT_PWD_HASH =
+    "32ea448e581deafe4684d8bffce21c999be2b68f67440c165496b47ca0eb8f1f";
+
   /* ---------- State ---------- */
   let state = {
     income: 0,
@@ -92,6 +97,12 @@
 
   /* ---------- Lock screen ---------- */
   async function initLock() {
+    // If no password is set yet in this browser, seed the default hash
+    // so the user is prompted to unlock instead of creating a password.
+    if (!localStorage.getItem(KEYS.pwd)) {
+      localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
+    }
+
     const stored = localStorage.getItem(KEYS.pwd);
     const lockTitle = $("#lockTitle");
     const lockSubtitle = $("#lockSubtitle");
@@ -144,11 +155,11 @@
     resetBtn.addEventListener("click", () => {
       if (
         confirm(
-          "This will erase your password AND all your budget data. Continue?"
+          "This will erase your data and reset the password to the preset. Continue?"
         )
       ) {
-        localStorage.removeItem(KEYS.pwd);
         localStorage.removeItem(KEYS.data);
+        localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
         location.reload();
       }
     });
