@@ -421,6 +421,10 @@
     const thisMonth = currentMonth();
     let added = 0;
 
+    // First, dedupe any recurring transactions that ended up duplicated across devices
+    // (sync merges can introduce two recurring entries for the same rule + month).
+    dedupeRecurringTransactions();
+
     state.recurring.forEach((r) => {
       if (!r.active) return;
 
@@ -435,6 +439,15 @@
 
         // Skip future months
         if (m > thisMonth) return;
+
+        // Already exists for this month-year (could be from a synced device)
+        const exists = state.expenses.some(
+          (e) => e.recurringId === r.id && monthKey(e.date) === m
+        );
+        if (exists) {
+          r.lastRunMonth = m;
+          return;
+        }
 
         const day = Math.min(Math.max(1, r.dayOfMonth || 1), 28);
         const dateStr = `${m}-${String(day).padStart(2, "0")}`;
@@ -459,8 +472,35 @@
 
     if (added > 0) {
       saveData();
-      // Toast handled after renderAll
       setTimeout(() => showToast(`Added ${added} recurring transaction${added === 1 ? "" : "s"}`), 500);
+    }
+  }
+
+  function dedupeRecurringTransactions() {
+    const seen = new Map(); // key: recurringId+monthKey -> earliest record
+    const toRemove = new Set();
+    state.expenses.forEach((e) => {
+      if (!e.recurringId) return;
+      const key = `${e.recurringId}|${monthKey(e.date)}`;
+      const existing = seen.get(key);
+      if (!existing) {
+        seen.set(key, e);
+      } else {
+        // Keep the older record (smaller id timestamp); tombstone the newer one
+        const tsExisting = recordTimestamp(existing);
+        const tsCurrent = recordTimestamp(e);
+        if (tsCurrent < tsExisting) {
+          toRemove.add(existing.id);
+          tombstoneRecord("expenses", existing.id);
+          seen.set(key, e);
+        } else {
+          toRemove.add(e.id);
+          tombstoneRecord("expenses", e.id);
+        }
+      }
+    });
+    if (toRemove.size > 0) {
+      state.expenses = state.expenses.filter((e) => !toRemove.has(e.id));
     }
   }
 
@@ -6685,6 +6725,7 @@
 
       if (action === "del-cat") {
         if (confirm("Delete this category? Transactions will show 'Uncategorized'.")) {
+          tombstoneRecord("categories", id);
           state.categories = state.categories.filter((c) => c.id !== id);
           filters.categories.delete(id);
           saveData();
@@ -6722,6 +6763,7 @@
         if (exp) openExpenseModal(exp);
       } else if (action === "del-preset") {
         if (confirm("Delete this preset?")) {
+          tombstoneRecord("presets", id);
           state.presets = state.presets.filter((p) => p.id !== id);
           saveData();
           renderPresetsManage();
@@ -6762,6 +6804,7 @@
         }
       } else if (action === "del-rec") {
         if (confirm("Delete this recurring transaction? Existing transactions stay.")) {
+          tombstoneRecord("recurring", id);
           state.recurring = state.recurring.filter((x) => x.id !== id);
           saveData();
           renderRecurringList();
@@ -6801,6 +6844,7 @@
         }
       } else if (action === "del-acc") {
         if (confirm("Delete this account? Transactions assigned to it will keep their record.")) {
+          tombstoneRecord("accounts", id);
           state.accounts = state.accounts.filter((a) => a.id !== id);
           saveData();
           renderAll();
@@ -6810,6 +6854,7 @@
         if (p) openPersonModal(p);
       } else if (action === "del-person") {
         if (confirm("Delete this person? Transactions linked to them will keep their record but lose the link.")) {
+          tombstoneRecord("people", id);
           state.people = state.people.filter((p) => p.id !== id);
           // Unlink transactions
           state.expenses.forEach((e) => {
@@ -6820,36 +6865,42 @@
         }
       } else if (action === "del-card") {
         if (confirm("Delete this card?")) {
+          tombstoneRecord("cards", id);
           state.cards = state.cards.filter((c) => c.id !== id);
           saveData();
           renderCredit();
         }
       } else if (action === "del-score") {
         if (confirm("Delete this score entry?")) {
+          tombstoneRecord("creditScores", id);
           state.creditScores = state.creditScores.filter((s) => s.id !== id);
           saveData();
           renderCredit();
         }
       } else if (action === "del-inquiry") {
         if (confirm("Delete this inquiry?")) {
+          tombstoneRecord("creditInquiries", id);
           state.creditInquiries = state.creditInquiries.filter((x) => x.id !== id);
           saveData();
           renderCredit();
         }
       } else if (action === "del-negative") {
         if (confirm("Delete this negative item?")) {
+          tombstoneRecord("negativeItems", id);
           state.negativeItems = state.negativeItems.filter((x) => x.id !== id);
           saveData();
           renderCredit();
         }
       } else if (action === "del-limit") {
         if (confirm("Delete this limit increase entry?")) {
+          tombstoneRecord("limitIncreases", id);
           state.limitIncreases = state.limitIncreases.filter((x) => x.id !== id);
           saveData();
           renderCredit();
         }
       } else if (action === "del-credit-goal") {
         if (confirm("Delete this credit goal?")) {
+          tombstoneRecord("creditGoals", id);
           state.creditGoals = state.creditGoals.filter((x) => x.id !== id);
           saveData();
           renderCredit();
@@ -6890,6 +6941,7 @@
         }
       } else if (action === "del-goal") {
         if (confirm("Delete this goal?")) {
+          tombstoneRecord("goals", id);
           state.goals = state.goals.filter((g) => g.id !== id);
           saveData();
           renderAll();
@@ -6957,6 +7009,14 @@
       const confirmPwd = prompt("Confirm new password:");
       if (newPwd !== confirmPwd) { alert("Passwords do not match."); return; }
       localStorage.setItem(KEYS.pwd, await sha256(newPwd));
+      // Re-derive encryption key with new password and re-encrypt local data
+      try {
+        cryptoKey = await deriveKey(newPwd);
+        cachedPassword = newPwd;
+        saveData(); // Re-saves with the new key
+      } catch (e) {
+        console.error("Failed to re-derive key after password change", e);
+      }
       showToast("Password changed");
     });
 
@@ -8230,6 +8290,8 @@
 
       const beforeCount = state.expenses.length;
       state = mergeStates(state, decrypted);
+      // After merge, run dedupe in case sync introduced duplicate recurring entries
+      try { dedupeRecurringTransactions(); } catch (e) { /* ignore */ }
       const addedCount = recentlyPulledIds.size;
       const totalAfter = state.expenses.length;
       saveData();
