@@ -6182,7 +6182,15 @@
       } else {
         localStorage.removeItem(KEYS.syncGistId);
       }
-      showSyncStatus("Settings saved.", "success");
+      // Default auto-sync ON the first time sync is configured. Without this,
+      // changes only push when the user manually taps "Sync Now".
+      if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem("mb_auto_sync") === null) {
+        localStorage.setItem("mb_auto_sync", "true");
+        const t = $("#autoSyncToggle");
+        if (t) t.checked = true;
+        startAutoSync();
+      }
+      showSyncStatus("Settings saved. Auto-sync is on.", "success");
     });
     $("#syncPushBtn")?.addEventListener("click", syncPush);
     $("#syncPullBtn")?.addEventListener("click", syncPull);
@@ -8245,6 +8253,18 @@
 
   function startAutoSync() {
     stopAutoSync();
+    // First-launch default: if sync is configured and user never explicitly
+    // turned auto-sync on or off, default it ON. Without this, devices only
+    // sync when the user taps "Sync Now" manually.
+    if (
+      localStorage.getItem("mb_auto_sync") === null &&
+      localStorage.getItem(KEYS.syncToken) &&
+      localStorage.getItem(KEYS.syncGistId)
+    ) {
+      localStorage.setItem("mb_auto_sync", "true");
+      const t = $("#autoSyncToggle");
+      if (t) t.checked = true;
+    }
     if (localStorage.getItem("mb_auto_sync") !== "true") return;
     if (!localStorage.getItem(KEYS.syncToken)) return;
     autoSyncTimer = setInterval(() => {
@@ -8297,7 +8317,7 @@
       } catch (e) {
         restoreStatus();
       }
-    }, 30 * 1000);
+    }, 15 * 1000);
 
     // Refresh "X min ago" badge every minute
     setInterval(() => {
@@ -8353,7 +8373,7 @@
     clearTimeout(pushDebounceTimer);
     pushDebounceTimer = setTimeout(() => {
       if (dirtyForSync) syncPush({ silent: true });
-    }, 10000); // 10 seconds after last change
+    }, 3000); // 3 seconds after last change
   }
 
   function updateSyncIndicator(status) {
