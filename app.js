@@ -704,6 +704,7 @@
     cryptoKey = null;
     cachedPassword = null;
     stopAutoLock();
+    stopAutoSync();
     $("#app").hidden = true;
     $("#lockScreen").classList.add("open");
     $("#passwordInput").value = "";
@@ -7431,6 +7432,7 @@
           // Swipe left = delete
           if (confirm("Delete this transaction?")) {
             const txn = state.expenses.find((x) => x.id === id);
+            tombstoneRecord("expenses", id);
             state.expenses = state.expenses.filter((x) => x.id !== id);
             saveData();
             renderAll();
@@ -8475,7 +8477,8 @@
         } else {
           const pwd = prompt("Enter your password to decrypt the cloud backup:");
           if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
-          localStorage.setItem(KEYS.salt, pwd);
+          // Adopt the remote salt before re-deriving so the key matches the cloud blob
+          localStorage.setItem(KEYS.salt, payload.salt);
           cryptoKey = await deriveKey(pwd);
           cachedPassword = pwd;
         }
