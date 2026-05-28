@@ -55,6 +55,7 @@
       roundUpEnabled: false,
       roundUpGoalId: null,
     },
+    settingsTimestamps: {}, // map: settingKey -> lastUpdatedAt
   };
 
   let currency = "USD";
@@ -290,6 +291,7 @@
     if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
     if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
     if (typeof state.mapTimestamps !== "object" || !state.mapTimestamps) state.mapTimestamps = {};
+    if (typeof state.settingsTimestamps !== "object" || !state.settingsTimestamps) state.settingsTimestamps = {};
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -448,6 +450,7 @@
         );
         if (exists) {
           r.lastRunMonth = m;
+          touchRecord(r);
           return;
         }
 
@@ -468,6 +471,7 @@
           recurringId: r.id,
         }));
         r.lastRunMonth = m;
+        touchRecord(r);
         added += 1;
       });
     });
@@ -2085,7 +2089,15 @@
     if (undoBtn) {
       undoBtn.addEventListener("click", () => {
         if (!lastDeleted) return;
-        state.expenses.push(...lastDeleted.items);
+        // Restore — clear tombstones and bump updatedAt so the resurrection beats the deletion
+        // on the next sync round.
+        const restored = lastDeleted.items.map((it) => {
+          if (state.deletions && state.deletions.expenses) {
+            delete state.deletions.expenses[it.id];
+          }
+          return touchRecord({ ...it });
+        });
+        state.expenses.push(...restored);
         lastDeleted = null;
         saveData();
         renderAll();
@@ -5149,7 +5161,7 @@
       const make = confirm(`Make "${desc}" a monthly recurring income?`);
       if (!make) return;
       const day = parseInt(date.slice(8, 10), 10) || 1;
-      state.recurring.push({
+      state.recurring.push(touchRecord({
         id: uid(),
         type: "income",
         desc,
@@ -5158,7 +5170,7 @@
         dayOfMonth: Math.min(28, day),
         active: true,
         lastRunMonth: monthKey(date),
-      });
+      }));
       saveData();
       renderRecurringList();
       showToast(`"${desc}" set to recur monthly`);
@@ -6112,6 +6124,7 @@
         presets: [], recurring: [], cards: [], creditScores: [], accounts: [], people: [],
         netWorthHistory: [], creditInquiries: [], negativeItems: [], limitIncreases: [],
         creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {}, mapTimestamps: {},
+        settingsTimestamps: {},
         settings: { rollover: false, alertsShown: {} },
       };
       state = empty;
@@ -6243,7 +6256,7 @@
       roundToggle.checked = !!state.settings.roundUpEnabled;
       $("#roundUpGoalRow").style.display = roundToggle.checked ? "block" : "none";
       roundToggle.addEventListener("change", (e) => {
-        state.settings.roundUpEnabled = e.target.checked;
+        setSetting("roundUpEnabled", e.target.checked);
         $("#roundUpGoalRow").style.display = e.target.checked ? "block" : "none";
         saveData();
         renderRoundUpStats();
@@ -6254,7 +6267,7 @@
     const ruGoalSel = $("#roundUpGoalSelect");
     if (ruGoalSel) {
       ruGoalSel.addEventListener("change", (e) => {
-        state.settings.roundUpGoalId = e.target.value || null;
+        setSetting("roundUpGoalId", e.target.value || null);
         saveData();
         renderRoundUpStats();
         renderGoalsTab();
@@ -6264,7 +6277,7 @@
     const ru2 = $("#roundUpToggle2");
     if (ru2) {
       ru2.addEventListener("change", (e) => {
-        state.settings.roundUpEnabled = e.target.checked;
+        setSetting("roundUpEnabled", e.target.checked);
         saveData();
         renderRoundUpStats();
         renderGoalsTab();
@@ -6274,7 +6287,7 @@
     const ruSel2 = $("#roundUpGoalSelect2");
     if (ruSel2) {
       ruSel2.addEventListener("change", (e) => {
-        state.settings.roundUpGoalId = e.target.value || null;
+        setSetting("roundUpGoalId", e.target.value || null);
         saveData();
         renderRoundUpStats();
         renderGoalsTab();
@@ -6327,7 +6340,7 @@
 
     // Rollover toggle
     $("#rolloverToggle").addEventListener("change", (e) => {
-      state.settings.rollover = !!e.target.checked;
+      setSetting("rollover", !!e.target.checked);
       saveData();
       renderDashboard();
       showToast(state.settings.rollover ? "Rollover enabled" : "Rollover disabled");
@@ -7006,7 +7019,7 @@
           });
           // Clear round-up destination if it pointed here
           if (state.settings.roundUpGoalId === id) {
-            state.settings.roundUpGoalId = null;
+            setSetting("roundUpGoalId", null);
           }
           saveData();
           renderAll();
@@ -7134,6 +7147,7 @@
             annualReports: data.annualReports || {},
             deletions: data.deletions || {},
             mapTimestamps: data.mapTimestamps || {},
+            settingsTimestamps: data.settingsTimestamps || {},
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -7172,6 +7186,7 @@
           annualReports: {},
           deletions: {},
           mapTimestamps: {},
+          settingsTimestamps: {},
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();
@@ -7687,11 +7702,12 @@
 
   function recordTimestamp(rec) {
     if (rec.updatedAt) return Number(rec.updatedAt);
-    // Fall back: extract creation time from id (uid format)
-    if (typeof rec.id === "string") {
-      const part = rec.id.split(".")[0] || rec.id.slice(0, 9);
-      const t = parseInt(part, 36);
-      if (!isNaN(t) && t > 1577836800000) return t; // sanity: after 2020
+    // Fall back: extract creation time from id (uid format = Date.now().toString(36) + 6 random chars)
+    if (typeof rec.id === "string" && rec.id.length >= 8) {
+      // Date.now() in base36 is currently 8 chars (until ~year 4199), so take the first 8.
+      const timePart = rec.id.slice(0, 8);
+      const t = parseInt(timePart, 36);
+      if (!isNaN(t) && t > 1577836800000 && t < 4102444800000) return t; // 2020 to 2100
     }
     return 0;
   }
@@ -7815,16 +7831,41 @@
       merged.income = Math.max(Number(local.income) || 0, Number(remote.income) || 0);
     }
 
-    // Settings object — merge sub-keys
-    merged.settings = {
-      ...(remote.settings || {}),
-      ...(local.settings || {}),
-      // Always merge alertsShown by union
-      alertsShown: {
-        ...((remote.settings && remote.settings.alertsShown) || {}),
-        ...((local.settings && local.settings.alertsShown) || {}),
-      },
+    // Settings object — merge sub-keys with per-key timestamps so the most recent
+    // toggle on any device wins. Falls back to local-wins for keys without timestamps.
+    const localSettings = local.settings || {};
+    const remoteSettings = remote.settings || {};
+    const localSettingsTs = local.settingsTimestamps || {};
+    const remoteSettingsTs = remote.settingsTimestamps || {};
+    const mergedSettings = {};
+    const settingsKeys = new Set([
+      ...Object.keys(localSettings),
+      ...Object.keys(remoteSettings),
+    ]);
+    settingsKeys.forEach((k) => {
+      if (k === "alertsShown") return; // handled below as a union
+      const lts = Number(localSettingsTs[k]) || 0;
+      const rts = Number(remoteSettingsTs[k]) || 0;
+      if (rts > lts && Object.prototype.hasOwnProperty.call(remoteSettings, k)) {
+        mergedSettings[k] = remoteSettings[k];
+      } else if (Object.prototype.hasOwnProperty.call(localSettings, k)) {
+        mergedSettings[k] = localSettings[k];
+      } else {
+        mergedSettings[k] = remoteSettings[k];
+      }
+    });
+    mergedSettings.alertsShown = {
+      ...((remoteSettings && remoteSettings.alertsShown) || {}),
+      ...((localSettings && localSettings.alertsShown) || {}),
     };
+    merged.settings = mergedSettings;
+
+    // Merge settings timestamps (max per key)
+    const mergedSettingsTs = { ...remoteSettingsTs };
+    Object.keys(localSettingsTs).forEach((k) => {
+      mergedSettingsTs[k] = Math.max(Number(mergedSettingsTs[k]) || 0, Number(localSettingsTs[k]) || 0);
+    });
+    merged.settingsTimestamps = mergedSettingsTs;
 
     return merged;
   }
@@ -7855,6 +7896,14 @@
     if (state.deletions && state.deletions[collection]) {
       delete state.deletions[collection][key];
     }
+  }
+
+  // Update a setting and stamp its per-key timestamp so cross-device sync picks the newest value.
+  function setSetting(key, value) {
+    if (!state.settings) state.settings = {};
+    state.settings[key] = value;
+    if (!state.settingsTimestamps) state.settingsTimestamps = {};
+    state.settingsTimestamps[key] = Date.now();
   }
 
   // Purge tombstones older than 90 days — anything that old is unlikely to come back from a stale device
