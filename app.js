@@ -11,19 +11,25 @@
     pwd: "mb_password_hash",
     data: "mb_data",
     currency: "mb_currency",
+    theme: "mb_theme",
   };
 
   const DEFAULT_PWD_HASH =
     "32ea448e581deafe4684d8bffce21c999be2b68f67440c165496b47ca0eb8f1f";
 
   let state = {
-    income: 0,
+    income: 0,             // legacy "monthly income" target
     categories: [],
-    expenses: [],
+    expenses: [],          // each: { id, type, desc, amount, date, categoryId, receipt }
     goals: [],
+    presets: [],           // each: { id, type, desc, amount, categoryId }
   };
 
   let currency = "USD";
+  let theme = "light"; // 'light' | 'dark'
+
+  // Track which transaction we are currently editing (null = adding new)
+  let editingTxnId = null;
   const currencySymbols = {
     USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", AUD: "$", CAD: "$",
   };
@@ -110,7 +116,26 @@
     }
     currency = localStorage.getItem(KEYS.currency) || "USD";
 
-    // Seed sensible defaults on first launch so the + FAB works immediately
+    // Apply saved theme (or auto-detect on first launch)
+    theme = localStorage.getItem(KEYS.theme);
+    if (!theme) {
+      theme = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light";
+    }
+    applyTheme(theme);
+
+    // Migrate old transactions (no type field) — assume expense
+    let migrated = false;
+    state.expenses = state.expenses.map((e) => {
+      if (!e.type) { migrated = true; return { ...e, type: "expense" }; }
+      return e;
+    });
+
+    // Ensure presets array exists
+    if (!Array.isArray(state.presets)) state.presets = [];
+
+    // Seed default categories on first launch
     if (!state.categories.length) {
       state.categories = [
         { id: uid(), name: "Groceries", limit: 400 },
@@ -120,8 +145,28 @@
         { id: uid(), name: "Eating Out", limit: 200 },
         { id: uid(), name: "Other", limit: 200 },
       ];
-      saveData();
+      migrated = true;
     }
+
+    // Seed a few default quick-add presets on first launch
+    if (!state.presets.length) {
+      const findCat = (name) => state.categories.find((c) => c.name === name)?.id;
+      state.presets = [
+        { id: uid(), type: "expense", desc: "Coffee", amount: 5, categoryId: findCat("Eating Out") },
+        { id: uid(), type: "expense", desc: "Lunch", amount: 15, categoryId: findCat("Eating Out") },
+        { id: uid(), type: "expense", desc: "Gas", amount: 50, categoryId: findCat("Transport") },
+        { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null },
+      ];
+      migrated = true;
+    }
+
+    if (migrated) saveData();
+  }
+
+  function applyTheme(t) {
+    theme = t;
+    document.documentElement.setAttribute("data-theme", t);
+    localStorage.setItem(KEYS.theme, t);
   }
 
   function saveData() {
@@ -252,19 +297,97 @@
     renderBalances();
     renderTransactions();
     renderInsights();
+    renderPresetsManage();
+    renderThemeButtons();
     populateExpenseCategorySelect();
     renderFilterChips();
     $("#currencySelect").value = currency;
   }
 
+  function renderPresetsManage() {
+    const list = $("#presetsManageList");
+    if (!list) return;
+    if (!state.presets.length) {
+      list.innerHTML = '<li class="empty">No presets yet.</li>';
+      return;
+    }
+    list.innerHTML = state.presets
+      .map((p) => {
+        const cat = state.categories.find((c) => c.id === p.categoryId);
+        const catName = cat ? cat.name : (p.type === "income" ? "Income" : "—");
+        const amt = Number(p.amount) > 0 ? fmt(p.amount) : "any amount";
+        const typeLabel = p.type === "income" ? "💰 Income" : "💸 Expense";
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(p.desc)}</div>
+              <div class="list-item-sub">${typeLabel} · ${escapeHtml(catName)} · ${amt}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="del-preset" data-id="${p.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function renderThemeButtons() {
+    const stored = localStorage.getItem(KEYS.theme);
+    const active = stored ? theme : "auto";
+    $$(".theme-btn").forEach((b) => {
+      b.classList.toggle("active", b.dataset.theme === active);
+    });
+  }
+
+  function exportCsv() {
+    if (!state.expenses.length) {
+      showToast("No transactions to export");
+      return;
+    }
+    const headers = ["Date", "Type", "Description", "Category", "Amount", "Currency"];
+    const rows = [...state.expenses]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((e) => {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        return [
+          e.date,
+          e.type === "income" ? "Income" : "Expense",
+          e.desc,
+          cat ? cat.name : "",
+          (e.type === "income" ? "" : "-") + Number(e.amount).toFixed(2),
+          currency,
+        ];
+      });
+    const csv = [headers, ...rows]
+      .map((row) => row.map(csvEscape).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pocket-budget-${todayStr()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function csvEscape(value) {
+    const s = String(value ?? "");
+    if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
+
   function renderDashboard() {
     const month = currentMonth();
-    const monthExpenses = state.expenses.filter((e) => monthKey(e.date) === month);
+    const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
+    const monthExpenses = monthTxns.filter((e) => e.type !== "income");
+    const monthIncomes = monthTxns.filter((e) => e.type === "income");
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncomeReal = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = Math.max(Number(state.income) || 0, totalIncomeReal);
     const totalSaved = state.goals.reduce((s, g) => s + Number(g.saved || 0), 0);
-    const remaining = Number(state.income) - totalSpent;
+    const remaining = totalIncome - totalSpent;
 
-    $("#statIncome").textContent = fmt(state.income);
+    $("#statIncome").textContent = fmt(totalIncome);
     $("#statSpent").textContent = fmt(totalSpent);
     $("#statRemaining").textContent = fmt(remaining);
     $("#statSaved").textContent = fmt(totalSaved);
@@ -395,7 +518,7 @@
 
   function renderTxnItem(exp) {
     const cat = state.categories.find((c) => c.id === exp.categoryId);
-    const catName = cat ? cat.name : "Uncategorized";
+    const catName = cat ? cat.name : (exp.type === "income" ? "Income" : "Uncategorized");
     const d = formatDateShort(exp.date);
     let receiptHtml;
     if (exp.receipt && exp.receipt.startsWith("data:application/pdf")) {
@@ -403,10 +526,14 @@
     } else if (exp.receipt) {
       receiptHtml = `<img src="${exp.receipt}" class="txn-receipt" data-receipt="${exp.id}" alt="Receipt" />`;
     } else {
-      receiptHtml = `<div class="txn-receipt-placeholder">🧾</div>`;
+      receiptHtml = `<div class="txn-receipt-placeholder ${exp.type === "income" ? "income" : ""}">${exp.type === "income" ? "💵" : "🧾"}</div>`;
     }
+    const isIncome = exp.type === "income";
+    const sign = isIncome ? "+" : "-";
+    const amountClass = isIncome ? "positive" : "negative";
+    const tag = isIncome ? "Received" : "Spent";
     return `
-      <li class="txn-item">
+      <li class="txn-item" data-txn-row="${exp.id}">
         ${receiptHtml}
         <div class="txn-date">
           <span class="day">${d.day}</span>
@@ -418,9 +545,10 @@
           <div class="txn-cat">${escapeHtml(catName)}</div>
         </div>
         <div class="txn-right">
-          <div class="txn-tag">Spent</div>
-          <div class="txn-amount negative">- ${fmt(exp.amount)}</div>
+          <div class="txn-tag">${tag}</div>
+          <div class="txn-amount ${amountClass}">${sign} ${fmt(exp.amount)}</div>
           <div class="txn-actions">
+            <button data-action="edit-exp" data-id="${exp.id}" title="Edit">✏️</button>
             <button data-action="del-exp" data-id="${exp.id}" title="Delete">🗑️</button>
           </div>
         </div>
@@ -497,11 +625,12 @@
   }
 
   function filterExpensesForInsights() {
+    let exps = state.expenses.filter((e) => e.type !== "income");
     if (insightsPeriod === "monthly") {
       const m = currentMonth();
-      return state.expenses.filter((e) => monthKey(e.date) === m);
+      exps = exps.filter((e) => monthKey(e.date) === m);
     }
-    return [...state.expenses];
+    return exps;
   }
 
   const palette = [
@@ -760,18 +889,99 @@
   }
   function attachTxnDelete() { /* handled by global delegated click */ }
 
-  function openExpenseModal() {
-    $("#expDate").value = todayStr();
+  let currentModalType = "expense"; // 'expense' | 'income'
+
+  function openExpenseModal(prefill) {
+    editingTxnId = prefill && prefill.id ? prefill.id : null;
+    currentModalType = (prefill && prefill.type) || "expense";
+
+    $("#expDate").value = (prefill && prefill.date) || todayStr();
+    $("#expDesc").value = (prefill && prefill.desc) || "";
+    $("#expAmount").value = prefill && prefill.amount ? prefill.amount : "";
+    $("#expEditId").value = editingTxnId || "";
+
+    populateExpenseCategorySelect();
+    if (prefill && prefill.categoryId) {
+      $("#expCategory").value = prefill.categoryId;
+    }
+
+    // Receipt prefill (only when editing)
+    const preview = $("#receiptPreview");
+    preview.innerHTML = "";
+    preview.hidden = true;
+    delete preview.dataset.dataUrl;
+    if (prefill && prefill.receipt) {
+      preview.dataset.dataUrl = prefill.receipt;
+      if (prefill.receipt.startsWith("data:application/pdf")) {
+        preview.innerHTML = `<div class="receipt-pdf">📄 Existing PDF receipt</div>`;
+      } else {
+        preview.innerHTML = `<img src="${prefill.receipt}" alt="Receipt" />`;
+      }
+      preview.hidden = false;
+    }
+
+    setModalType(currentModalType);
+
+    $("#modalTitle").textContent = editingTxnId ? "Edit Transaction" : "Add Transaction";
+    $("#submitBtn").textContent = editingTxnId ? "Save Changes" : "Add";
+
+    // Hide presets when editing
+    $("#presetsSection").hidden = !!editingTxnId;
+    if (!editingTxnId) renderPresets();
+
     $("#expenseModal").classList.add("open");
     setTimeout(() => $("#expDesc")?.focus(), 50);
   }
+
   function closeExpenseModal() {
     $("#expenseModal").classList.remove("open");
     $("#expenseForm").reset();
+    $("#expEditId").value = "";
+    editingTxnId = null;
     const preview = $("#receiptPreview");
     preview.hidden = true;
     preview.innerHTML = "";
     delete preview.dataset.dataUrl;
+  }
+
+  function setModalType(type) {
+    currentModalType = type;
+    $$(".type-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
+    const catSel = $("#expCategory");
+    const catRow = $("#categoryRow");
+    if (type === "income") {
+      // Category optional for income — keep visible but not required
+      catSel.required = false;
+      catRow.querySelector("label").textContent = "Category (optional)";
+    } else {
+      catSel.required = true;
+      catRow.querySelector("label").textContent = "Category";
+    }
+  }
+
+  function renderPresets() {
+    const list = $("#presetsList");
+    const items = state.presets.filter((p) => p.type === currentModalType);
+    if (!items.length) {
+      list.innerHTML = '<span class="empty-chip">No presets for this type. Add one with "Save as preset" below.</span>';
+      return;
+    }
+    list.innerHTML = items
+      .map((p) => {
+        const amt = Number(p.amount) > 0 ? ` ${fmt(p.amount)}` : "";
+        return `<button type="button" class="preset-chip" data-preset="${p.id}">
+          ${escapeHtml(p.desc)}${amt}
+        </button>`;
+      })
+      .join("");
+  }
+
+  function applyPreset(id) {
+    const p = state.presets.find((x) => x.id === id);
+    if (!p) return;
+    $("#expDesc").value = p.desc || "";
+    if (Number(p.amount) > 0) $("#expAmount").value = p.amount;
+    if (p.categoryId) $("#expCategory").value = p.categoryId;
   }
 
   /* ---------- Forms & actions ---------- */
@@ -849,15 +1059,89 @@
       const date = $("#expDate").value;
       const categoryId = $("#expCategory").value;
       const receipt = $("#receiptPreview").dataset.dataUrl || null;
+      const editId = $("#expEditId").value;
+      const type = currentModalType;
 
-      if (!desc || isNaN(amount) || !date || !categoryId) return;
+      if (!desc || isNaN(amount) || !date) return;
+      if (type === "expense" && !categoryId) return;
 
-      state.expenses.push({ id: uid(), desc, amount, date, categoryId, receipt });
+      if (editId) {
+        const idx = state.expenses.findIndex((x) => x.id === editId);
+        if (idx >= 0) {
+          state.expenses[idx] = {
+            ...state.expenses[idx],
+            type, desc, amount, date,
+            categoryId: categoryId || null,
+            receipt,
+          };
+        }
+      } else {
+        state.expenses.push({
+          id: uid(), type, desc, amount, date,
+          categoryId: categoryId || null,
+          receipt,
+        });
+      }
       saveData();
       closeExpenseModal();
       renderAll();
-      showToast("Transaction added");
+      showToast(editId ? "Transaction updated" : (type === "income" ? "Income added" : "Transaction added"));
     });
+
+    // Type toggle (expense/income)
+    $$(".type-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setModalType(btn.dataset.type);
+        renderPresets();
+      });
+    });
+
+    // Preset chips inside modal
+    $("#presetsList").addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-preset]");
+      if (!btn) return;
+      applyPreset(btn.dataset.preset);
+    });
+
+    // Save current form as preset
+    $("#savePresetBtn").addEventListener("click", () => {
+      const desc = $("#expDesc").value.trim();
+      const amount = parseFloat($("#expAmount").value);
+      const categoryId = $("#expCategory").value || null;
+      if (!desc) {
+        showToast("Add a description first");
+        return;
+      }
+      state.presets.push({
+        id: uid(),
+        type: currentModalType,
+        desc,
+        amount: isNaN(amount) ? 0 : amount,
+        categoryId,
+      });
+      saveData();
+      renderPresets();
+      renderPresetsManage();
+      showToast("Preset saved");
+    });
+
+    // Theme toggle in settings
+    $$(".theme-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const t = btn.dataset.theme;
+        if (t === "auto") {
+          const sysDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+          applyTheme(sysDark ? "dark" : "light");
+          localStorage.removeItem(KEYS.theme);
+        } else {
+          applyTheme(t);
+        }
+        renderThemeButtons();
+      });
+    });
+
+    // CSV export
+    $("#exportCsvBtn").addEventListener("click", exportCsv);
 
     // FAB and modal close
     $("#fab").addEventListener("click", () => {
@@ -963,6 +1247,15 @@
           saveData();
           renderAll();
         }
+      } else if (action === "edit-exp") {
+        const exp = state.expenses.find((x) => x.id === id);
+        if (exp) openExpenseModal(exp);
+      } else if (action === "del-preset") {
+        if (confirm("Delete this preset?")) {
+          state.presets = state.presets.filter((p) => p.id !== id);
+          saveData();
+          renderPresetsManage();
+        }
       } else if (action === "del-goal") {
         if (confirm("Delete this goal?")) {
           state.goals = state.goals.filter((g) => g.id !== id);
@@ -1035,8 +1328,9 @@
           state = {
             income: data.income || 0,
             categories: data.categories || [],
-            expenses: data.expenses || [],
+            expenses: (data.expenses || []).map((e) => ({ ...e, type: e.type || "expense" })),
             goals: data.goals || [],
+            presets: data.presets || [],
           };
           saveData();
           renderAll();
@@ -1052,7 +1346,7 @@
     // Clear all
     $("#clearAllBtn").addEventListener("click", () => {
       if (confirm("Delete ALL budget data? This cannot be undone.")) {
-        state = { income: 0, categories: [], expenses: [], goals: [] };
+        state = { income: 0, categories: [], expenses: [], goals: [], presets: [] };
         saveData();
         renderAll();
         showToast("All data cleared");

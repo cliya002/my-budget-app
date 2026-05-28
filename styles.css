@@ -33,6 +33,28 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+[data-theme="dark"] {
+  --bg: #161320;
+  --bg-2: #1f1b2e;
+  --card: #221d33;
+  --card-soft: #2a2540;
+  --border: #383253;
+  --text: #ece9f5;
+  --text-dim: #9590ad;
+
+  --primary: #8b6dff;
+  --primary-soft: #2d2350;
+  --primary-hover: #a98cff;
+
+  --sidebar: #2a2240;
+  --sidebar-active: #8b6dff;
+  --sidebar-text: #ece9f5;
+
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
 html, body {
@@ -814,4 +836,105 @@ label {
 @media (max-width: 380px) {
   body { font-size: 14px; }
   .stat-value { font-size: 1.05rem; }
+}
+
+/* ================ Type Toggle (Income/Expense) ================ */
+.type-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  background: var(--card-soft);
+  border-radius: var(--radius-pill);
+  padding: 0.25rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+}
+.type-btn {
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.6rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.9rem;
+  border: none;
+  cursor: pointer;
+}
+.type-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ================ Presets ================ */
+.presets-section { margin-bottom: 1rem; }
+.presets-label {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-bottom: 0.4rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.presets-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.preset-chip {
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s;
+}
+.preset-chip:hover { background: var(--primary); color: #fff; }
+.preset-chip:active { transform: scale(0.98); }
+
+.modal-footer {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+.modal-footer .btn-primary { flex: 1; }
+
+/* ================ Income amount color ================ */
+.txn-amount.positive { color: var(--success); }
+.txn-receipt-placeholder.income {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+}
+
+/* ================ Theme buttons ================ */
+.theme-toggle {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+  background: var(--card-soft);
+  border-radius: var(--radius-pill);
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+}
+.theme-btn {
+  background: transparent;
+  color: var(--text-dim);
+  padding: 0.55rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.85rem;
+  border: none;
+  cursor: pointer;
+}
+.theme-btn.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* ================ Card sub label ================ */
+.card-sub {
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: -0.5rem 0 0 0;
 }

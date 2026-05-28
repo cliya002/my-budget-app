@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=13" />
+  <link rel="stylesheet" href="styles.css?v=14" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -281,6 +281,23 @@
           <div class="page-header"><h1>Settings</h1></div>
 
           <div class="card">
+            <div class="card-title">Appearance</div>
+            <div class="theme-toggle">
+              <button class="theme-btn" data-theme="light">☀️ Light</button>
+              <button class="theme-btn" data-theme="dark">🌙 Dark</button>
+              <button class="theme-btn" data-theme="auto">⚙️ Auto</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Quick-Add Presets</div>
+            <p class="card-sub">Tap a preset in the Add Transaction modal to fill the form instantly.</p>
+            <ul id="presetsManageList" class="list" style="margin-top:0.5rem">
+              <li class="empty">No presets yet.</li>
+            </ul>
+          </div>
+
+          <div class="card">
             <div class="card-title">Currency</div>
             <select id="currencySelect" class="block">
               <option value="USD">USD ($)</option>
@@ -300,8 +317,9 @@
 
           <div class="card">
             <div class="card-title">Data</div>
-            <button id="exportBtn" class="btn-secondary block">Export Data (JSON)</button>
-            <button id="importBtn" class="btn-secondary block" style="margin-top:0.5rem">Import Data</button>
+            <button id="exportBtn" class="btn-secondary block">Export Backup (JSON)</button>
+            <button id="exportCsvBtn" class="btn-secondary block" style="margin-top:0.5rem">Export Transactions (CSV)</button>
+            <button id="importBtn" class="btn-secondary block" style="margin-top:0.5rem">Import Backup</button>
             <input type="file" id="importFile" accept="application/json" hidden />
             <button id="clearAllBtn" class="btn-danger block" style="margin-top:0.5rem">Clear All Data</button>
           </div>
@@ -320,13 +338,25 @@
   <div id="expenseModal" class="modal">
     <div class="modal-card">
       <div class="modal-header">
-        <h2>Add Transaction</h2>
+        <h2 id="modalTitle">Add Transaction</h2>
         <button class="modal-close" id="expenseModalClose">×</button>
       </div>
+
+      <div class="type-toggle">
+        <button type="button" class="type-btn active" data-type="expense">💸 Expense</button>
+        <button type="button" class="type-btn" data-type="income">💰 Income</button>
+      </div>
+
+      <div id="presetsSection" class="presets-section">
+        <div class="presets-label">Quick add</div>
+        <div id="presetsList" class="presets-list"></div>
+      </div>
+
       <form id="expenseForm" class="stack-form">
+        <input type="hidden" id="expEditId" value="" />
         <div class="form-row">
           <label>Description</label>
-          <input type="text" id="expDesc" placeholder="What did you buy?" required />
+          <input type="text" id="expDesc" placeholder="What was this for?" required />
         </div>
         <div class="form-row two-col">
           <div>
@@ -338,32 +368,28 @@
             <input type="date" id="expDate" required />
           </div>
         </div>
-        <div class="form-row">
+        <div class="form-row" id="categoryRow">
           <label>Category</label>
-          <select id="expCategory" required>
+          <select id="expCategory">
             <option value="">Select category</option>
           </select>
         </div>
         <div class="form-row">
           <label>Receipt (optional)</label>
           <div class="receipt-buttons">
-            <button type="button" class="btn-secondary receipt-btn" id="btnTakePhoto">
-              📷 Take Photo
-            </button>
-            <button type="button" class="btn-secondary receipt-btn" id="btnChooseImage">
-              🖼️ Choose from Gallery
-            </button>
-            <button type="button" class="btn-secondary receipt-btn" id="btnUploadFile">
-              📁 Upload File
-            </button>
+            <button type="button" class="btn-secondary receipt-btn" id="btnTakePhoto">📷 Take Photo</button>
+            <button type="button" class="btn-secondary receipt-btn" id="btnChooseImage">🖼️ Gallery</button>
+            <button type="button" class="btn-secondary receipt-btn" id="btnUploadFile">📁 File</button>
           </div>
-          <!-- Hidden inputs: one per source for best mobile compatibility -->
           <input type="file" id="expReceiptCamera" accept="image/*" capture="environment" hidden />
           <input type="file" id="expReceiptGallery" accept="image/*" hidden />
           <input type="file" id="expReceiptFile" accept="image/*,.pdf" hidden />
           <div id="receiptPreview" class="receipt-preview" hidden></div>
         </div>
-        <button type="submit" class="btn-primary block">Add Transaction</button>
+        <div class="modal-footer">
+          <button type="button" id="savePresetBtn" class="btn-secondary">Save as preset</button>
+          <button type="submit" class="btn-primary" id="submitBtn">Add</button>
+        </div>
       </form>
     </div>
   </div>
@@ -380,6 +406,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>
