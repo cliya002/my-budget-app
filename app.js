@@ -1921,6 +1921,253 @@
     $("#scoreForm").reset();
   }
 
+  /* ---------- Credit report import ---------- */
+  let parsedReport = null; // { score, bureau, source, cards: [...] }
+
+  function openImportCreditModal() {
+    parsedReport = null;
+    $("#importText").value = "";
+    $("#importStatus").hidden = true;
+    $("#importPreview").hidden = true;
+    $("#importDetected").innerHTML = "";
+    $("#importCreditModal").classList.add("open");
+  }
+  function closeImportCreditModal() {
+    $("#importCreditModal").classList.remove("open");
+  }
+
+  async function handlePdfImport(file) {
+    const status = $("#importStatus");
+    status.textContent = "Reading PDF…";
+    status.hidden = false;
+    if (!window.pdfjsLib) {
+      status.textContent = "PDF library failed to load. Try pasting text instead.";
+      return;
+    }
+    try {
+      const buf = await file.arrayBuffer();
+      const pdf = await window.pdfjsLib.getDocument({ data: buf }).promise;
+      let fullText = "";
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        const pageText = content.items.map((it) => it.str).join(" ");
+        fullText += pageText + "\n";
+      }
+      status.textContent = `Read ${pdf.numPages} page${pdf.numPages === 1 ? "" : "s"} (${fullText.length} chars). Parsing…`;
+      parseCreditReport(fullText);
+    } catch (e) {
+      console.error(e);
+      status.textContent = "Could not read this PDF. Try pasting the text instead.";
+    }
+  }
+
+  function parseCreditReport(text) {
+    const status = $("#importStatus");
+    const preview = $("#importPreview");
+    const detected = $("#importDetected");
+
+    const result = {
+      score: null,
+      bureau: null,
+      source: null,
+      type: null,
+      reportDate: null,
+      cards: [],
+    };
+
+    // Detect source
+    const lower = text.toLowerCase();
+    if (lower.includes("credit karma")) result.source = "Credit Karma";
+    else if (lower.includes("experian")) result.source = "Experian";
+    else if (lower.includes("equifax")) result.source = "Equifax";
+    else if (lower.includes("transunion")) result.source = "TransUnion";
+    else if (lower.includes("fico")) result.source = "FICO";
+    else result.source = "Other";
+
+    // Detect bureau (CK reports are usually TransUnion + Equifax via VantageScore 3.0)
+    if (lower.includes("transunion")) result.bureau = "TransUnion";
+    else if (lower.includes("equifax")) result.bureau = "Equifax";
+    else if (lower.includes("experian")) result.bureau = "Experian";
+
+    // Detect type
+    if (lower.includes("vantagescore")) result.type = "VantageScore";
+    else if (lower.includes("fico")) result.type = "FICO";
+    else result.type = "VantageScore"; // CK default
+
+    // Find score: 3-digit number 300-850 near "score" keyword
+    const scoreMatches = [];
+    const scoreRegex = /\b(\d{3})\b/g;
+    let m;
+    while ((m = scoreRegex.exec(text)) !== null) {
+      const n = Number(m[1]);
+      if (n >= 300 && n <= 850) {
+        const context = text.slice(Math.max(0, m.index - 60), m.index + 60).toLowerCase();
+        if (/score|rating|fico|vantage/.test(context)) {
+          scoreMatches.push({ score: n, idx: m.index });
+        }
+      }
+    }
+    if (scoreMatches.length) {
+      // Most likely score is the largest one near "credit score"
+      result.score = scoreMatches[0].score;
+    }
+
+    // Find report date — look for a Month YYYY pattern
+    const dateMatch = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,]?\s+(\d{4})\b/i);
+    if (dateMatch) {
+      const d = new Date(dateMatch[0]);
+      if (!isNaN(d)) {
+        result.reportDate = d.toISOString().slice(0, 10);
+      }
+    }
+
+    // Parse cards / accounts. CK lists accounts with names + balance + credit limit
+    // Heuristic: find lines with "$XXX" patterns near common issuer keywords
+    const issuers = [
+      "American Express", "AMEX", "Capital One", "Chase", "Citi", "Discover",
+      "Bank of America", "Wells Fargo", "U.S. Bank", "USAA", "Barclays",
+      "Synchrony", "Apple", "Goldman Sachs", "Navy Federal", "PNC", "TD Bank",
+      "Fifth Third", "Truist", "HSBC", "Best Buy", "Target", "Macy's", "Nordstrom",
+    ];
+
+    // Split text into chunks and look for issuer + dollar amounts
+    const lines = text.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
+    const seenNames = new Set();
+
+    issuers.forEach((issuer) => {
+      const re = new RegExp(`\\b${issuer.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\b`, "i");
+      lines.forEach((line, idx) => {
+        if (!re.test(line)) return;
+        // Look for dollar amounts in this and nearby lines
+        const window = lines.slice(Math.max(0, idx - 2), Math.min(lines.length, idx + 5)).join(" ");
+        const amounts = [...window.matchAll(/\$\s*([\d,]+(?:\.\d{2})?)/g)]
+          .map((m) => Number(m[1].replace(/,/g, "")))
+          .filter((n) => n >= 0 && n <= 1000000);
+
+        if (amounts.length === 0) return;
+
+        // Largest amount is likely credit limit, smaller is balance
+        amounts.sort((a, b) => b - a);
+        const limit = amounts[0];
+        const balance = amounts.length > 1 ? amounts[1] : 0;
+
+        // Don't dupe by issuer name (rough)
+        const key = `${issuer}-${limit}-${balance}`;
+        if (seenNames.has(key)) return;
+        seenNames.add(key);
+
+        result.cards.push({
+          name: issuer,
+          issuer,
+          limit,
+          balance,
+          // Mark as detected — user can edit before saving
+          detected: true,
+        });
+      });
+    });
+
+    parsedReport = result;
+
+    // Render preview
+    let html = "";
+    if (result.score) {
+      html += `<div class="detected-row">
+        <span class="detected-label">Score</span>
+        <span class="detected-val"><strong>${result.score}</strong> ${result.type || ""} ${result.bureau ? "· " + result.bureau : ""}</span>
+      </div>`;
+    } else {
+      html += `<div class="detected-row warn"><span>⚠️ Couldn't detect a score</span></div>`;
+    }
+    if (result.reportDate) {
+      html += `<div class="detected-row">
+        <span class="detected-label">Report date</span>
+        <span class="detected-val">${result.reportDate}</span>
+      </div>`;
+    }
+
+    if (result.cards.length) {
+      html += `<div class="detected-cards-title">${result.cards.length} card${result.cards.length === 1 ? "" : "s"} detected</div>`;
+      html += '<div class="detected-cards">';
+      result.cards.forEach((c, i) => {
+        html += `
+          <div class="detected-card">
+            <div>
+              <strong>${escapeHtml(c.name)}</strong>
+              <div class="detected-mini">Balance: ${fmt(c.balance)} · Limit: ${fmt(c.limit)}</div>
+            </div>
+            <label class="detected-toggle">
+              <input type="checkbox" data-card-idx="${i}" checked />
+              Import
+            </label>
+          </div>`;
+      });
+      html += '</div>';
+    } else {
+      html += `<div class="detected-row warn"><span>No cards detected — you can still save the score, then add cards manually.</span></div>`;
+    }
+
+    detected.innerHTML = html;
+    preview.hidden = false;
+    status.textContent = "Review and confirm below.";
+  }
+
+  function applyImport() {
+    if (!parsedReport) return;
+    let saved = 0;
+
+    // Save score
+    if (parsedReport.score) {
+      state.creditScores.push({
+        id: uid(),
+        score: parsedReport.score,
+        date: parsedReport.reportDate || todayStr(),
+        bureau: parsedReport.bureau || null,
+        source: parsedReport.source || "Imported",
+        type: parsedReport.type || "VantageScore",
+        note: "Imported from credit report",
+      });
+      saved += 1;
+    }
+
+    // Save selected cards
+    const checked = $$('#importDetected input[type="checkbox"]:checked');
+    checked.forEach((cb) => {
+      const idx = Number(cb.dataset.cardIdx);
+      const c = parsedReport.cards[idx];
+      if (!c) return;
+      // Dedupe: skip if a card with same name and similar limit exists
+      const exists = state.cards.find(
+        (existing) =>
+          existing.name.toLowerCase() === c.name.toLowerCase() &&
+          Math.abs((Number(existing.limit) || 0) - (Number(c.limit) || 0)) < 1
+      );
+      if (exists) return;
+
+      state.cards.push({
+        id: uid(),
+        name: c.name,
+        issuer: c.issuer,
+        last4: "",
+        limit: c.limit,
+        balance: c.balance,
+        statement: null,
+        apr: null,
+        dueDay: null,
+        opened: null,
+        cardType: "credit",
+        autopay: false,
+      });
+      saved += 1;
+    });
+
+    saveData();
+    closeImportCreditModal();
+    renderCredit();
+    showToast(`Imported ${saved} item${saved === 1 ? "" : "s"}`);
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -2276,6 +2523,7 @@
     // Credit: open card/score modals
     $("#addCardBtn").addEventListener("click", () => openCardModal(null));
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
+    $("#importCreditBtn").addEventListener("click", openImportCreditModal);
     $("#cardModalClose").addEventListener("click", closeCardModal);
     $("#cardModal").addEventListener("click", (e) => {
       if (e.target.id === "cardModal") closeCardModal();
@@ -2284,6 +2532,29 @@
     $("#scoreModal").addEventListener("click", (e) => {
       if (e.target.id === "scoreModal") closeScoreModal();
     });
+
+    // Import credit modal
+    $("#importCreditClose").addEventListener("click", closeImportCreditModal);
+    $("#importCreditModal").addEventListener("click", (e) => {
+      if (e.target.id === "importCreditModal") closeImportCreditModal();
+    });
+    $("#importPdfBtn").addEventListener("click", () => $("#importPdfFile").click());
+    $("#importPdfFile").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) handlePdfImport(file);
+      e.target.value = "";
+    });
+    $("#importParseBtn").addEventListener("click", () => {
+      const text = $("#importText").value.trim();
+      if (!text) {
+        showToast("Paste some report text first");
+        return;
+      }
+      $("#importStatus").textContent = "Parsing…";
+      $("#importStatus").hidden = false;
+      parseCreditReport(text);
+    });
+    $("#importApplyBtn").addEventListener("click", applyImport);
 
     // Card form
     $("#cardForm").addEventListener("submit", (e) => {

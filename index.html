@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=18" />
+  <link rel="stylesheet" href="styles.css?v=19" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -356,6 +356,7 @@
             <h1>Credit</h1>
             <div class="page-actions">
               <span id="creditScorePill" class="month-pill">No score yet</span>
+              <button id="importCreditBtn" class="btn-secondary">📄 Import Report</button>
               <button id="addScoreBtn" class="btn-secondary">+ Log Score</button>
               <button id="addCardBtn" class="btn-primary">+ Add Card</button>
             </div>
@@ -738,6 +739,34 @@
     </div>
   </div>
 
+  <!-- Import Credit Report Modal -->
+  <div id="importCreditModal" class="modal">
+    <div class="modal-card import-modal">
+      <div class="modal-header">
+        <h2>Import Credit Report</h2>
+        <button class="modal-close" id="importCreditClose">×</button>
+      </div>
+      <p class="card-sub">
+        Upload a PDF report (e.g. from Credit Karma) or paste text. I'll detect scores, cards, balances, and limits.
+      </p>
+      <div class="import-source">
+        <button class="btn-secondary block" id="importPdfBtn">📄 Choose PDF File</button>
+        <input type="file" id="importPdfFile" accept="application/pdf" hidden />
+        <div class="import-or">— or paste text —</div>
+        <textarea id="importText" rows="6" placeholder="Paste your credit report text here..."></textarea>
+        <button class="btn-secondary block" id="importParseBtn" style="margin-top:0.5rem">Parse Pasted Text</button>
+      </div>
+      <div id="importStatus" class="import-status" hidden></div>
+      <div id="importPreview" class="import-preview" hidden>
+        <div class="card-title" style="margin-top:1rem">What I found</div>
+        <div id="importDetected"></div>
+        <button class="btn-primary block" id="importApplyBtn" style="margin-top:0.75rem">
+          Save These to My Account
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add Score Modal -->
   <div id="scoreModal" class="modal">
     <div class="modal-card">
@@ -799,7 +828,14 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=18"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script>
+    if (window.pdfjsLib) {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+    }
+  </script>
+  <script src="app.js?v=19"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

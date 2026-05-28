@@ -1370,3 +1370,76 @@ label {
   .credit-side-stats { grid-template-columns: 1fr; }
   .bureau-grid { grid-template-columns: 1fr; }
 }
+
+/* ================ Credit Report Import ================ */
+.import-modal { max-width: 560px; }
+.import-source { display: flex; flex-direction: column; gap: 0.5rem; }
+.import-or {
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0.25rem;
+}
+#importText {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+}
+.import-status {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+.import-preview {
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+}
+.detected-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.6rem 0.85rem;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.4rem;
+  font-size: 0.9rem;
+}
+.detected-row.warn {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: var(--warning);
+  color: var(--warning);
+  font-weight: 500;
+}
+.detected-label { color: var(--text-dim); }
+.detected-cards-title {
+  font-weight: 700;
+  margin: 0.75rem 0 0.4rem;
+  font-size: 0.95rem;
+}
+.detected-cards { display: flex; flex-direction: column; gap: 0.4rem; }
+.detected-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.7rem 0.85rem;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+.detected-mini { font-size: 0.8rem; color: var(--text-dim); margin-top: 0.15rem; }
+.detected-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  margin: 0;
+  font-weight: 500;
+}
+.detected-toggle input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--primary); }
