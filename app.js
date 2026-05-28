@@ -163,6 +163,13 @@
         location.reload();
       }
     });
+
+    // Auto-focus the password input so the user can type without clicking,
+    // helpful when browser overlays cover parts of the page.
+    setTimeout(() => {
+      const input = $("#passwordInput");
+      if (input) input.focus();
+    }, 100);
   }
 
   function unlock() {
