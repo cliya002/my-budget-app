@@ -7781,12 +7781,18 @@
       const encBlob = await encryptState(state);
       if (!encBlob) throw new Error("Encryption failed");
 
+      // Read this device's local sync history to include in the payload
+      let localHistory = [];
+      try { localHistory = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]"); }
+      catch (e) { localHistory = []; }
+
       const payload = JSON.stringify({
         version: 1,
         encrypted: encBlob,
         salt: localStorage.getItem(KEYS.salt),
         updatedAt: new Date().toISOString(),
         device: getDeviceLabel(),
+        history: localHistory.slice(0, 100), // Most recent 100 events from this device
       });
 
       const body = {
@@ -7944,6 +7950,23 @@
       const decrypted = await decryptState(payload.encrypted);
       if (!decrypted) throw new Error("Decryption failed — wrong password?");
 
+      // Merge sync history from the cloud payload (so all devices see all events)
+      if (Array.isArray(payload.history)) {
+        try {
+          const localHist = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]");
+          // Merge by timestamp+device — dedupe identical events
+          const seen = new Set();
+          const combined = [...localHist, ...payload.history].filter((ev) => {
+            const key = `${ev.ts}|${ev.device || ""}|${ev.action}|${ev.status}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
+          combined.sort((a, b) => b.ts - a.ts);
+          localStorage.setItem(SYNC_HISTORY_KEY, JSON.stringify(combined.slice(0, 200)));
+        } catch (e) { /* ignore */ }
+      }
+
       // Merge remote into local (devices converge to same data)
       const localIds = new Set(state.expenses.map((e) => e.id));
       recentlyPulledIds.clear();
@@ -8098,14 +8121,14 @@
     const myName = getDeviceLabel();
     list.innerHTML = devices.map((d) => {
       const isThis = d.name === myName;
-      const action = d.lastAction === "push" ? "⬆️ Push" : "⬇️ Pull";
+      const action = d.lastAction === "push" ? "⬆️ Last pushed" : "⬇️ Last pulled";
       return `
         <li class="list-item ${isThis ? "this-device" : ""}">
           <div class="list-item-main">
             <div class="list-item-title">
               ${isThis ? "📍 " : "🖥️ "}${escapeHtml(d.name)}${isThis ? " <span class=\"this-tag\">This device</span>" : ""}
             </div>
-            <div class="list-item-sub">${action} · ${formatSyncRelative(d.lastTs)} · ${d.count} sync${d.count === 1 ? "" : "s"}</div>
+            <div class="list-item-sub">${action} ${formatSyncRelative(d.lastTs)} · ${d.count} sync${d.count === 1 ? "" : "s"} total</div>
           </div>
         </li>`;
     }).join("");
