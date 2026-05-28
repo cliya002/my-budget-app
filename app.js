@@ -6066,8 +6066,10 @@
       state.presets.forEach((p) => tombstoneRecord("presets", p.id));
       state.presets = [];
       saveData();
-      renderPresetsManage();
-      renderPresets();
+      // Re-render everything (not just the preset views) so the Add Transaction
+      // modal and other UI stay consistent. Some users reported dropdowns going
+      // empty after this action; full renderAll keeps every control fresh.
+      renderAll();
       showToast("All presets deleted");
     });
 
