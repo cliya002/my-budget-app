@@ -391,6 +391,33 @@
       return out;
     });
 
+    // Re-link subscription-style presets to the Subscriptions category if they
+    // were created before the category existed (categoryId null/empty/missing).
+    const subsCat = state.categories.find((c) => c.name === "Subscriptions");
+    const utilCat = state.categories.find((c) => c.name === "Utilities");
+    const rentCat = state.categories.find((c) => c.name === "Rent");
+    const subscriptionDescs = new Set([
+      "netflix", "spotify", "amazon prime", "disney+", "youtube premium",
+      "apple icloud", "gym",
+    ]);
+    const utilityDescs = new Set([
+      "phone bill", "internet", "electric bill", "water bill",
+    ]);
+    const rentDescs = new Set(["rent"]);
+    state.presets = state.presets.map((p) => {
+      if (p.categoryId) return p; // already categorized
+      const key = String(p.desc || "").toLowerCase().trim();
+      let newCatId = null;
+      if (subsCat && subscriptionDescs.has(key)) newCatId = subsCat.id;
+      else if (utilCat && utilityDescs.has(key)) newCatId = utilCat.id;
+      else if (rentCat && rentDescs.has(key)) newCatId = rentCat.id;
+      if (newCatId) {
+        migrated = true;
+        return { ...p, categoryId: newCatId, updatedAt: Date.now() };
+      }
+      return p;
+    });
+
     if (migrated) saveData();
   }
 
