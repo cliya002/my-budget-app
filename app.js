@@ -48,6 +48,7 @@
     annualReports: {},     // map: bureau -> { lastPulled: 'YYYY-MM-DD' }
     utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
     deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
+    mapTimestamps: {},     // map: collectionName -> { key: lastUpdatedAt } for map-style collections
     settings: {
       rollover: false,
       alertsShown: {},
@@ -288,6 +289,7 @@
     if (typeof state.creditFreezes !== "object" || !state.creditFreezes) state.creditFreezes = {};
     if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
     if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
+    if (typeof state.mapTimestamps !== "object" || !state.mapTimestamps) state.mapTimestamps = {};
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -455,7 +457,7 @@
         // Skip dates that are still in the future
         if (dateStr > todayStr()) return;
 
-        state.expenses.push({
+        state.expenses.push(touchRecord({
           id: uid(),
           type: r.type || "expense",
           desc: r.desc + " (recurring)",
@@ -464,7 +466,7 @@
           categoryId: r.categoryId || null,
           receipt: null,
           recurringId: r.id,
-        });
+        }));
         r.lastRunMonth = m;
         added += 1;
       });
@@ -766,7 +768,7 @@
     const totalPill = $("#goalsTotalSaved");
     if (!overview || !grid) return;
 
-    const totalSaved = state.goals.reduce((s, g) => s + (Number(g.saved) || 0), 0);
+    const totalSaved = state.goals.reduce((s, g) => s + goalSavedTotal(g), 0);
     const totalTarget = state.goals.reduce((s, g) => s + (Number(g.target) || 0), 0);
     if (totalPill) totalPill.textContent = `${fmt(totalSaved)} saved`;
 
@@ -777,7 +779,7 @@
     }
 
     const overallPct = totalTarget > 0 ? (totalSaved / totalTarget) * 100 : 0;
-    const completed = state.goals.filter((g) => Number(g.saved) >= Number(g.target)).length;
+    const completed = state.goals.filter((g) => goalSavedTotal(g) >= Number(g.target)).length;
     overview.innerHTML = `
       <div class="goal-overview-stats">
         <div class="goal-stat">
@@ -793,7 +795,7 @@
     `;
 
     grid.innerHTML = state.goals.map((g) => {
-      const saved = Number(g.saved) || 0;
+      const saved = goalSavedTotal(g);
       const target = Number(g.target) || 0;
       const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
       const remaining = Math.max(0, target - saved);
@@ -890,7 +892,7 @@
     const sorted = [...goalsWithDates].sort((a, b) => a.date.localeCompare(b.date));
     const labels = sorted.map((g) => g.name);
     const targets = sorted.map((g) => Number(g.target));
-    const saved = sorted.map((g) => Number(g.saved) || 0);
+    const saved = sorted.map((g) => goalSavedTotal(g));
 
     charts.goalsTimeline = new Chart(ctx, {
       type: "bar",
@@ -1009,6 +1011,22 @@
   function setIncomeForMonth(monthKeyStr, amount) {
     if (!state.monthlyIncome) state.monthlyIncome = {};
     state.monthlyIncome[monthKeyStr] = Number(amount) || 0;
+    touchMapKey("monthlyIncome", monthKeyStr);
+  }
+
+  // Total saved toward a goal: manual baseline (goal.saved) + sum of expense
+  // transactions tagged with this goalId. Used wherever progress is shown so the
+  // UI cannot drift from the underlying transaction history.
+  function goalSavedTotal(goal) {
+    if (!goal) return 0;
+    const baseline = Number(goal.saved) || 0;
+    const fromTxns = state.expenses.reduce((s, e) => {
+      if (e.goalId === goal.id && e.type === "expense") {
+        return s + (Number(e.amount) || 0);
+      }
+      return s;
+    }, 0);
+    return baseline + fromTxns;
   }
 
   function renderMonthIncomeList() {
@@ -1507,7 +1525,7 @@
     // 8) Goal progress
     state.goals.forEach((g) => {
       const target = Number(g.target) || 0;
-      const saved = Number(g.saved) || 0;
+      const saved = goalSavedTotal(g);
       if (target <= 0 || saved <= 0) return;
       const pct = (saved / target) * 100;
       if (pct >= 100) {
@@ -2121,7 +2139,7 @@
     const totalIncomeReal = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
     const targetIncome = incomeForMonth(month);
     const totalIncome = Math.max(targetIncome, totalIncomeReal);
-    const totalSaved = state.goals.reduce((s, g) => s + Number(g.saved || 0), 0);
+    const totalSaved = state.goals.reduce((s, g) => s + goalSavedTotal(g), 0);
     const remaining = totalIncome - totalSpent;
 
     $("#statIncome").textContent = fmt(totalIncome);
@@ -2231,7 +2249,7 @@
     } else {
       dashGoals.innerHTML = state.goals
         .map((g) => {
-          const saved = Number(g.saved) || 0;
+          const saved = goalSavedTotal(g);
           const target = Number(g.target) || 0;
           const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
           return `
@@ -2290,7 +2308,7 @@
     } else {
       goalList.innerHTML = state.goals
         .map((g) => {
-          const saved = Number(g.saved) || 0;
+          const saved = goalSavedTotal(g);
           const target = Number(g.target) || 0;
           const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
           const dateStr = g.date ? ` · by ${g.date}` : "";
@@ -5432,7 +5450,7 @@
     const paycheckId = uid();
 
     // Create the income transaction (gross amount, pre-tax flag true)
-    state.expenses.push({
+    state.expenses.push(touchRecord({
       id: uid(),
       type: "income",
       desc: `Paycheck — ${employer}`,
@@ -5450,7 +5468,7 @@
       paycheckMeta: {
         gross, net, fedTax, stateTax, fica, health, k401, hsa,
       },
-    });
+    }));
 
     // Create deduction expenses (categorized as Tax / Benefits where possible)
     const taxCat = state.categories.find((c) => /tax/i.test(c.name))?.id || null;
@@ -5465,7 +5483,7 @@
     ];
     deductions.forEach(([name, amount, catId]) => {
       if (amount <= 0) return;
-      state.expenses.push({
+      state.expenses.push(touchRecord({
         id: uid(),
         type: "expense",
         desc: `${name} (${employer})`,
@@ -5477,12 +5495,12 @@
         tags: ["paycheck-deduction"],
         receipt: null,
         paycheckId,
-      });
+      }));
     });
 
     // Create transfer-in transactions for each account split
     splits.forEach((split) => {
-      state.expenses.push({
+      state.expenses.push(touchRecord({
         id: uid(),
         type: "transfer-in",
         desc: `Paycheck split — ${employer}`,
@@ -5494,7 +5512,7 @@
         tags: ["paycheck"],
         receipt: null,
         paycheckId,
-      });
+      }));
     });
 
     saveData();
@@ -5627,7 +5645,7 @@
       const name = $("#catName").value.trim();
       const limit = parseFloat($("#catLimit").value);
       if (!name || isNaN(limit)) return;
-      state.categories.push({ id: uid(), name, limit });
+      state.categories.push(touchRecord({ id: uid(), name, limit }));
       saveData();
       $("#catName").value = "";
       $("#catLimit").value = "";
@@ -5734,13 +5752,12 @@
           preTax,
         }));
 
-        // Apply manual goal contribution: amount goes toward saved
-        if (goalId && type === "expense") {
-          const g = state.goals.find((x) => x.id === goalId);
-          if (g) g.saved = (Number(g.saved) || 0) + Number(amount);
-        }
+        // Goal contribution: txn already gets counted via goalSavedTotal(),
+        // so we don't increment goal.saved here (avoids double-count and keeps
+        // the display in sync after edits/deletes).
 
-        // Round-up savings
+        // Round-up savings — record as a separate transaction tagged to the goal,
+        // so it survives sync, edits, and recomputation.
         if (
           state.settings.roundUpEnabled &&
           state.settings.roundUpGoalId &&
@@ -5751,7 +5768,19 @@
           if (roundUp > 0) {
             const g = state.goals.find((x) => x.id === state.settings.roundUpGoalId);
             if (g) {
-              g.saved = (Number(g.saved) || 0) + roundUp;
+              state.expenses.push(touchRecord({
+                id: uid(),
+                type: "expense",
+                desc: `Round-up → ${g.name}`,
+                amount: roundUp,
+                date,
+                categoryId: null,
+                accountId: null,
+                personId: null,
+                goalId: g.id,
+                tags: ["round-up"],
+                receipt: null,
+              }));
               showToast(`+${fmt(roundUp)} rounded up to ${g.name}`);
             }
           }
@@ -5803,7 +5832,7 @@
           ? "subscription" : "daily";
       }
       const icon = prompt("Pick an emoji icon (optional):", currentModalType === "income" ? "💵" : "💸") || "💸";
-      state.presets.push({
+      state.presets.push(touchRecord({
         id: uid(),
         type: currentModalType,
         desc,
@@ -5812,7 +5841,7 @@
         group,
         icon,
         favorite: false,
-      });
+      }));
       saveData();
       renderPresets();
       renderPresetsManage();
@@ -5829,7 +5858,7 @@
       defaults.forEach((d) => {
         const key = `${d.type}|${d.desc.toLowerCase()}`;
         if (!existingKeys.has(key)) {
-          state.presets.push(d);
+          state.presets.push(touchRecord(d));
           existingKeys.add(key);
           added += 1;
         }
@@ -6082,7 +6111,7 @@
         income: 0, monthlyIncome: {}, categories: [], expenses: [], goals: [],
         presets: [], recurring: [], cards: [], creditScores: [], accounts: [], people: [],
         netWorthHistory: [], creditInquiries: [], negativeItems: [], limitIncreases: [],
-        creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {},
+        creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {}, mapTimestamps: {},
         settings: { rollover: false, alertsShown: {} },
       };
       state = empty;
@@ -6201,7 +6230,7 @@
       const target = parseFloat($("#goalTarget").value);
       const date = $("#goalDate").value;
       if (!name || isNaN(target)) return;
-      state.goals.push({ id: uid(), name, target, saved: 0, date });
+      state.goals.push(touchRecord({ id: uid(), name, target, saved: 0, date }));
       saveData();
       e.target.reset();
       renderAll();
@@ -6260,7 +6289,7 @@
       const target = parseFloat(targetStr);
       if (isNaN(target)) return;
       const date = prompt("Target date (YYYY-MM-DD, optional):");
-      state.goals.push({ id: uid(), name: name.trim(), target, saved: 0, date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "" });
+      state.goals.push(touchRecord({ id: uid(), name: name.trim(), target, saved: 0, date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "" }));
       saveData();
       renderAll();
       showToast("Goal added");
@@ -6279,7 +6308,7 @@
         showToast("Day must be between 1 and 28");
         return;
       }
-      state.recurring.push({
+      state.recurring.push(touchRecord({
         id: uid(),
         type,
         desc,
@@ -6288,7 +6317,7 @@
         dayOfMonth,
         active: true,
         lastRunMonth: null,
-      });
+      }));
       saveData();
       processRecurring(); // Catch up immediately for any prior months
       e.target.reset();
@@ -6352,7 +6381,7 @@
       if (!name) return;
       const colors = ["#22c55e", "#3b82f6", "#ec4899", "#f59e0b", "#8b5cf6", "#14b8a6", "#06b6d4", "#ef4444"];
       const color = colors[state.accounts.length % colors.length];
-      state.accounts.push({ id: uid(), name, type, balance, color });
+      state.accounts.push(touchRecord({ id: uid(), name, type, balance, color }));
       saveData();
       e.target.reset();
       renderAll();
@@ -6382,7 +6411,7 @@
       const desc = note || `Transfer: ${fromAcc.name} → ${toAcc.name}`;
       // Two linked transactions
       const transferGroupId = uid();
-      state.expenses.push({
+      state.expenses.push(touchRecord({
         id: uid(),
         type: "transfer-out",
         desc,
@@ -6393,8 +6422,8 @@
         tags: ["transfer"],
         receipt: null,
         transferGroupId,
-      });
-      state.expenses.push({
+      }));
+      state.expenses.push(touchRecord({
         id: uid(),
         type: "transfer-in",
         desc,
@@ -6405,7 +6434,7 @@
         tags: ["transfer"],
         receipt: null,
         transferGroupId,
-      });
+      }));
       saveData();
       closeTransferModal();
       renderAll();
@@ -6431,9 +6460,9 @@
       if (!person.name) return;
       if (editId) {
         const idx = state.people.findIndex((p) => p.id === editId);
-        if (idx >= 0) state.people[idx] = person;
+        if (idx >= 0) state.people[idx] = touchRecord(person);
       } else {
-        state.people.push(person);
+        state.people.push(touchRecord(person));
       }
       saveData();
       closePersonModal();
@@ -6478,21 +6507,21 @@
 
       // Auto-log a limit-increase entry if user raised the limit
       if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
-        state.limitIncreases.push({
+        state.limitIncreases.push(touchRecord({
           id: uid(),
           cardId: card.id,
           oldLimit: Number(oldCard.limit),
           newLimit: Number(card.limit),
           date: todayStr(),
           note: "Auto-logged from card edit",
-        });
+        }));
       }
 
       if (editId) {
         const idx = state.cards.findIndex((c) => c.id === editId);
-        if (idx >= 0) state.cards[idx] = card;
+        if (idx >= 0) state.cards[idx] = touchRecord(card);
       } else {
-        state.cards.push(card);
+        state.cards.push(touchRecord(card));
       }
       saveData();
       closeCardModal();
@@ -6506,7 +6535,7 @@
       const score = parseInt($("#scoreValue").value, 10);
       const date = $("#scoreDate").value;
       if (!score || score < 300 || score > 850 || !date) return;
-      state.creditScores.push({
+      state.creditScores.push(touchRecord({
         id: uid(),
         score,
         date,
@@ -6514,7 +6543,7 @@
         source: $("#scoreSource").value,
         type: $("#scoreType").value,
         note: $("#scoreNote").value.trim(),
-      });
+      }));
       saveData();
       closeScoreModal();
       renderCredit();
@@ -6539,9 +6568,9 @@
       const reason = $("#inquiryReason").value.trim();
       const bureau = $("#inquiryBureau").value || null;
       if (!date || !reason) return;
-      state.creditInquiries.push({
+      state.creditInquiries.push(touchRecord({
         id: uid(), date, reason, bureau, type: "hard",
-      });
+      }));
       saveData();
       $("#inquiryModal").classList.remove("open");
       renderCredit();
@@ -6565,13 +6594,13 @@
       const type = $("#negType").value;
       const date = $("#negDate").value;
       if (!type || !date) return;
-      state.negativeItems.push({
+      state.negativeItems.push(touchRecord({
         id: uid(),
         type, date,
         creditor: $("#negCreditor").value.trim(),
         amount: parseFloat($("#negAmount").value) || 0,
         note: $("#negNote").value.trim(),
-      });
+      }));
       saveData();
       $("#negativeModal").classList.remove("open");
       renderCredit();
@@ -6595,9 +6624,9 @@
       const targetDate = $("#goalDate2").value;
       const note = $("#goalNote").value.trim();
       if (!targetScore || !targetDate) return;
-      state.creditGoals.push({
+      state.creditGoals.push(touchRecord({
         id: uid(), targetScore, targetDate, note,
-      });
+      }));
       saveData();
       $("#creditGoalModal").classList.remove("open");
       renderCredit();
@@ -6613,6 +6642,7 @@
         } else {
           state.creditFreezes[bureau] = { frozen: false, date: null };
         }
+        touchMapKey("creditFreezes", bureau);
         saveData();
         renderFreezes();
         showToast(`${bureau} ${e.target.checked ? "frozen" : "unfrozen"}`);
@@ -6727,6 +6757,13 @@
         if (confirm("Delete this category? Transactions will show 'Uncategorized'.")) {
           tombstoneRecord("categories", id);
           state.categories = state.categories.filter((c) => c.id !== id);
+          // Clear orphan references on transactions and remove from filter chip set
+          state.expenses.forEach((e) => {
+            if (e.categoryId === id) {
+              e.categoryId = null;
+              touchRecord(e);
+            }
+          });
           filters.categories.delete(id);
           saveData();
           renderAll();
@@ -6741,6 +6778,7 @@
         cat.name = newName.trim() || cat.name;
         const lim = parseFloat(newLimit);
         if (!isNaN(lim)) cat.limit = lim;
+        touchRecord(cat);
         saveData();
         renderAll();
       } else if (action === "del-exp") {
@@ -6772,6 +6810,7 @@
         const p = state.presets.find((x) => x.id === id);
         if (!p) return;
         p.favorite = !p.favorite;
+        touchRecord(p);
         saveData();
         renderPresetsManage();
         renderPresets();
@@ -6781,7 +6820,7 @@
         const day = prompt(`Make "${p.desc}" recurring on which day of month? (1-28)`, "1");
         if (day === null) return;
         const dayOfMonth = Math.min(28, Math.max(1, parseInt(day, 10) || 1));
-        state.recurring.push({
+        state.recurring.push(touchRecord({
           id: uid(),
           type: p.type,
           desc: p.desc,
@@ -6790,7 +6829,7 @@
           dayOfMonth,
           active: true,
           lastRunMonth: null,
-        });
+        }));
         saveData();
         renderRecurringList();
         showToast(`"${p.desc}" is now recurring on day ${dayOfMonth}`);
@@ -6798,6 +6837,7 @@
         const r = state.recurring.find((x) => x.id === id);
         if (r) {
           r.active = !r.active;
+          touchRecord(r);
           saveData();
           renderRecurringList();
           showToast(r.active ? "Recurring resumed" : "Recurring paused");
@@ -6822,6 +6862,7 @@
         acc.name = newName.trim() || acc.name;
         const b = parseFloat(newBal);
         if (!isNaN(b)) acc.balance = b;
+        touchRecord(acc);
         saveData();
         renderAll();
       } else if (action === "edit-month-income") {
@@ -6839,6 +6880,7 @@
         const m = btn.dataset.month;
         if (confirm(`Remove income override for ${monthLabel(m)}? Default will be used instead.`)) {
           delete state.monthlyIncome[m];
+          tombstoneMapKey("monthlyIncome", m);
           saveData();
           renderAll();
         }
@@ -6846,6 +6888,13 @@
         if (confirm("Delete this account? Transactions assigned to it will keep their record.")) {
           tombstoneRecord("accounts", id);
           state.accounts = state.accounts.filter((a) => a.id !== id);
+          // Clear orphan references on transactions
+          state.expenses.forEach((e) => {
+            if (e.accountId === id) {
+              e.accountId = null;
+              touchRecord(e);
+            }
+          });
           saveData();
           renderAll();
         }
@@ -6856,10 +6905,14 @@
         if (confirm("Delete this person? Transactions linked to them will keep their record but lose the link.")) {
           tombstoneRecord("people", id);
           state.people = state.people.filter((p) => p.id !== id);
-          // Unlink transactions
+          // Unlink transactions and remove from filter chip set
           state.expenses.forEach((e) => {
-            if (e.personId === id) e.personId = null;
+            if (e.personId === id) {
+              e.personId = null;
+              touchRecord(e);
+            }
           });
+          filters.people.delete(id);
           saveData();
           renderAll();
         }
@@ -6908,6 +6961,7 @@
       } else if (action === "mark-pulled") {
         const bureau = btn.dataset.bureau;
         state.annualReports[bureau] = { lastPulled: todayStr() };
+        touchMapKey("annualReports", bureau);
         saveData();
         renderAnnualReports();
         showToast(`${bureau} report marked pulled today`);
@@ -6917,7 +6971,7 @@
         const suggestions = JSON.parse(el.dataset.suggestionsJson || "[]");
         const s = suggestions[idx];
         if (!s) return;
-        state.recurring.push({
+        state.recurring.push(touchRecord({
           id: uid(),
           type: "expense",
           desc: s.desc,
@@ -6926,7 +6980,7 @@
           dayOfMonth: s.dayOfMonth || 1,
           active: true,
           lastRunMonth: currentMonth(),
-        });
+        }));
         saveData();
         renderRecurringList();
         showToast("Converted to recurring");
@@ -6943,6 +6997,17 @@
         if (confirm("Delete this goal?")) {
           tombstoneRecord("goals", id);
           state.goals = state.goals.filter((g) => g.id !== id);
+          // Clear orphan goalId references
+          state.expenses.forEach((e) => {
+            if (e.goalId === id) {
+              e.goalId = null;
+              touchRecord(e);
+            }
+          });
+          // Clear round-up destination if it pointed here
+          if (state.settings.roundUpGoalId === id) {
+            state.settings.roundUpGoalId = null;
+          }
           saveData();
           renderAll();
         }
@@ -6952,7 +7017,9 @@
         if (isNaN(amt) || amt <= 0) return;
         const goal = state.goals.find((g) => g.id === id);
         if (!goal) return;
+        // Manual contribution — add to baseline (no transaction record)
         goal.saved = (Number(goal.saved) || 0) + amt;
+        touchRecord(goal);
         saveData();
         renderAll();
         showToast("Savings updated");
@@ -7066,6 +7133,7 @@
             creditFreezes: data.creditFreezes || {},
             annualReports: data.annualReports || {},
             deletions: data.deletions || {},
+            mapTimestamps: data.mapTimestamps || {},
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -7103,6 +7171,7 @@
           creditFreezes: {},
           annualReports: {},
           deletions: {},
+          mapTimestamps: {},
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();
@@ -7236,7 +7305,7 @@
     const goalHits = state.goals.filter((g) => matches(g.name)).map((g) => ({
       icon: "🎯",
       title: g.name,
-      sub: `Goal · ${fmt(g.saved || 0)} of ${fmt(g.target)}`,
+      sub: `Goal · ${fmt(goalSavedTotal(g))} of ${fmt(g.target)}`,
       action: () => { closeGlobalSearch(); $('[data-tab="balances"]').click(); },
     }));
 
@@ -7582,7 +7651,7 @@
         if (catName) categoryId = state.categories.find((c) => c.name === catName)?.id || null;
       }
 
-      state.expenses.push({
+      state.expenses.push(touchRecord({
         id: uid(),
         type,
         desc,
@@ -7593,7 +7662,7 @@
         personId: null,
         tags: ["csv-import"],
         receipt: null,
-      });
+      }));
       added += 1;
     });
     saveData();
@@ -7679,16 +7748,57 @@
       merged[key] = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
     });
 
-    // Merge map-style settings (e.g. monthly income overrides)
+    // Merge map-style settings (e.g. monthly income overrides) — respect tombstones + timestamps
     MAP_COLLECTIONS.forEach((key) => {
       const lm = (local[key] && typeof local[key] === "object") ? local[key] : {};
       const rm = (remote[key] && typeof remote[key] === "object") ? remote[key] : {};
-      merged[key] = { ...rm, ...lm }; // local wins for explicit overrides
+      const lts = (local.mapTimestamps && local.mapTimestamps[key]) || {};
+      const rts = (remote.mapTimestamps && remote.mapTimestamps[key]) || {};
+      const ldel = (local.deletions && local.deletions[key]) || {};
+      const rdel = (remote.deletions && remote.deletions[key]) || {};
+      const out = {};
+      // Union of all known keys across both sides
+      const allKeys = new Set([...Object.keys(lm), ...Object.keys(rm)]);
+      allKeys.forEach((mk) => {
+        const localTs = Number(lts[mk]) || 0;
+        const remoteTs = Number(rts[mk]) || 0;
+        const delTs = Math.max(Number(ldel[mk]) || 0, Number(rdel[mk]) || 0);
+        const latestUpdate = Math.max(localTs, remoteTs);
+        // Tombstone wins if it's at least as recent as the latest update
+        if (delTs > 0 && delTs >= latestUpdate) return;
+        // Pick newer side; default to local when both timestamps are equal/missing
+        if (remoteTs > localTs && Object.prototype.hasOwnProperty.call(rm, mk)) {
+          out[mk] = rm[mk];
+        } else if (Object.prototype.hasOwnProperty.call(lm, mk)) {
+          out[mk] = lm[mk];
+        } else if (Object.prototype.hasOwnProperty.call(rm, mk)) {
+          out[mk] = rm[mk];
+        }
+      });
+      merged[key] = out;
     });
 
-    // Merge tombstones (max timestamp per id)
+    // Merge mapTimestamps (max per key)
+    const mergedMapTs = {};
+    MAP_COLLECTIONS.forEach((key) => {
+      const lts = (local.mapTimestamps && local.mapTimestamps[key]) || {};
+      const rts = (remote.mapTimestamps && remote.mapTimestamps[key]) || {};
+      const out = { ...rts };
+      Object.keys(lts).forEach((k) => {
+        out[k] = Math.max(Number(out[k]) || 0, Number(lts[k]) || 0);
+      });
+      // Drop timestamps for keys that no longer exist in the merged result
+      const survivingKeys = Object.keys(merged[key] || {});
+      Object.keys(out).forEach((k) => {
+        if (!survivingKeys.includes(k)) delete out[k];
+      });
+      mergedMapTs[key] = out;
+    });
+    merged.mapTimestamps = mergedMapTs;
+
+    // Merge tombstones (max timestamp per id) — covers id-keyed and map-keyed collections
     const mergedDeletions = {};
-    [...MERGE_COLLECTIONS].forEach((key) => {
+    [...MERGE_COLLECTIONS, ...MAP_COLLECTIONS].forEach((key) => {
       const ld = (local.deletions && local.deletions[key]) || {};
       const rd = (remote.deletions && remote.deletions[key]) || {};
       const out = { ...rd };
@@ -7723,6 +7833,28 @@
     if (!state.deletions) state.deletions = {};
     if (!state.deletions[collection]) state.deletions[collection] = {};
     state.deletions[collection][id] = Date.now();
+  }
+
+  // Tombstone a key inside a map-style collection (e.g. monthlyIncome[YYYY-MM])
+  function tombstoneMapKey(collection, key) {
+    if (!state.deletions) state.deletions = {};
+    if (!state.deletions[collection]) state.deletions[collection] = {};
+    state.deletions[collection][key] = Date.now();
+    // Clear any local timestamp so the deletion is unambiguous
+    if (state.mapTimestamps && state.mapTimestamps[collection]) {
+      delete state.mapTimestamps[collection][key];
+    }
+  }
+
+  // Stamp a key inside a map-style collection so sync can compare freshness vs. tombstones
+  function touchMapKey(collection, key) {
+    if (!state.mapTimestamps) state.mapTimestamps = {};
+    if (!state.mapTimestamps[collection]) state.mapTimestamps[collection] = {};
+    state.mapTimestamps[collection][key] = Date.now();
+    // If this key was previously tombstoned, clear the tombstone
+    if (state.deletions && state.deletions[collection]) {
+      delete state.deletions[collection][key];
+    }
   }
 
   // Purge tombstones older than 90 days — anything that old is unlikely to come back from a stale device
