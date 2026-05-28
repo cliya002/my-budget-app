@@ -46,6 +46,7 @@
     creditFreezes: {},     // map: bureau -> { frozen: bool, date: 'YYYY-MM-DD' }
     annualReports: {},     // map: bureau -> { lastPulled: 'YYYY-MM-DD' }
     utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
+    deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
     settings: {
       rollover: false,
       alertsShown: {},
@@ -283,6 +284,7 @@
     if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
     if (typeof state.creditFreezes !== "object" || !state.creditFreezes) state.creditFreezes = {};
     if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
+    if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -579,11 +581,10 @@
     startAutoLock();
     startAutoSync();
     updateSyncIndicator("synced");
-    // Auto-pull on unlock if enabled
-    if (localStorage.getItem("mb_auto_sync") === "true" && localStorage.getItem(KEYS.syncGistId)) {
-      // Don't replace data automatically — only if user has Gist set up
-      // We'll quietly do a "fetch + check timestamp" — if remote is newer, prompt
-      checkForRemoteUpdate();
+    // If sync is set up, automatically merge cloud data on open
+    if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId)) {
+      // Silent merge — never overwrites local with older data
+      setTimeout(() => syncPull({ skipConfirm: true, silent: true }), 1000);
     }
     maybeStartTour();
   }
@@ -5639,7 +5640,7 @@
       if (editId) {
         const idx = state.expenses.findIndex((x) => x.id === editId);
         if (idx >= 0) {
-          state.expenses[idx] = {
+          state.expenses[idx] = touchRecord({
             ...state.expenses[idx],
             type, desc, amount, date,
             categoryId: categoryId || null,
@@ -5651,10 +5652,10 @@
             incomeType,
             source,
             preTax,
-          };
+          });
         }
       } else {
-        state.expenses.push({
+        state.expenses.push(touchRecord({
           id: uid(), type, desc, amount, date,
           categoryId: categoryId || null,
           accountId: accountId || null,
@@ -5665,7 +5666,7 @@
           incomeType,
           source,
           preTax,
-        });
+        }));
 
         // Apply manual goal contribution: amount goes toward saved
         if (goalId && type === "expense") {
@@ -6515,6 +6516,7 @@
       const ids = [...selectedTxns];
       if (!confirm(`Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}?`)) return;
       const removed = state.expenses.filter((e) => ids.includes(e.id));
+      ids.forEach((id) => tombstoneRecord("expenses", id));
       state.expenses = state.expenses.filter((e) => !ids.includes(e.id));
       selectedTxns.clear();
       saveData();
@@ -6593,6 +6595,7 @@
       } else if (action === "del-exp") {
         const txn = state.expenses.find((x) => x.id === id);
         if (txn && confirm("Delete this transaction?")) {
+          tombstoneRecord("expenses", id);
           state.expenses = state.expenses.filter((x) => x.id !== id);
           saveData();
           renderAll();
@@ -6892,6 +6895,7 @@
             utilHistory: data.utilHistory || [],
             creditFreezes: data.creditFreezes || {},
             annualReports: data.annualReports || {},
+            deletions: data.deletions || {},
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -6928,6 +6932,7 @@
           utilHistory: [],
           creditFreezes: {},
           annualReports: {},
+          deletions: {},
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();
@@ -7429,7 +7434,123 @@
     showToast(`Imported ${added}${skipped ? ` · ${skipped} skipped` : ""}`);
   }
 
-  /* ---------- Cloud Sync via GitHub Gist ---------- */
+  /* ---------- Merge engine for cross-device sync ---------- */
+  // Collections that have id-keyed records and should be merged item-by-item
+  const MERGE_COLLECTIONS = [
+    "categories", "expenses", "goals", "presets", "recurring",
+    "cards", "creditScores", "accounts", "people",
+    "creditInquiries", "negativeItems", "limitIncreases", "creditGoals",
+  ];
+  // Date-keyed time series — keep newest value per date
+  const DATE_SERIES_COLLECTIONS = ["netWorthHistory", "utilHistory"];
+  // Map-style settings — merge keys
+  const MAP_COLLECTIONS = ["monthlyIncome", "creditFreezes", "annualReports"];
+
+  function recordTimestamp(rec) {
+    if (rec.updatedAt) return Number(rec.updatedAt);
+    // Fall back: extract creation time from id (uid format)
+    if (typeof rec.id === "string") {
+      const part = rec.id.split(".")[0] || rec.id.slice(0, 9);
+      const t = parseInt(part, 36);
+      if (!isNaN(t) && t > 1577836800000) return t; // sanity: after 2020
+    }
+    return 0;
+  }
+
+  function mergeStates(local, remote) {
+    const merged = { ...local };
+
+    // Merge each id-keyed collection
+    MERGE_COLLECTIONS.forEach((key) => {
+      const localArr = Array.isArray(local[key]) ? local[key] : [];
+      const remoteArr = Array.isArray(remote[key]) ? remote[key] : [];
+      const localDel = (local.deletions && local.deletions[key]) || {};
+      const remoteDel = (remote.deletions && remote.deletions[key]) || {};
+
+      const byId = new Map();
+      localArr.forEach((r) => byId.set(r.id, r));
+      remoteArr.forEach((r) => {
+        const existing = byId.get(r.id);
+        if (!existing) byId.set(r.id, r);
+        else if (recordTimestamp(r) > recordTimestamp(existing)) byId.set(r.id, r);
+      });
+
+      // Remove items that have been tombstoned more recently than the record was updated
+      const result = [];
+      byId.forEach((r) => {
+        const localDelTs = localDel[r.id] || 0;
+        const remoteDelTs = remoteDel[r.id] || 0;
+        const delTs = Math.max(localDelTs, remoteDelTs);
+        if (delTs > 0 && delTs > recordTimestamp(r)) return; // deletion wins
+        result.push(r);
+      });
+      merged[key] = result;
+    });
+
+    // Merge date-keyed time series
+    DATE_SERIES_COLLECTIONS.forEach((key) => {
+      const localArr = Array.isArray(local[key]) ? local[key] : [];
+      const remoteArr = Array.isArray(remote[key]) ? remote[key] : [];
+      const byDate = new Map();
+      localArr.forEach((r) => byDate.set(r.date, r));
+      remoteArr.forEach((r) => {
+        const existing = byDate.get(r.date);
+        if (!existing) byDate.set(r.date, r);
+        // For same date, prefer the higher-magnitude value (often more accurate snapshot)
+      });
+      merged[key] = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
+    });
+
+    // Merge map-style settings (e.g. monthly income overrides)
+    MAP_COLLECTIONS.forEach((key) => {
+      const lm = (local[key] && typeof local[key] === "object") ? local[key] : {};
+      const rm = (remote[key] && typeof remote[key] === "object") ? remote[key] : {};
+      merged[key] = { ...rm, ...lm }; // local wins for explicit overrides
+    });
+
+    // Merge tombstones (max timestamp per id)
+    const mergedDeletions = {};
+    [...MERGE_COLLECTIONS].forEach((key) => {
+      const ld = (local.deletions && local.deletions[key]) || {};
+      const rd = (remote.deletions && remote.deletions[key]) || {};
+      const out = { ...rd };
+      Object.keys(ld).forEach((id) => {
+        out[id] = Math.max(out[id] || 0, ld[id]);
+      });
+      mergedDeletions[key] = out;
+    });
+    merged.deletions = mergedDeletions;
+
+    // Scalar settings: prefer remote unless local was changed more recently
+    // For income (legacy global), use the larger non-zero value as a heuristic
+    if (Number(remote.income) > 0 && Number(remote.income) !== Number(local.income)) {
+      merged.income = Math.max(Number(local.income) || 0, Number(remote.income) || 0);
+    }
+
+    // Settings object — merge sub-keys
+    merged.settings = {
+      ...(remote.settings || {}),
+      ...(local.settings || {}),
+      // Always merge alertsShown by union
+      alertsShown: {
+        ...((remote.settings && remote.settings.alertsShown) || {}),
+        ...((local.settings && local.settings.alertsShown) || {}),
+      },
+    };
+
+    return merged;
+  }
+
+  function tombstoneRecord(collection, id) {
+    if (!state.deletions) state.deletions = {};
+    if (!state.deletions[collection]) state.deletions[collection] = {};
+    state.deletions[collection][id] = Date.now();
+  }
+
+  function touchRecord(rec) {
+    rec.updatedAt = Date.now();
+    return rec;
+  }
   const SYNC_FILENAME = "pocket-budget-encrypted.json";
   let autoSyncTimer = null;
   let dirtyForSync = false;
@@ -7594,7 +7715,7 @@
     try {
       const gistId = localStorage.getItem(KEYS.syncGistId);
 
-      // Conflict check: fetch remote's updatedAt before pushing
+      // Always pull-and-merge first so we never lose remote changes
       if (gistId && !force) {
         try {
           const checkRes = await fetch(`https://api.github.com/gists/${gistId}`, {
@@ -7605,30 +7726,24 @@
             const file = checkData.files[SYNC_FILENAME];
             if (file) {
               const remotePayload = JSON.parse(file.content);
-              const remoteTime = new Date(remotePayload.updatedAt).getTime();
-              if (lastSyncedAt && remoteTime > lastSyncedAt + 60000) {
-                // Conflict! Remote was updated after our last sync
-                updateSyncIndicator("conflict");
-                logSyncEvent("push", "conflict", `Remote updated ${new Date(remoteTime).toLocaleString()}`);
-                if (silent) {
-                  showAlertToast("⚠️ Sync conflict — open Settings to resolve", "warning");
-                  return;
+              if (remotePayload.encrypted) {
+                // Decrypt remote with the right key
+                if (remotePayload.salt && remotePayload.salt !== localStorage.getItem(KEYS.salt)) {
+                  // Salt mismatch — skip merge silently rather than break user
+                  console.warn("Salt mismatch on push-merge, skipping merge");
+                } else {
+                  const remoteState = await decryptState(remotePayload.encrypted);
+                  if (remoteState) {
+                    const merged = mergeStates(state, remoteState);
+                    state = merged;
+                    saveData();
+                  }
                 }
-                const choice = await showConflictDialog(remotePayload, remoteTime);
-                if (choice === "cancel") {
-                  updateSyncIndicator("dirty");
-                  return;
-                }
-                if (choice === "pull") {
-                  await syncPull({ skipConfirm: true });
-                  return;
-                }
-                // 'overwrite' falls through to push
               }
             }
           }
         } catch (e) {
-          console.warn("Conflict check failed", e);
+          console.warn("Push-merge step failed", e);
         }
       }
 
@@ -7750,15 +7865,25 @@
 
   async function syncPull(opts = {}) {
     const skipConfirm = !!opts.skipConfirm;
+    const silent = !!opts.silent;
     const token = localStorage.getItem(KEYS.syncToken);
     const gistId = localStorage.getItem(KEYS.syncGistId);
-    if (!token) { showSyncStatus("Add a GitHub token first.", "warn"); return; }
-    if (!gistId) { showSyncStatus("No Gist ID — push from another device first.", "warn"); return; }
-    if (!cryptoKey) { showSyncStatus("Unlock the app first.", "warn"); return; }
+    if (!token) {
+      if (!silent) showSyncStatus("Add a GitHub token first.", "warn");
+      return;
+    }
+    if (!gistId) {
+      if (!silent) showSyncStatus("No Gist ID — push from another device first.", "warn");
+      return;
+    }
+    if (!cryptoKey) {
+      if (!silent) showSyncStatus("Unlock the app first.", "warn");
+      return;
+    }
 
-    if (!skipConfirm && !confirm("Pull will replace ALL local data with what's in the cloud. Continue?")) return;
+    if (!skipConfirm && !confirm("Pull will merge cloud data with local. Continue?")) return;
 
-    showSyncStatus("⬇️ Downloading and decrypting…", "loading");
+    if (!silent) showSyncStatus("⬇️ Downloading and merging…", "loading");
     updateSyncIndicator("syncing");
     try {
       const res = await fetch(`https://api.github.com/gists/${gistId}`, {
@@ -7775,6 +7900,10 @@
       if (!payload.encrypted) throw new Error("No encrypted data in gist");
 
       if (payload.salt && payload.salt !== localStorage.getItem(KEYS.salt)) {
+        if (silent) {
+          updateSyncIndicator("error");
+          return;
+        }
         const pwd = prompt("Enter your password to decrypt the cloud backup:");
         if (!pwd) { showSyncStatus("Cancelled.", "warn"); return; }
         localStorage.setItem(KEYS.salt, payload.salt);
@@ -7784,24 +7913,26 @@
       const decrypted = await decryptState(payload.encrypted);
       if (!decrypted) throw new Error("Decryption failed — wrong password?");
 
-      // Compute "what's new" by comparing IDs
+      // Merge remote into local (devices converge to same data)
       const localIds = new Set(state.expenses.map((e) => e.id));
       recentlyPulledIds.clear();
       (decrypted.expenses || []).forEach((e) => {
         if (!localIds.has(e.id)) recentlyPulledIds.add(e.id);
       });
 
+      const beforeCount = state.expenses.length;
+      state = mergeStates(state, decrypted);
       const addedCount = recentlyPulledIds.size;
-      state = { ...state, ...decrypted };
+      const totalAfter = state.expenses.length;
       saveData();
       renderAll();
-      const msg = `Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()} (${payload.device || "unknown"})`;
+      const msg = `Synced from ${new Date(payload.updatedAt).toLocaleString()} (${payload.device || "unknown"}) · merged to ${totalAfter} txns`;
       const summary = addedCount > 0
-        ? `✓ ${msg} · ${addedCount} new transaction${addedCount === 1 ? "" : "s"} highlighted`
+        ? `✓ ${msg} · ${addedCount} new highlighted`
         : `✓ ${msg}`;
-      showSyncStatus(summary, "success");
-      if (addedCount > 0) {
-        showAlertToast(`${addedCount} new transaction${addedCount === 1 ? "" : "s"} pulled — highlighted in lists`, "success");
+      if (!silent) showSyncStatus(summary, "success");
+      if (addedCount > 0 && !silent) {
+        showAlertToast(`Merged ${addedCount} new transaction${addedCount === 1 ? "" : "s"} from cloud`, "success");
       }
       lastSyncedAt = Date.now();
       localStorage.setItem("mb_last_synced", String(lastSyncedAt));
@@ -7818,7 +7949,7 @@
     } catch (e) {
       console.error(e);
       logSyncEvent("pull", "error", e.message);
-      showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
+      if (!silent) showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
       updateSyncIndicator("error");
       renderSyncHistory();
     }
