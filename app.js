@@ -319,27 +319,20 @@
       }
     }
 
-    // First-run seeding: seed defaults only if this is a genuinely fresh device
-    // (no records, no tombstones, no sync setup). This avoids two failure modes:
-    //   1) Re-seeding after the user did "Clear All Data" (tombstones present).
-    //   2) Empty dropdowns when a decrypt failure leaves state empty even though
-    //      the user has real data they couldn't read.
-    const hasAnyData = state.expenses.length > 0 ||
-                       state.accounts.length > 0 ||
-                       state.categories.length > 0 ||
-                       state.presets.length > 0;
+    // Per-collection auto-seed: seed each collection independently when it's
+    // empty AND has no tombstones (i.e. user never deleted from it). This handles
+    // the partial-empty case where one collection got wiped but others survived.
+    // Tombstones are the right gate (not sync setup) because:
+    //   - If sync is set up but cloud also has nothing for this collection,
+    //     seeding here is harmless (just puts defaults on both devices).
+    //   - If user deleted entries, tombstones exist and seeding correctly skips.
+    const collectionHasTombstones = (key) => {
+      const ts = state.deletions && state.deletions[key];
+      return !!(ts && Object.keys(ts).length > 0);
+    };
 
-    const hasTombstones = state.deletions && Object.keys(state.deletions).some(
-      (k) => state.deletions[k] && Object.keys(state.deletions[k]).length > 0
-    );
-
-    const hasSyncSetup = !!localStorage.getItem(KEYS.syncToken) ||
-                         !!localStorage.getItem(KEYS.syncGistId);
-
-    const shouldSeed = !hasAnyData && !hasTombstones && !hasSyncSetup;
-
-    // Seed default accounts on first launch
-    if (shouldSeed && !state.accounts.length) {
+    // Seed default accounts when accounts are empty and the user never deleted any
+    if (!state.accounts.length && !collectionHasTombstones("accounts")) {
       state.accounts = [
         { id: uid(), name: "Cash", type: "cash", balance: 0, color: "#22c55e" },
         { id: uid(), name: "Checking", type: "checking", balance: 0, color: "#3b82f6" },
@@ -360,8 +353,8 @@
     if (typeof state.settings.roundUpEnabled !== "boolean") state.settings.roundUpEnabled = false;
     if (typeof state.settings.roundUpGoalId === "undefined") state.settings.roundUpGoalId = null;
 
-    // Seed default categories on first launch
-    if (shouldSeed && !state.categories.length) {
+    // Seed default categories when empty and never deleted from
+    if (!state.categories.length && !collectionHasTombstones("categories")) {
       state.categories = [
         { id: uid(), name: "Groceries", limit: 400 },
         { id: uid(), name: "Rent", limit: 1500 },
@@ -374,8 +367,12 @@
       migrated = true;
     }
 
-    // Seed quick-add presets on first launch with built-in library
-    if (shouldSeed && !state.presets.length) {
+    // Seed quick-add presets only on a brand-new install (presets are easy to
+    // re-create via the Restore Defaults button, so we don't auto-replace).
+    const presetsTotallyFresh = !state.presets.length &&
+                                !collectionHasTombstones("presets") &&
+                                !state.expenses.length;
+    if (presetsTotallyFresh) {
       state.presets = buildDefaultPresets();
       migrated = true;
     }
