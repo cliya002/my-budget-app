@@ -21,6 +21,7 @@
     syncToken: "mb_sync_token",
     syncGistId: "mb_sync_gist_id",
     syncEnabled: "mb_sync_enabled",
+    syncSkipReceiptsCellular: "mb_sync_skip_receipts_cellular",
   };
 
   const DEFAULT_PWD_HASH =
@@ -6033,6 +6034,16 @@
       await syncPull({ skipConfirm: true });
     });
 
+    // Skip receipts on cellular toggle
+    const skipRecToggle = $("#skipReceiptsCellularToggle");
+    if (skipRecToggle) {
+      skipRecToggle.checked = localStorage.getItem(KEYS.syncSkipReceiptsCellular) === "true";
+      skipRecToggle.addEventListener("change", (e) => {
+        localStorage.setItem(KEYS.syncSkipReceiptsCellular, e.target.checked ? "true" : "false");
+        showToast(e.target.checked ? "Receipts will be skipped on cellular" : "Receipts always synced");
+      });
+    }
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -7555,7 +7566,15 @@
       remoteArr.forEach((r) => {
         const existing = byId.get(r.id);
         if (!existing) byId.set(r.id, r);
-        else if (recordTimestamp(r) > recordTimestamp(existing)) byId.set(r.id, r);
+        else if (recordTimestamp(r) > recordTimestamp(existing)) {
+          // Remote is newer — but if remote has _receiptStripped and local has a real receipt,
+          // keep the local receipt to avoid losing it just because cellular sync stripped it.
+          if (key === "expenses" && r._receiptStripped && existing.receipt) {
+            byId.set(r.id, { ...r, receipt: existing.receipt, _receiptStripped: false });
+          } else {
+            byId.set(r.id, r);
+          }
+        }
       });
 
       // Remove items that have been tombstoned more recently than the record was updated
@@ -7663,6 +7682,8 @@
   let lastSyncedHash = null;
   // Most recent remote updated_at we've seen — for cheap freshness check
   let lastKnownRemoteUpdate = null;
+  // Global flag to prevent concurrent syncs (e.g. Sync Now spam-click)
+  let syncInFlight = false;
   const SYNC_HISTORY_KEY = "mb_sync_history";
 
   function logSyncEvent(action, status, message) {
@@ -7689,6 +7710,16 @@
     return String(h);
   }
 
+  // Detect cellular via Network Information API
+  function isOnCellular() {
+    const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    if (!c) return false;
+    if (c.type === "cellular") return true;
+    // 'effectiveType' = 'slow-2g' | '2g' | '3g' | '4g' (for 4G, type may not be 'cellular' but bandwidth limited)
+    if (["slow-2g", "2g", "3g"].includes(c.effectiveType)) return true;
+    return false;
+  }
+
   function startAutoSync() {
     stopAutoSync();
     if (localStorage.getItem("mb_auto_sync") !== "true") return;
@@ -7706,8 +7737,12 @@
       if (!navigator.onLine) return;
       if (!localStorage.getItem(KEYS.syncGistId)) return;
 
-      // Cheap freshness check: hit the Gist endpoint but only check updated_at.
-      // GitHub still returns the full payload but we skip parsing if not newer.
+      // Brief visual feedback — flash "syncing…" indicator
+      updateSyncIndicator("syncing");
+      const restoreStatus = () => {
+        updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
+      };
+
       try {
         const token = localStorage.getItem(KEYS.syncToken);
         const gistId = localStorage.getItem(KEYS.syncGistId);
@@ -7720,17 +7755,25 @@
             stopAutoSync();
             return;
           }
+          restoreStatus();
           return;
         }
         const data = await res.json();
         if (lastKnownRemoteUpdate && data.updated_at === lastKnownRemoteUpdate) {
-          // Nothing new — skip the full pull
+          // Nothing new — flash done and restore
+          setTimeout(restoreStatus, 400);
           return;
+        }
+        // Remote has newer data — briefly show "behind" before pulling
+        if (lastKnownRemoteUpdate) {
+          updateSyncIndicator("behind");
         }
         lastKnownRemoteUpdate = data.updated_at;
         // Newer remote — do a silent pull
-        syncPull({ skipConfirm: true, silent: true });
-      } catch (e) { /* network blip */ }
+        await syncPull({ skipConfirm: true, silent: true });
+      } catch (e) {
+        restoreStatus();
+      }
     }, 30 * 1000);
 
     // Refresh "X min ago" badge every minute
@@ -7811,6 +7854,7 @@
     const pretty = {
       synced: { icon: "🟢", text: "Synced", title: lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleTimeString()} from ${getDeviceLabel()}` : "Synced" },
       dirty: { icon: "🟡", text: "Pending", title: "Local changes pending sync" },
+      behind: { icon: "🟠", text: "Behind", title: "Cloud has newer data — pull to update" },
       syncing: { icon: "🔄", text: "Syncing…", title: "Sync in progress" },
       error: { icon: "🔴", text: "Sync error", title: "Last sync failed" },
       offline: { icon: "📵", text: "Offline", title: "Will push when back online" },
@@ -7859,6 +7903,11 @@
       if (!silent) showSyncStatus("📵 You're offline. Will retry when back online.", "warn");
       return;
     }
+    if (syncInFlight) {
+      if (!silent) showSyncStatus("Another sync is in progress — try again in a moment.", "warn");
+      return;
+    }
+    syncInFlight = true;
 
     if (!silent) showSyncStatus("⬆️ Encrypting and uploading…", "loading");
     updateSyncIndicator("syncing");
@@ -7905,7 +7954,18 @@
         }
       }
 
-      const encBlob = await encryptState(state);
+      // If on cellular and user opted to skip receipts, strip them from the payload
+      let stateToEncrypt = state;
+      if (isOnCellular() && localStorage.getItem(KEYS.syncSkipReceiptsCellular) === "true") {
+        stateToEncrypt = {
+          ...state,
+          expenses: state.expenses.map((e) => {
+            if (e.receipt) return { ...e, receipt: null, _receiptStripped: true };
+            return e;
+          }),
+        };
+      }
+      const encBlob = await encryptState(stateToEncrypt);
       if (!encBlob) throw new Error("Encryption failed");
 
       // Echo prevention: skip if encrypted blob hash matches last successful sync.
@@ -8008,6 +8068,8 @@
         updateSyncIndicator("error");
       }
       renderSyncHistory();
+    } finally {
+      syncInFlight = false;
     }
   }
 
@@ -8073,8 +8135,16 @@
       if (!silent) showSyncStatus("Unlock the app first.", "warn");
       return;
     }
+    if (syncInFlight) {
+      if (!silent) showSyncStatus("Another sync is in progress — try again in a moment.", "warn");
+      return;
+    }
+    syncInFlight = true;
 
-    if (!skipConfirm && !confirm("Pull will merge cloud data with local. Continue?")) return;
+    if (!skipConfirm && !confirm("Pull will merge cloud data with local. Continue?")) {
+      syncInFlight = false;
+      return;
+    }
 
     if (!silent) showSyncStatus("⬇️ Downloading and merging…", "loading");
     updateSyncIndicator("syncing");
@@ -8174,6 +8244,8 @@
       if (!silent) showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
       updateSyncIndicator("error");
       renderSyncHistory();
+    } finally {
+      syncInFlight = false;
     }
   }
 
