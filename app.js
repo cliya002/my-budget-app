@@ -319,21 +319,24 @@
       }
     }
 
-    // First-run seeding: seed defaults whenever this device has zero existing
-    // data. We previously gated this on a one-shot flag, but that broke recovery
-    // after a decrypt failure left state empty: the flag would already be set
-    // from a prior successful launch, so no defaults populated and the user saw
-    // empty dropdowns.
-    const alreadySeeded = localStorage.getItem(KEYS.seeded) === "true";
+    // First-run seeding: seed defaults only if this is a genuinely fresh device
+    // (no records, no tombstones, no sync setup). This avoids two failure modes:
+    //   1) Re-seeding after the user did "Clear All Data" (tombstones present).
+    //   2) Empty dropdowns when a decrypt failure leaves state empty even though
+    //      the user has real data they couldn't read.
     const hasAnyData = state.expenses.length > 0 ||
                        state.accounts.length > 0 ||
                        state.categories.length > 0 ||
                        state.presets.length > 0;
 
-    // Seed when there's no data at all on this device. The seeded flag is now
-    // only used to skip seeding when we would otherwise re-seed on a wiped
-    // device that genuinely intended to stay empty.
-    const shouldSeed = !hasAnyData && !alreadySeeded;
+    const hasTombstones = state.deletions && Object.keys(state.deletions).some(
+      (k) => state.deletions[k] && Object.keys(state.deletions[k]).length > 0
+    );
+
+    const hasSyncSetup = !!localStorage.getItem(KEYS.syncToken) ||
+                         !!localStorage.getItem(KEYS.syncGistId);
+
+    const shouldSeed = !hasAnyData && !hasTombstones && !hasSyncSetup;
 
     // Seed default accounts on first launch
     if (shouldSeed && !state.accounts.length) {
@@ -365,6 +368,7 @@
         { id: uid(), name: "Utilities", limit: 200 },
         { id: uid(), name: "Transport", limit: 150 },
         { id: uid(), name: "Eating Out", limit: 200 },
+        { id: uid(), name: "Subscriptions", limit: 100 },
         { id: uid(), name: "Other", limit: 200 },
       ];
       migrated = true;
@@ -374,11 +378,6 @@
     if (shouldSeed && !state.presets.length) {
       state.presets = buildDefaultPresets();
       migrated = true;
-    }
-
-    // Mark this install as seeded so we don't respawn defaults later
-    if (shouldSeed) {
-      localStorage.setItem(KEYS.seeded, "true");
     }
 
     // Migrate older presets to have group/icon/favorite fields
@@ -5781,6 +5780,7 @@
         { name: "Utilities", limit: 200 },
         { name: "Transport", limit: 150 },
         { name: "Eating Out", limit: 200 },
+        { name: "Subscriptions", limit: 100 },
         { name: "Other", limit: 200 },
       ];
       const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
