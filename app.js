@@ -5806,6 +5806,55 @@
       showToast("Category added");
     });
 
+    // Merge duplicate accounts by name
+    $("#mergeDupAccountsBtn")?.addEventListener("click", () => {
+      const groups = new Map();
+      state.accounts.forEach((a) => {
+        const key = (a.name || "").trim().toLowerCase();
+        if (!key) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(a);
+      });
+
+      const idRemap = new Map();
+      const losersToTombstone = [];
+      groups.forEach((arr) => {
+        if (arr.length < 2) return;
+        const sorted = arr.slice().sort((a, b) => recordTimestamp(a) - recordTimestamp(b));
+        const winner = sorted[0];
+        for (let i = 1; i < sorted.length; i++) {
+          idRemap.set(sorted[i].id, winner.id);
+          losersToTombstone.push(sorted[i].id);
+        }
+      });
+
+      if (idRemap.size === 0) {
+        showToast("No duplicate accounts found");
+        return;
+      }
+
+      const dupCount = idRemap.size;
+      if (!confirm(`Merge ${dupCount} duplicate account${dupCount === 1 ? "" : "s"}? Transactions will be re-pointed to the surviving account.`)) {
+        return;
+      }
+
+      const remap = (rec, key) => {
+        if (rec[key] && idRemap.has(rec[key])) {
+          rec[key] = idRemap.get(rec[key]);
+          touchRecord(rec);
+        }
+      };
+      state.expenses.forEach((e) => remap(e, "accountId"));
+
+      losersToTombstone.forEach((id) => tombstoneRecord("accounts", id));
+      const loserSet = new Set(losersToTombstone);
+      state.accounts = state.accounts.filter((a) => !loserSet.has(a.id));
+
+      saveData();
+      renderAll();
+      showToast(`Merged ${dupCount} duplicate${dupCount === 1 ? "" : "s"}`);
+    });
+
     // Restore default categories
     $("#restoreCategoriesBtn")?.addEventListener("click", () => {
       const defaults = [
@@ -5831,6 +5880,63 @@
       saveData();
       renderAll();
       showToast(added > 0 ? `Added ${added} default categor${added === 1 ? "y" : "ies"}` : "All defaults already present");
+    });
+
+    // Merge duplicate categories by name (keeps oldest, repoints all references)
+    $("#mergeDupCategoriesBtn")?.addEventListener("click", () => {
+      // Group by lowercased name
+      const groups = new Map();
+      state.categories.forEach((c) => {
+        const key = (c.name || "").trim().toLowerCase();
+        if (!key) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(c);
+      });
+
+      // For each group with >1 entry, pick a winner (oldest createdAt-equivalent
+      // = smallest id base36 prefix) and remap everything to its id.
+      const idRemap = new Map(); // oldId -> winnerId
+      const losersToTombstone = [];
+      groups.forEach((arr) => {
+        if (arr.length < 2) return;
+        // Sort by record timestamp ascending (oldest first)
+        const sorted = arr.slice().sort((a, b) => recordTimestamp(a) - recordTimestamp(b));
+        const winner = sorted[0];
+        for (let i = 1; i < sorted.length; i++) {
+          idRemap.set(sorted[i].id, winner.id);
+          losersToTombstone.push(sorted[i].id);
+        }
+      });
+
+      if (idRemap.size === 0) {
+        showToast("No duplicate categories found");
+        return;
+      }
+
+      const dupCount = idRemap.size;
+      if (!confirm(`Merge ${dupCount} duplicate categor${dupCount === 1 ? "y" : "ies"}? Transactions, presets, and recurring rules will be re-pointed to the surviving category.`)) {
+        return;
+      }
+
+      // Remap all references
+      const remap = (rec, key) => {
+        if (rec[key] && idRemap.has(rec[key])) {
+          rec[key] = idRemap.get(rec[key]);
+          touchRecord(rec);
+        }
+      };
+      state.expenses.forEach((e) => remap(e, "categoryId"));
+      state.recurring.forEach((r) => remap(r, "categoryId"));
+      state.presets.forEach((p) => remap(p, "categoryId"));
+
+      // Tombstone the losers and remove from state.categories
+      losersToTombstone.forEach((id) => tombstoneRecord("categories", id));
+      const loserSet = new Set(losersToTombstone);
+      state.categories = state.categories.filter((c) => !loserSet.has(c.id));
+
+      saveData();
+      renderAll();
+      showToast(`Merged ${dupCount} duplicate${dupCount === 1 ? "" : "s"}`);
     });
 
     // Restore default accounts
@@ -6072,9 +6178,6 @@
     // Re-link presets to categories (manual fix for the "—" category issue).
     // Also auto-creates any missing default categories so the link can succeed.
     $("#relinkPresetsBtn")?.addEventListener("click", () => {
-      // Step 1: snapshot before state for diagnosis
-      const beforeCatIds = state.presets.map((p) => `${p.desc}: ${p.categoryId || "null"}`).slice(0, 5);
-
       const categoryDefaults = [
         { name: "Groceries", limit: 400 },
         { name: "Rent", limit: 1500 },
@@ -6100,33 +6203,13 @@
       });
 
       const updated = relinkPresetsToCategories();
-
-      // Step 2: snapshot after for diagnosis
-      const catByIdMap = new Map(state.categories.map((c) => [c.id, c.name]));
-      const afterSamples = state.presets.slice(0, 5).map((p) => {
-        const cat = catByIdMap.get(p.categoryId);
-        return `${p.desc} → ${cat || "MISSING(" + (p.categoryId || "null") + ")"}`;
-      });
-
       saveData();
       renderAll();
 
-      // Always show the diagnostic so we can see what's happening
-      const lines = [
-        `Categories on device: ${state.categories.length}`,
-        `Categories added by button: ${addedCats}`,
-        `Presets re-linked: ${updated}`,
-        ``,
-        `--- First 5 presets BEFORE ---`,
-        ...beforeCatIds,
-        ``,
-        `--- First 5 presets AFTER ---`,
-        ...afterSamples,
-        ``,
-        `--- All categories on this device ---`,
-        ...state.categories.map((c) => `${c.name} (${c.id.slice(0, 8)}...)`),
-      ];
-      alert(lines.join("\n"));
+      const parts = [];
+      if (addedCats > 0) parts.push(`+${addedCats} categor${addedCats === 1 ? "y" : "ies"}`);
+      if (updated > 0) parts.push(`${updated} preset${updated === 1 ? "" : "s"} re-linked`);
+      showToast(parts.length ? parts.join(" · ") : "Already linked");
     });
 
     // Delete all presets
