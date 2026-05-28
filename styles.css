@@ -938,3 +938,70 @@ label {
   font-size: 0.85rem;
   margin: -0.5rem 0 0 0;
 }
+
+/* ================ Phase 2 additions ================ */
+.rollover-tag {
+  display: inline-block;
+  background: var(--success);
+  color: #fff;
+  font-size: 0.7rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  cursor: pointer;
+  padding: 0.5rem 0;
+}
+.toggle-row input[type="checkbox"] {
+  width: 44px;
+  height: 24px;
+  appearance: none;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  position: relative;
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-top: 2px;
+  transition: background 0.2s;
+}
+.toggle-row input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  background: #fff;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+.toggle-row input[type="checkbox"]:checked {
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.toggle-row input[type="checkbox"]:checked::after {
+  transform: translateX(20px);
+}
+
+.toast.toast-warning {
+  background: var(--warning);
+  color: #fff;
+}
+.toast.toast-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.chart-wide {
+  grid-column: 1 / -1;
+}
+.chart-wide .chart-wrap { height: 280px; }

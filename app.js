@@ -23,6 +23,11 @@
     expenses: [],          // each: { id, type, desc, amount, date, categoryId, receipt }
     goals: [],
     presets: [],           // each: { id, type, desc, amount, categoryId }
+    recurring: [],         // each: { id, type, desc, amount, categoryId, dayOfMonth, lastRunMonth, active }
+    settings: {
+      rollover: false,     // when true, unused budget rolls over to next month
+      alertsShown: {},     // map "YYYY-MM:catId:level" -> true (already alerted)
+    },
   };
 
   let currency = "USD";
@@ -134,6 +139,10 @@
 
     // Ensure presets array exists
     if (!Array.isArray(state.presets)) state.presets = [];
+    if (!Array.isArray(state.recurring)) state.recurring = [];
+    if (!state.settings) state.settings = { rollover: false, alertsShown: {} };
+    if (!state.settings.alertsShown) state.settings.alertsShown = {};
+    if (typeof state.settings.rollover !== "boolean") state.settings.rollover = false;
 
     // Seed default categories on first launch
     if (!state.categories.length) {
@@ -161,6 +170,75 @@
     }
 
     if (migrated) saveData();
+  }
+
+  /* ---------- Recurring transactions ---------- */
+  function processRecurring() {
+    const today = new Date();
+    const thisMonth = currentMonth();
+    let added = 0;
+
+    state.recurring.forEach((r) => {
+      if (!r.active) return;
+
+      // Determine months from lastRunMonth (or month of creation) up to current month
+      // We add one transaction per missed month (capped to last 12 months for safety)
+      const startMonth = r.lastRunMonth || thisMonth;
+      const months = monthsBetween(startMonth, thisMonth, 12);
+
+      months.forEach((m) => {
+        // Don't double-add if already run for this month
+        if (r.lastRunMonth === m) return;
+
+        // Skip future months
+        if (m > thisMonth) return;
+
+        const day = Math.min(Math.max(1, r.dayOfMonth || 1), 28);
+        const dateStr = `${m}-${String(day).padStart(2, "0")}`;
+
+        // Skip dates that are still in the future
+        if (dateStr > todayStr()) return;
+
+        state.expenses.push({
+          id: uid(),
+          type: r.type || "expense",
+          desc: r.desc + " (recurring)",
+          amount: r.amount,
+          date: dateStr,
+          categoryId: r.categoryId || null,
+          receipt: null,
+          recurringId: r.id,
+        });
+        r.lastRunMonth = m;
+        added += 1;
+      });
+    });
+
+    if (added > 0) {
+      saveData();
+      // Toast handled after renderAll
+      setTimeout(() => showToast(`Added ${added} recurring transaction${added === 1 ? "" : "s"}`), 500);
+    }
+  }
+
+  // Returns YYYY-MM list from start (exclusive) to end (inclusive).
+  // If start === end, returns [start].
+  function monthsBetween(start, end, max = 24) {
+    const out = [];
+    if (!start || !end) return [end];
+    const [sy, sm] = start.split("-").map(Number);
+    const [ey, em] = end.split("-").map(Number);
+    let y = sy, mo = sm;
+    if (start === end) return [start];
+    let count = 0;
+    while ((y < ey || (y === ey && mo <= em)) && count < max) {
+      out.push(`${y}-${String(mo).padStart(2, "0")}`);
+      mo += 1;
+      if (mo > 12) { mo = 1; y += 1; }
+      count += 1;
+    }
+    // Don't include the start month itself (already processed)
+    return out.filter((m) => m !== start);
   }
 
   function applyTheme(t) {
@@ -251,7 +329,9 @@
     $("#lockScreen").classList.remove("open");
     $("#app").hidden = false;
     loadData();
+    processRecurring();
     renderAll();
+    checkBudgetAlerts();
   }
 
   function lockNow() {
@@ -298,10 +378,51 @@
     renderTransactions();
     renderInsights();
     renderPresetsManage();
+    renderRecurringList();
     renderThemeButtons();
     populateExpenseCategorySelect();
+    populateRecurringCategorySelect();
     renderFilterChips();
     $("#currencySelect").value = currency;
+    $("#rolloverToggle").checked = !!state.settings.rollover;
+  }
+
+  function renderRecurringList() {
+    const list = $("#recurringList");
+    if (!list) return;
+    if (!state.recurring.length) {
+      list.innerHTML = '<li class="empty">No recurring transactions yet.</li>';
+      return;
+    }
+    list.innerHTML = state.recurring
+      .map((r) => {
+        const cat = state.categories.find((c) => c.id === r.categoryId);
+        const catName = cat ? cat.name : (r.type === "income" ? "Income" : "—");
+        const typeLabel = r.type === "income" ? "💰" : "💸";
+        const status = r.active ? "Active" : "Paused";
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)}</div>
+              <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)} · ${status}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="toggle-rec" data-id="${r.id}" title="${r.active ? "Pause" : "Resume"}">${r.active ? "⏸️" : "▶️"}</button>
+              <button data-action="del-rec" data-id="${r.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function populateRecurringCategorySelect() {
+    const sel = $("#recCategory");
+    if (!sel) return;
+    sel.innerHTML =
+      '<option value="">—</option>' +
+      state.categories
+        .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+        .join("");
   }
 
   function renderPresetsManage() {
@@ -376,6 +497,81 @@
     return s;
   }
 
+  /* ---------- Rollover & alerts ---------- */
+  function effectiveLimitFor(cat, month) {
+    const base = Number(cat.limit) || 0;
+    if (!state.settings.rollover) return base;
+
+    // Walk back month-by-month, accumulating leftover until we hit a month
+    // where this category had no transactions (treat as no rollover) or
+    // until 11 months back as a safety cap.
+    let extra = 0;
+    let m = prevMonth(month);
+    for (let i = 0; i < 11; i++) {
+      const monthExp = state.expenses.filter(
+        (e) => monthKey(e.date) === m && e.categoryId === cat.id && e.type !== "income"
+      );
+      if (!monthExp.length) break;
+      const spent = monthExp.reduce((s, e) => s + Number(e.amount), 0);
+      const leftover = base - spent;
+      if (leftover <= 0) break;
+      extra += leftover;
+      m = prevMonth(m);
+    }
+    return base + extra;
+  }
+
+  function prevMonth(monthStr) {
+    const [y, m] = monthStr.split("-").map(Number);
+    if (m === 1) return `${y - 1}-12`;
+    return `${y}-${String(m - 1).padStart(2, "0")}`;
+  }
+
+  function checkBudgetAlerts() {
+    const month = currentMonth();
+    const monthExpenses = state.expenses.filter(
+      (e) => monthKey(e.date) === month && e.type !== "income"
+    );
+    const alertsShown = state.settings.alertsShown;
+    let changed = false;
+
+    state.categories.forEach((cat) => {
+      const limit = effectiveLimitFor(cat, month);
+      if (limit <= 0) return;
+      const spent = monthExpenses
+        .filter((e) => e.categoryId === cat.id)
+        .reduce((s, e) => s + Number(e.amount), 0);
+      const pct = (spent / limit) * 100;
+
+      const key100 = `${month}:${cat.id}:100`;
+      const key80 = `${month}:${cat.id}:80`;
+
+      if (pct >= 100 && !alertsShown[key100]) {
+        showAlertToast(`🚨 ${cat.name} is over budget!`, "danger");
+        alertsShown[key100] = true;
+        changed = true;
+      } else if (pct >= 80 && pct < 100 && !alertsShown[key80]) {
+        showAlertToast(`⚠️ ${cat.name} at ${Math.round(pct)}% of budget`, "warning");
+        alertsShown[key80] = true;
+        changed = true;
+      }
+    });
+
+    if (changed) saveData();
+  }
+
+  function showAlertToast(msg, type) {
+    const toast = $("#toast");
+    toast.textContent = msg;
+    toast.className = `toast toast-${type}`;
+    toast.hidden = false;
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => {
+      toast.hidden = true;
+      toast.className = "toast";
+    }, 3500);
+  }
+
   function renderDashboard() {
     const month = currentMonth();
     const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
@@ -406,15 +602,19 @@
           const spent = monthExpenses
             .filter((e) => e.categoryId === cat.id)
             .reduce((s, e) => s + Number(e.amount), 0);
-          const pct = cat.limit > 0 ? Math.min(100, (spent / cat.limit) * 100) : 0;
+          const effectiveLimit = effectiveLimitFor(cat, month);
+          const pct = effectiveLimit > 0 ? Math.min(100, (spent / effectiveLimit) * 100) : 0;
           let cls = "";
           if (pct >= 100) cls = "danger";
           else if (pct >= 80) cls = "warning";
+          const rolloverNote = state.settings.rollover && effectiveLimit !== Number(cat.limit)
+            ? `<span class="rollover-tag">+${fmt(effectiveLimit - cat.limit)} rolled over</span>`
+            : "";
           return `
             <div class="progress-item">
               <div class="progress-header">
-                <span class="progress-name">${escapeHtml(cat.name)}</span>
-                <span class="progress-amount">${fmt(spent)} / ${fmt(cat.limit)}</span>
+                <span class="progress-name">${escapeHtml(cat.name)} ${rolloverNote}</span>
+                <span class="progress-amount">${fmt(spent)} / ${fmt(effectiveLimit)}</span>
               </div>
               <div class="progress-bar">
                 <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
@@ -622,15 +822,31 @@
     renderDailyChart(expenses);
     renderBalanceChart(expenses);
     renderWeekdayChart(expenses);
+    renderTrendChart();
   }
 
   function filterExpensesForInsights() {
     let exps = state.expenses.filter((e) => e.type !== "income");
+    const m = currentMonth();
     if (insightsPeriod === "monthly") {
-      const m = currentMonth();
       exps = exps.filter((e) => monthKey(e.date) === m);
+    } else if (insightsPeriod === "6mo") {
+      const cutoff = monthOffset(m, -5);
+      exps = exps.filter((e) => monthKey(e.date) >= cutoff);
+    } else if (insightsPeriod === "12mo") {
+      const cutoff = monthOffset(m, -11);
+      exps = exps.filter((e) => monthKey(e.date) >= cutoff);
     }
     return exps;
+  }
+
+  function monthOffset(monthStr, offset) {
+    const [y, m] = monthStr.split("-").map(Number);
+    let nm = m + offset;
+    let ny = y;
+    while (nm < 1) { nm += 12; ny -= 1; }
+    while (nm > 12) { nm -= 12; ny += 1; }
+    return `${ny}-${String(nm).padStart(2, "0")}`;
   }
 
   const palette = [
@@ -856,6 +1072,82 @@
   }
 
   /* ---------- Misc helpers ---------- */
+  function renderTrendChart() {
+    destroyChart("trend");
+    const ctx = $("#chartTrend");
+    if (!ctx) return;
+
+    // Build last N months (based on period) of total spent
+    const m = currentMonth();
+    let monthsBack;
+    if (insightsPeriod === "monthly") monthsBack = 6;
+    else if (insightsPeriod === "6mo") monthsBack = 6;
+    else if (insightsPeriod === "12mo") monthsBack = 12;
+    else monthsBack = 12;
+
+    const months = [];
+    for (let i = monthsBack - 1; i >= 0; i--) months.push(monthOffset(m, -i));
+
+    const totals = months.map((mk) =>
+      state.expenses
+        .filter((e) => monthKey(e.date) === mk && e.type !== "income")
+        .reduce((s, e) => s + Number(e.amount), 0)
+    );
+
+    const incomes = months.map((mk) =>
+      state.expenses
+        .filter((e) => monthKey(e.date) === mk && e.type === "income")
+        .reduce((s, e) => s + Number(e.amount), 0)
+    );
+
+    if (totals.every((t) => t === 0) && incomes.every((t) => t === 0)) {
+      showEmpty("trendEmpty", true);
+      ctx.style.display = "none";
+      return;
+    }
+    showEmpty("trendEmpty", false);
+    ctx.style.display = "block";
+
+    const labels = months.map((mk) => {
+      const [y, mm] = mk.split("-");
+      const d = new Date(Number(y), Number(mm) - 1, 1);
+      return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+    });
+
+    charts.trend = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Spent",
+            data: totals,
+            backgroundColor: "#ec4899",
+            borderRadius: 4,
+          },
+          {
+            label: "Income",
+            data: incomes,
+            backgroundColor: "#22c55e",
+            borderRadius: 4,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top", labels: { boxWidth: 12 } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -1085,6 +1377,7 @@
       saveData();
       closeExpenseModal();
       renderAll();
+      checkBudgetAlerts();
       showToast(editId ? "Transaction updated" : (type === "income" ? "Income added" : "Transaction added"));
     });
 
@@ -1167,6 +1460,44 @@
       e.target.reset();
       renderAll();
       showToast("Goal added");
+    });
+
+    // Recurring transactions form
+    $("#recurringForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const desc = $("#recDesc").value.trim();
+      const amount = parseFloat($("#recAmount").value);
+      const dayOfMonth = parseInt($("#recDay").value, 10);
+      const type = $("#recType").value;
+      const categoryId = $("#recCategory").value || null;
+      if (!desc || isNaN(amount) || isNaN(dayOfMonth)) return;
+      if (dayOfMonth < 1 || dayOfMonth > 28) {
+        showToast("Day must be between 1 and 28");
+        return;
+      }
+      state.recurring.push({
+        id: uid(),
+        type,
+        desc,
+        amount,
+        categoryId,
+        dayOfMonth,
+        active: true,
+        lastRunMonth: null,
+      });
+      saveData();
+      processRecurring(); // Catch up immediately for any prior months
+      e.target.reset();
+      renderAll();
+      showToast("Recurring transaction added");
+    });
+
+    // Rollover toggle
+    $("#rolloverToggle").addEventListener("change", (e) => {
+      state.settings.rollover = !!e.target.checked;
+      saveData();
+      renderDashboard();
+      showToast(state.settings.rollover ? "Rollover enabled" : "Rollover disabled");
     });
 
     // Filters
@@ -1256,6 +1587,20 @@
           saveData();
           renderPresetsManage();
         }
+      } else if (action === "toggle-rec") {
+        const r = state.recurring.find((x) => x.id === id);
+        if (r) {
+          r.active = !r.active;
+          saveData();
+          renderRecurringList();
+          showToast(r.active ? "Recurring resumed" : "Recurring paused");
+        }
+      } else if (action === "del-rec") {
+        if (confirm("Delete this recurring transaction? Existing transactions stay.")) {
+          state.recurring = state.recurring.filter((x) => x.id !== id);
+          saveData();
+          renderRecurringList();
+        }
       } else if (action === "del-goal") {
         if (confirm("Delete this goal?")) {
           state.goals = state.goals.filter((g) => g.id !== id);
@@ -1331,6 +1676,8 @@
             expenses: (data.expenses || []).map((e) => ({ ...e, type: e.type || "expense" })),
             goals: data.goals || [],
             presets: data.presets || [],
+            recurring: data.recurring || [],
+            settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
           renderAll();
@@ -1346,7 +1693,15 @@
     // Clear all
     $("#clearAllBtn").addEventListener("click", () => {
       if (confirm("Delete ALL budget data? This cannot be undone.")) {
-        state = { income: 0, categories: [], expenses: [], goals: [], presets: [] };
+        state = {
+          income: 0,
+          categories: [],
+          expenses: [],
+          goals: [],
+          presets: [],
+          recurring: [],
+          settings: { rollover: false, alertsShown: {} },
+        };
         saveData();
         renderAll();
         showToast("All data cleared");

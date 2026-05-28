@@ -4,11 +4,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#5b3fb8" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.svg" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Pocket Budget" />
   <title>Pocket Budget App</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=14" />
+  <link rel="stylesheet" href="styles.css?v=15" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -174,6 +179,46 @@
           </div>
 
           <div class="card">
+            <div class="card-title">Recurring Transactions</div>
+            <p class="card-sub">Bills, subscriptions, and paychecks that auto-add each month.</p>
+            <form id="recurringForm" class="stack-form" style="margin-top:0.75rem">
+              <div class="form-row">
+                <label>Description</label>
+                <input type="text" id="recDesc" placeholder="e.g. Netflix, Rent, Paycheck" required />
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>Amount</label>
+                  <input type="number" id="recAmount" placeholder="0.00" step="0.01" min="0" required />
+                </div>
+                <div>
+                  <label>Day of month (1-28)</label>
+                  <input type="number" id="recDay" placeholder="1" min="1" max="28" required />
+                </div>
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>Type</label>
+                  <select id="recType">
+                    <option value="expense">💸 Expense</option>
+                    <option value="income">💰 Income</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Category (expense only)</label>
+                  <select id="recCategory">
+                    <option value="">—</option>
+                  </select>
+                </div>
+              </div>
+              <button type="submit" class="btn-primary block">Add Recurring</button>
+            </form>
+            <ul id="recurringList" class="list" style="margin-top:1rem">
+              <li class="empty">No recurring transactions yet.</li>
+            </ul>
+          </div>
+
+          <div class="card">
             <div class="card-title">Savings Goals</div>
             <form id="goalForm" class="stack-form">
               <div class="form-row">
@@ -248,7 +293,9 @@
           <div class="page-header"><h1>My Insights</h1></div>
 
           <div class="period-selector">
-            <button class="period-btn active" data-period="monthly">Monthly</button>
+            <button class="period-btn active" data-period="monthly">This Month</button>
+            <button class="period-btn" data-period="6mo">6 Months</button>
+            <button class="period-btn" data-period="12mo">12 Months</button>
             <button class="period-btn" data-period="all">All Time</button>
           </div>
 
@@ -273,12 +320,29 @@
               <div class="chart-wrap"><canvas id="chartWeekday"></canvas></div>
               <div id="weekdayEmpty" class="empty" hidden>No expenses to chart yet.</div>
             </div>
+            <div class="card chart-card chart-wide">
+              <div class="card-title">Monthly Trend</div>
+              <div class="chart-wrap"><canvas id="chartTrend"></canvas></div>
+              <div id="trendEmpty" class="empty" hidden>No expenses to chart yet.</div>
+            </div>
           </div>
         </div>
 
         <!-- Settings -->
         <div class="page" id="settings">
           <div class="page-header"><h1>Settings</h1></div>
+
+          <div class="card">
+            <div class="card-title">Budget Behavior</div>
+            <label class="toggle-row">
+              <span>
+                <strong>Budget rollover</strong>
+                <br />
+                <span class="card-sub">Unused budget rolls over to the next month for each category.</span>
+              </span>
+              <input type="checkbox" id="rolloverToggle" />
+            </label>
+          </div>
 
           <div class="card">
             <div class="card-title">Appearance</div>
@@ -406,6 +470,15 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=14"></script>
+  <script src="app.js?v=15"></script>
+  <script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("sw.js").catch((err) =>
+          console.warn("SW registration failed:", err)
+        );
+      });
+    }
+  </script>
 </body>
 </html>
