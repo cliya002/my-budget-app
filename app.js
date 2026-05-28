@@ -1455,20 +1455,42 @@
   function renderCreditStats() {
     const cur = latestScore();
     const prev = previousScore();
-    $("#creditCurrent").textContent = cur ? cur.score : "—";
 
-    const change = $("#creditChange");
-    if (cur && prev) {
-      const diff = cur.score - prev.score;
-      const sign = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
-      const cls = diff > 0 ? "positive" : diff < 0 ? "negative" : "";
-      change.innerHTML = `<span class="${cls}">${sign} ${Math.abs(diff)} since last entry</span>`;
-    } else if (cur) {
-      change.textContent = `${cur.source} · ${cur.date}`;
-    } else {
-      change.textContent = "";
+    // Gauge
+    const score = cur ? Number(cur.score) : 0;
+    const arc = $("#gaugeArc");
+    const num = $("#gaugeNumber");
+    const band = $("#gaugeBand");
+    if (arc && num && band) {
+      const total = 251; // half circle path length
+      const pct = score ? (score - 300) / (850 - 300) : 0;
+      const filled = Math.max(0, Math.min(1, pct)) * total;
+      arc.setAttribute("stroke-dasharray", `${filled} ${total - filled}`);
+      num.textContent = score || "—";
+      band.textContent = score ? scoreBand(score) : "No score yet";
     }
 
+    // Next tier
+    const tierEl = $("#nextTier");
+    if (cur) {
+      const tiers = [
+        { min: 580, name: "Fair" },
+        { min: 670, name: "Good" },
+        { min: 740, name: "Very Good" },
+        { min: 800, name: "Exceptional" },
+      ];
+      const next = tiers.find((t) => t.min > Number(cur.score));
+      if (next) {
+        const diff = next.min - Number(cur.score);
+        tierEl.innerHTML = `<strong>${diff}</strong> points to <strong>${next.name}</strong> (${next.min}+)`;
+      } else {
+        tierEl.innerHTML = "🏆 You've reached the top tier";
+      }
+    } else {
+      tierEl.textContent = "";
+    }
+
+    // Side stats
     const util = utilizationPct();
     $("#creditUtil").textContent = `${util.toFixed(0)}%`;
     const utilHint = $("#creditUtilHint");
@@ -1486,12 +1508,194 @@
 
     $("#creditLimit").textContent = fmt(totalCardLimit());
     $("#creditBalance").textContent = fmt(totalCardBalance());
+    $("#creditCardCount").textContent = state.cards.length;
 
+    // Average individual utilization
+    if (state.cards.length) {
+      const utils = state.cards
+        .filter((c) => Number(c.limit) > 0)
+        .map((c) => (Number(c.balance) / Number(c.limit)) * 100);
+      const avg = utils.reduce((a, b) => a + b, 0) / (utils.length || 1);
+      $("#creditAvgUtil").textContent = `Avg ${avg.toFixed(0)}% per card`;
+    } else {
+      $("#creditAvgUtil").textContent = "";
+    }
+
+    // Pill in header
     const pill = $("#creditScorePill");
     if (cur) {
-      pill.textContent = `${cur.score} ${cur.type || ""}`;
+      const change = prev ? cur.score - prev.score : 0;
+      const arrow = change > 0 ? " ↑" : change < 0 ? " ↓" : "";
+      pill.textContent = `${cur.score}${arrow} ${cur.type || ""}`.trim();
     } else {
       pill.textContent = "No score yet";
+    }
+
+    // Bureau breakdown
+    renderBureauBreakdown();
+
+    // FICO factors
+    renderFactors();
+
+    // Simulator (re-init with current state)
+    initSimulator();
+  }
+
+  function renderBureauBreakdown() {
+    const bureaus = ["Equifax", "Experian", "TransUnion"];
+    bureaus.forEach((b) => {
+      const latest = [...state.creditScores]
+        .filter((s) => s.bureau === b)
+        .sort((a, b2) => b2.date.localeCompare(a.date))[0];
+      const valEl = document.querySelector(`[data-bureau="${b}"]`);
+      const dateEl = document.querySelector(`[data-bureau-date="${b}"]`);
+      if (!valEl) return;
+      if (latest) {
+        valEl.textContent = latest.score;
+        valEl.className = "bureau-score";
+        if (Number(latest.score) >= 740) valEl.classList.add("high");
+        else if (Number(latest.score) >= 670) valEl.classList.add("good");
+        else valEl.classList.add("low");
+        if (dateEl) dateEl.textContent = latest.date;
+      } else {
+        valEl.textContent = "—";
+        valEl.className = "bureau-score";
+        if (dateEl) dateEl.textContent = "Not logged";
+      }
+    });
+  }
+
+  function renderFactors() {
+    // Payment history — based on autopay rate + missed-payment heuristic (no data, so judge by autopay)
+    const totalCards = state.cards.length;
+    const autopayCards = state.cards.filter((c) => c.autopay).length;
+    const paymentEl = $("#factorPayment");
+    if (totalCards === 0) {
+      paymentEl.textContent = "Add cards";
+      paymentEl.className = "factor-status";
+    } else if (autopayCards === totalCards) {
+      paymentEl.textContent = "Excellent";
+      paymentEl.className = "factor-status excellent";
+    } else if (autopayCards > 0) {
+      paymentEl.textContent = `${autopayCards}/${totalCards} on autopay`;
+      paymentEl.className = "factor-status good";
+    } else {
+      paymentEl.textContent = "Risky";
+      paymentEl.className = "factor-status fair";
+    }
+
+    // Utilization
+    const util = utilizationPct();
+    const utilEl = $("#factorUtil");
+    if (totalCards === 0) {
+      utilEl.textContent = "Add cards";
+      utilEl.className = "factor-status";
+    } else if (util < 10) {
+      utilEl.textContent = "Excellent";
+      utilEl.className = "factor-status excellent";
+    } else if (util < 30) {
+      utilEl.textContent = "Good";
+      utilEl.className = "factor-status good";
+    } else if (util < 50) {
+      utilEl.textContent = "Fair";
+      utilEl.className = "factor-status fair";
+    } else {
+      utilEl.textContent = "Poor";
+      utilEl.className = "factor-status poor";
+    }
+
+    // Length of history (avg account age)
+    const lenEl = $("#factorLength");
+    const opened = state.cards.filter((c) => c.opened);
+    if (!opened.length) {
+      lenEl.textContent = "Add open dates";
+      lenEl.className = "factor-status";
+    } else {
+      const now = Date.now();
+      const ages = opened.map((c) => (now - new Date(c.opened).getTime()) / (365 * 24 * 60 * 60 * 1000));
+      const avg = ages.reduce((a, b) => a + b, 0) / ages.length;
+      lenEl.textContent = `${avg.toFixed(1)} yr avg`;
+      lenEl.className = "factor-status";
+      if (avg >= 7) lenEl.classList.add("excellent");
+      else if (avg >= 3) lenEl.classList.add("good");
+      else lenEl.classList.add("fair");
+    }
+
+    // Credit mix
+    const mixEl = $("#factorMix");
+    const types = new Set(state.cards.map((c) => c.cardType || "credit"));
+    if (totalCards === 0) {
+      mixEl.textContent = "Add cards";
+      mixEl.className = "factor-status";
+    } else if (types.size >= 3) {
+      mixEl.textContent = "Diverse";
+      mixEl.className = "factor-status excellent";
+    } else if (types.size === 2) {
+      mixEl.textContent = "Good";
+      mixEl.className = "factor-status good";
+    } else {
+      mixEl.textContent = "Single type";
+      mixEl.className = "factor-status fair";
+    }
+
+    // New credit — based on opened dates within 12 months
+    const newEl = $("#factorNew");
+    const recentOpens = state.cards.filter((c) => {
+      if (!c.opened) return false;
+      const months = (Date.now() - new Date(c.opened).getTime()) / (30.44 * 24 * 60 * 60 * 1000);
+      return months <= 12;
+    }).length;
+    if (totalCards === 0) {
+      newEl.textContent = "Add cards";
+      newEl.className = "factor-status";
+    } else if (recentOpens === 0) {
+      newEl.textContent = "Stable";
+      newEl.className = "factor-status excellent";
+    } else if (recentOpens === 1) {
+      newEl.textContent = "1 recent";
+      newEl.className = "factor-status good";
+    } else {
+      newEl.textContent = `${recentOpens} recent`;
+      newEl.className = "factor-status fair";
+    }
+  }
+
+  function initSimulator() {
+    const slider = $("#simSlider");
+    const totalBal = totalCardBalance();
+    if (!slider) return;
+    slider.max = Math.max(1, Math.round(totalBal));
+    slider.value = 0;
+    runSimulator(0);
+    slider.oninput = (e) => runSimulator(Number(e.target.value));
+  }
+
+  function runSimulator(payDown) {
+    const lim = totalCardLimit();
+    const bal = totalCardBalance();
+    const newBal = Math.max(0, bal - payDown);
+    const newUtil = lim > 0 ? (newBal / lim) * 100 : 0;
+    const oldUtil = utilizationPct();
+
+    $("#simAmountLabel").textContent = fmt(payDown);
+    $("#simUtil").textContent = `${newUtil.toFixed(0)}%`;
+
+    // Rough heuristic: utilization is ~30% of FICO. Going from >30% → <10% can yield ~30-50 pts.
+    // Use a simple linear estimate based on utilization brackets.
+    let estChange = 0;
+    if (oldUtil >= 50 && newUtil < 30) estChange = 40;
+    else if (oldUtil >= 30 && newUtil < 10) estChange = 30;
+    else if (oldUtil >= 30 && newUtil < 30) estChange = 15;
+    else if (oldUtil >= 10 && newUtil < 10) estChange = 10;
+    else if (newUtil < oldUtil) estChange = Math.round((oldUtil - newUtil) / 3);
+
+    const el = $("#simScoreChange");
+    if (estChange > 0) {
+      el.textContent = `+${estChange} pts`;
+      el.className = "positive";
+    } else {
+      el.textContent = "+0";
+      el.className = "";
     }
   }
 
@@ -1691,8 +1895,11 @@
     $("#cardLast4").value = isEdit ? (card.last4 || "") : "";
     $("#cardLimit").value = isEdit ? card.limit : "";
     $("#cardBalance").value = isEdit ? card.balance : "";
+    $("#cardStatement").value = isEdit ? (card.statement || "") : "";
     $("#cardApr").value = isEdit ? (card.apr || "") : "";
     $("#cardDueDay").value = isEdit ? (card.dueDay || "") : "";
+    $("#cardOpened").value = isEdit ? (card.opened || "") : "";
+    $("#cardType").value = isEdit ? (card.cardType || "credit") : "credit";
     $("#cardAutopay").checked = isEdit ? !!card.autopay : false;
     $("#cardModal").classList.add("open");
     setTimeout(() => $("#cardName")?.focus(), 50);
@@ -2089,8 +2296,11 @@
         last4: $("#cardLast4").value.trim(),
         limit: parseFloat($("#cardLimit").value) || 0,
         balance: parseFloat($("#cardBalance").value) || 0,
+        statement: parseFloat($("#cardStatement").value) || null,
         apr: parseFloat($("#cardApr").value) || null,
         dueDay: parseInt($("#cardDueDay").value, 10) || null,
+        opened: $("#cardOpened").value || null,
+        cardType: $("#cardType").value || "credit",
         autopay: $("#cardAutopay").checked,
       };
       if (!card.name) return;
@@ -2116,6 +2326,7 @@
         id: uid(),
         score,
         date,
+        bureau: $("#scoreBureau").value || null,
         source: $("#scoreSource").value,
         type: $("#scoreType").value,
         note: $("#scoreNote").value.trim(),

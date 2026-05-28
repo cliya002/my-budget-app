@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=17" />
+  <link rel="stylesheet" href="styles.css?v=18" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -361,24 +361,141 @@
             </div>
           </div>
 
-          <div class="stat-grid credit-stat-grid">
-            <div class="stat-card stat-score">
-              <div class="stat-label">Current Score</div>
-              <div class="stat-value" id="creditCurrent">—</div>
-              <div class="stat-meta" id="creditChange"></div>
+          <!-- Hero: gauge + key stats -->
+          <div class="credit-hero">
+            <div class="card credit-gauge-card">
+              <div class="card-title">Current Score</div>
+              <div class="gauge-wrap">
+                <svg id="scoreGauge" viewBox="0 0 200 120" class="score-gauge">
+                  <defs>
+                    <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stop-color="#ef4444"/>
+                      <stop offset="33%" stop-color="#f59e0b"/>
+                      <stop offset="66%" stop-color="#22c55e"/>
+                      <stop offset="100%" stop-color="#5b3fb8"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M 20 100 A 80 80 0 0 1 180 100" stroke="#e6e1d5" stroke-width="14" fill="none" stroke-linecap="round"/>
+                  <path id="gaugeArc" d="M 20 100 A 80 80 0 0 1 180 100" stroke="url(#gaugeGrad)" stroke-width="14" fill="none" stroke-linecap="round" stroke-dasharray="0 251" />
+                  <text id="gaugeNumber" x="100" y="85" text-anchor="middle" font-size="36" font-weight="700" fill="currentColor">—</text>
+                  <text id="gaugeBand" x="100" y="108" text-anchor="middle" font-size="11" font-weight="600" fill="currentColor" opacity="0.7">No score yet</text>
+                </svg>
+              </div>
+              <div class="gauge-range">
+                <span>300</span>
+                <span>500</span>
+                <span>700</span>
+                <span>850</span>
+              </div>
+              <div class="next-tier" id="nextTier"></div>
             </div>
-            <div class="stat-card stat-util">
-              <div class="stat-label">Utilization</div>
-              <div class="stat-value" id="creditUtil">0%</div>
-              <div class="stat-meta" id="creditUtilHint"></div>
+
+            <div class="credit-side-stats">
+              <div class="stat-card stat-util">
+                <div class="stat-label">Utilization</div>
+                <div class="stat-value" id="creditUtil">0%</div>
+                <div class="stat-meta" id="creditUtilHint"></div>
+              </div>
+              <div class="stat-card stat-limit">
+                <div class="stat-label">Total Limit</div>
+                <div class="stat-value" id="creditLimit">$0</div>
+              </div>
+              <div class="stat-card stat-balance">
+                <div class="stat-label">Total Balance</div>
+                <div class="stat-value" id="creditBalance">$0</div>
+              </div>
+              <div class="stat-card stat-cards">
+                <div class="stat-label">Cards</div>
+                <div class="stat-value" id="creditCardCount">0</div>
+                <div class="stat-meta" id="creditAvgUtil"></div>
+              </div>
             </div>
-            <div class="stat-card stat-limit">
-              <div class="stat-label">Total Limit</div>
-              <div class="stat-value" id="creditLimit">$0</div>
+          </div>
+
+          <!-- Bureau breakdown -->
+          <div class="card" id="bureauCard">
+            <div class="card-title">By Bureau (Latest)</div>
+            <div class="bureau-grid" id="bureauGrid">
+              <div class="bureau-item bureau-equifax">
+                <div class="bureau-name">Equifax</div>
+                <div class="bureau-score" data-bureau="Equifax">—</div>
+                <div class="bureau-date" data-bureau-date="Equifax"></div>
+              </div>
+              <div class="bureau-item bureau-experian">
+                <div class="bureau-name">Experian</div>
+                <div class="bureau-score" data-bureau="Experian">—</div>
+                <div class="bureau-date" data-bureau-date="Experian"></div>
+              </div>
+              <div class="bureau-item bureau-transunion">
+                <div class="bureau-name">TransUnion</div>
+                <div class="bureau-score" data-bureau="TransUnion">—</div>
+                <div class="bureau-date" data-bureau-date="TransUnion"></div>
+              </div>
             </div>
-            <div class="stat-card stat-balance">
-              <div class="stat-label">Total Balance</div>
-              <div class="stat-value" id="creditBalance">$0</div>
+          </div>
+
+          <!-- What-if simulator -->
+          <div class="card">
+            <div class="card-title">What-if Simulator</div>
+            <p class="card-sub">See how paying down balances would change your utilization.</p>
+            <div class="simulator">
+              <label class="sim-label">
+                Pay down by:
+                <span id="simAmountLabel" class="sim-amount">$0</span>
+              </label>
+              <input type="range" id="simSlider" min="0" max="100" value="0" />
+              <div class="sim-results">
+                <div class="sim-row">
+                  <span>New utilization</span>
+                  <strong id="simUtil">0%</strong>
+                </div>
+                <div class="sim-row">
+                  <span>Estimated score change</span>
+                  <strong id="simScoreChange">+0</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- FICO factors -->
+          <div class="card">
+            <div class="card-title">FICO Score Factors</div>
+            <div class="factors-list">
+              <div class="factor-item">
+                <div class="factor-head">
+                  <span><strong>Payment History</strong> · 35%</span>
+                  <span id="factorPayment" class="factor-status">—</span>
+                </div>
+                <div class="factor-desc">On-time payments. The single biggest factor.</div>
+              </div>
+              <div class="factor-item">
+                <div class="factor-head">
+                  <span><strong>Credit Utilization</strong> · 30%</span>
+                  <span id="factorUtil" class="factor-status">—</span>
+                </div>
+                <div class="factor-desc">Balances vs limits. Aim for under 10%.</div>
+              </div>
+              <div class="factor-item">
+                <div class="factor-head">
+                  <span><strong>Length of History</strong> · 15%</span>
+                  <span id="factorLength" class="factor-status">—</span>
+                </div>
+                <div class="factor-desc">Average age of accounts. Older is better.</div>
+              </div>
+              <div class="factor-item">
+                <div class="factor-head">
+                  <span><strong>Credit Mix</strong> · 10%</span>
+                  <span id="factorMix" class="factor-status">—</span>
+                </div>
+                <div class="factor-desc">Variety of account types (cards, loans).</div>
+              </div>
+              <div class="factor-item">
+                <div class="factor-head">
+                  <span><strong>New Credit</strong> · 10%</span>
+                  <span id="factorNew" class="factor-status">—</span>
+                </div>
+                <div class="factor-desc">Hard inquiries and recently opened accounts.</div>
+              </div>
             </div>
           </div>
 
@@ -391,7 +508,7 @@
           </div>
 
           <div class="card">
-            <div class="card-title">Score Tips</div>
+            <div class="card-title">Personalized Tips</div>
             <ul id="creditTips" class="tips-list">
               <li class="empty">Add a card and log a score to get personalized tips.</li>
             </ul>
@@ -585,13 +702,32 @@
         </div>
         <div class="form-row two-col">
           <div>
+            <label>Statement balance (optional)</label>
+            <input type="number" id="cardStatement" step="0.01" min="0" placeholder="0.00" />
+          </div>
+          <div>
             <label>APR % (optional)</label>
             <input type="number" id="cardApr" step="0.01" min="0" placeholder="22.99" />
           </div>
+        </div>
+        <div class="form-row two-col">
           <div>
             <label>Statement due day (1-28)</label>
             <input type="number" id="cardDueDay" min="1" max="28" placeholder="15" />
           </div>
+          <div>
+            <label>Account opened (optional)</label>
+            <input type="date" id="cardOpened" />
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Type</label>
+          <select id="cardType">
+            <option value="credit">Credit Card</option>
+            <option value="charge">Charge Card</option>
+            <option value="store">Store Card</option>
+            <option value="business">Business Card</option>
+          </select>
         </div>
         <label class="toggle-row" style="border-top:1px solid var(--border); padding-top:0.75rem">
           <span><strong>Autopay enabled</strong></span>
@@ -622,6 +758,15 @@
         </div>
         <div class="form-row two-col">
           <div>
+            <label>Bureau</label>
+            <select id="scoreBureau">
+              <option value="">Not specified</option>
+              <option value="Equifax">Equifax</option>
+              <option value="Experian">Experian</option>
+              <option value="TransUnion">TransUnion</option>
+            </select>
+          </div>
+          <div>
             <label>Source</label>
             <select id="scoreSource">
               <option value="Credit Karma">Credit Karma</option>
@@ -633,13 +778,13 @@
               <option value="Other">Other</option>
             </select>
           </div>
-          <div>
-            <label>Type</label>
-            <select id="scoreType">
-              <option value="VantageScore">VantageScore</option>
-              <option value="FICO">FICO</option>
-            </select>
-          </div>
+        </div>
+        <div class="form-row">
+          <label>Type</label>
+          <select id="scoreType">
+            <option value="VantageScore">VantageScore</option>
+            <option value="FICO">FICO</option>
+          </select>
         </div>
         <div class="form-row">
           <label>Note (optional)</label>
@@ -654,7 +799,7 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=17"></script>
+  <script src="app.js?v=18"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

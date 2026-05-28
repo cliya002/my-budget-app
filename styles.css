@@ -1190,3 +1190,183 @@ label {
 
 #chartCreditTrend { max-height: 280px; }
 .card .chart-wrap { height: 240px; }
+
+/* ================ Credit Tracker — Improved ================ */
+.credit-hero {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+.credit-gauge-card { padding: 1.5rem; }
+.credit-side-stats {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+  align-content: start;
+}
+.credit-side-stats .stat-card { margin-bottom: 0; }
+
+.gauge-wrap {
+  display: flex;
+  justify-content: center;
+  margin: 0.5rem 0 0.25rem;
+}
+.score-gauge {
+  width: 100%;
+  max-width: 240px;
+  height: auto;
+  color: var(--text);
+}
+.gauge-range {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  margin: 0 0.25rem 0.5rem;
+}
+.next-tier {
+  text-align: center;
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  margin-top: 0.5rem;
+}
+.next-tier:empty { display: none; }
+
+.stat-cards { border-left-color: var(--teal); }
+
+/* Bureau grid */
+.bureau-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+}
+.bureau-item {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1rem;
+  text-align: center;
+}
+.bureau-name {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.4rem;
+}
+.bureau-score {
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 0.2rem;
+}
+.bureau-score.high { color: var(--success); }
+.bureau-score.good { color: var(--primary); }
+.bureau-score.low { color: var(--warning); }
+.bureau-date { font-size: 0.75rem; color: var(--text-dim); }
+.bureau-equifax { border-top: 4px solid #d62728; }
+.bureau-experian { border-top: 4px solid #1f77b4; }
+.bureau-transunion { border-top: 4px solid #2ca02c; }
+
+/* Simulator */
+.simulator { margin-top: 0.5rem; }
+.sim-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.sim-amount { color: var(--primary); font-size: 1.1rem; }
+#simSlider {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border);
+  border-radius: 3px;
+  padding: 0;
+  outline: none;
+}
+#simSlider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(91, 63, 184, 0.4);
+}
+#simSlider::-moz-range-thumb {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--primary);
+  cursor: pointer;
+  border: none;
+  box-shadow: 0 2px 6px rgba(91, 63, 184, 0.4);
+}
+.sim-results {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: var(--card-soft);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.sim-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.95rem;
+}
+.sim-row strong { font-size: 1.05rem; }
+.sim-row .positive { color: var(--success); }
+
+/* FICO factors */
+.factors-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.factor-item {
+  background: var(--card-soft);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border-left: 4px solid var(--border);
+}
+.factor-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  font-size: 0.95rem;
+}
+.factor-desc { font-size: 0.85rem; color: var(--text-dim); }
+.factor-status {
+  font-size: 0.8rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.factor-status.excellent { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+.factor-status.good { background: var(--primary-soft); color: var(--primary); }
+.factor-status.fair { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.factor-status.poor { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+
+@media (max-width: 980px) {
+  .credit-hero { grid-template-columns: 1fr; }
+  .credit-gauge-card { padding: 1.25rem; }
+}
+@media (max-width: 480px) {
+  .credit-side-stats { grid-template-columns: 1fr; }
+  .bureau-grid { grid-template-columns: 1fr; }
+}
