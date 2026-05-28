@@ -15,6 +15,7 @@
     currency: "mb_currency",
     theme: "mb_theme",
     autoLock: "mb_auto_lock",     // minutes; 0 = disabled
+    hideAmounts: "mb_hide_amounts",
   };
 
   const DEFAULT_PWD_HASH =
@@ -32,6 +33,7 @@
     creditScores: [],
     accounts: [],
     people: [],            // each: { id, name, relation, color, notes }
+    netWorthHistory: [],   // each: { date: 'YYYY-MM-DD', value: number }
     settings: {
       rollover: false,
       alertsShown: {},
@@ -40,6 +42,7 @@
 
   let currency = "USD";
   let theme = "light"; // 'light' | 'dark'
+  let hideAmounts = false;
 
   // Track which transaction we are currently editing (null = adding new)
   let editingTxnId = null;
@@ -83,6 +86,9 @@
   const fmt = (n) => {
     const sym = currencySymbols[currency] || "$";
     const value = Number(n) || 0;
+    if (hideAmounts) {
+      return `${sym}••••`;
+    }
     const formatted = value.toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
@@ -226,6 +232,7 @@
     if (loaded) state = { ...state, ...loaded };
 
     currency = localStorage.getItem(KEYS.currency) || "USD";
+    hideAmounts = localStorage.getItem(KEYS.hideAmounts) === "true";
 
     // Apply saved theme (or auto-detect on first launch)
     theme = localStorage.getItem(KEYS.theme);
@@ -250,6 +257,7 @@
     if (!Array.isArray(state.creditScores)) state.creditScores = [];
     if (!Array.isArray(state.accounts)) state.accounts = [];
     if (!Array.isArray(state.people)) state.people = [];
+    if (!Array.isArray(state.netWorthHistory)) state.netWorthHistory = [];
     if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
       state.monthlyIncome = {};
       // Migrate legacy income to current month
@@ -354,6 +362,8 @@
 
   /* ---------- Save (encrypted when available, plaintext as fallback) ---------- */
   function saveData() {
+    // Always update today's net-worth snapshot so the chart stays current
+    try { snapshotNetWorth(); } catch (e) { /* netWorth uses functions defined later; ignore in early-init save */ }
     if (cryptoKey) {
       // Encrypt asynchronously and write to localStorage; remove plaintext on success
       encryptState(state).then((b64) => {
@@ -684,6 +694,23 @@
     return state.accounts.reduce((s, a) => s + accountBalance(a.id), 0);
   }
 
+  function snapshotNetWorth() {
+    const today = todayStr();
+    const value = netWorth();
+    if (!Array.isArray(state.netWorthHistory)) state.netWorthHistory = [];
+    // Replace today's entry if it exists, else add
+    const idx = state.netWorthHistory.findIndex((s) => s.date === today);
+    if (idx >= 0) {
+      state.netWorthHistory[idx].value = value;
+    } else {
+      state.netWorthHistory.push({ date: today, value });
+    }
+    // Keep last 365 entries max
+    if (state.netWorthHistory.length > 365) {
+      state.netWorthHistory = state.netWorthHistory.slice(-365);
+    }
+  }
+
   /* ---------- Per-month income helpers ---------- */
   function incomeForMonth(monthKeyStr) {
     const explicit = state.monthlyIncome ? state.monthlyIncome[monthKeyStr] : undefined;
@@ -863,6 +890,295 @@
         </li>`;
     });
     list.innerHTML = html;
+  }
+
+  /* ---------- Bills Calendar ---------- */
+  function renderBillsCalendar() {
+    const el = $("#billsCalendar");
+    if (!el) return;
+
+    // Collect all bills for this month: recurring expenses + credit card due dates
+    const m = currentMonth();
+    const today = todayStr();
+    const bills = [];
+
+    state.recurring.forEach((r) => {
+      if (!r.active || r.type !== "expense") return;
+      const day = Math.min(28, r.dayOfMonth || 1);
+      const dateStr = `${m}-${String(day).padStart(2, "0")}`;
+      const paid = state.expenses.some(
+        (e) => e.recurringId === r.id && monthKey(e.date) === m
+      );
+      bills.push({
+        type: "recurring",
+        date: dateStr,
+        day,
+        name: r.desc,
+        amount: r.amount,
+        paid,
+        icon: "📋",
+      });
+    });
+
+    state.cards.forEach((c) => {
+      if (!c.dueDay) return;
+      const day = Math.min(28, c.dueDay);
+      const dateStr = `${m}-${String(day).padStart(2, "0")}`;
+      bills.push({
+        type: "card",
+        date: dateStr,
+        day,
+        name: `${c.name} payment`,
+        amount: c.statement || c.balance || 0,
+        paid: false, // we don't have a separate "paid" field for card
+        autopay: c.autopay,
+        icon: "💳",
+      });
+    });
+
+    if (!bills.length) {
+      el.innerHTML = '<p class="empty">Set up recurring transactions or credit card due dates to see bills.</p>';
+      return;
+    }
+
+    bills.sort((a, b) => a.day - b.day);
+
+    // Summary at top
+    const total = bills.reduce((s, b) => s + Number(b.amount), 0);
+    const paidTotal = bills.filter((b) => b.paid || b.autopay).reduce((s, b) => s + Number(b.amount), 0);
+    const upcoming = bills.filter((b) => b.date > today && !b.paid && !b.autopay).length;
+    const overdue = bills.filter((b) => b.date <= today && !b.paid && !b.autopay).length;
+
+    let html = `
+      <div class="bills-summary">
+        <div><strong>${fmt(total)}</strong> total · ${fmt(paidTotal)} done</div>
+        <div class="card-sub">${overdue ? `⚠ ${overdue} overdue · ` : ""}${upcoming} upcoming</div>
+      </div>
+    `;
+
+    bills.forEach((b) => {
+      const isPast = b.date <= today;
+      let status, statusClass;
+      if (b.paid) {
+        status = "✓ Paid"; statusClass = "paid";
+      } else if (b.autopay) {
+        status = "🔄 Autopay"; statusClass = "autopay";
+      } else if (isPast) {
+        status = "⚠ Overdue"; statusClass = "overdue";
+      } else {
+        status = "⏳ Upcoming"; statusClass = "upcoming";
+      }
+
+      const dt = new Date(b.date);
+      const dayName = dt.toLocaleDateString(undefined, { weekday: "short" });
+
+      html += `
+        <div class="bill-row ${statusClass}">
+          <div class="bill-date">
+            <div class="bill-day">${b.day}</div>
+            <div class="bill-dow">${dayName}</div>
+          </div>
+          <div class="bill-info">
+            <div class="bill-name">${b.icon} ${escapeHtml(b.name)}</div>
+            <div class="bill-status ${statusClass}">${status}</div>
+          </div>
+          <div class="bill-amount">${fmt(b.amount)}</div>
+        </div>`;
+    });
+
+    el.innerHTML = html;
+  }
+
+  /* ---------- Smart Insights ---------- */
+  function renderSmartInsights() {
+    const el = $("#smartInsights");
+    if (!el) return;
+    const insights = generateInsights();
+    if (!insights.length) {
+      el.innerHTML = '<p class="empty">Add more transactions to see personalized insights.</p>';
+      return;
+    }
+    el.innerHTML = insights
+      .map((i) => `
+        <div class="insight-item ${i.tone || ""}">
+          <span class="insight-icon">${i.icon}</span>
+          <span class="insight-text">${i.text}</span>
+        </div>
+      `)
+      .join("");
+  }
+
+  function generateInsights() {
+    const insights = [];
+    const m = currentMonth();
+    const prev = prevMonth(m);
+    const monthExpenses = state.expenses.filter(
+      (e) => monthKey(e.date) === m && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    const prevExpenses = state.expenses.filter(
+      (e) => monthKey(e.date) === prev && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+
+    if (monthExpenses.length === 0 && prevExpenses.length === 0) return insights;
+
+    const totalThisMonth = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalLastMonth = prevExpenses.reduce((s, e) => s + Number(e.amount), 0);
+
+    // 1) Month-over-month change
+    if (totalLastMonth > 0 && totalThisMonth > 0) {
+      const diffPct = ((totalThisMonth - totalLastMonth) / totalLastMonth) * 100;
+      if (Math.abs(diffPct) >= 10) {
+        const dir = diffPct > 0 ? "up" : "down";
+        const tone = diffPct > 0 ? "warn" : "positive";
+        insights.push({
+          icon: diffPct > 0 ? "📈" : "📉",
+          tone,
+          text: `Your spending is <strong>${dir} ${Math.abs(diffPct).toFixed(0)}%</strong> vs last month (${fmt(totalThisMonth)} this month vs ${fmt(totalLastMonth)}).`,
+        });
+      }
+    }
+
+    // 2) Top category usage
+    const catTotals = {};
+    monthExpenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      catTotals[name] = (catTotals[name] || 0) + Number(e.amount);
+    });
+    const topCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    if (topCats.length === 3 && totalThisMonth > 0) {
+      const top3sum = topCats.reduce((s, [, v]) => s + v, 0);
+      const top3pct = (top3sum / totalThisMonth) * 100;
+      insights.push({
+        icon: "🎯",
+        tone: top3pct > 75 ? "warn" : "",
+        text: `<strong>${topCats[0][0]}, ${topCats[1][0]}, ${topCats[2][0]}</strong> account for ${top3pct.toFixed(0)}% of your spending.`,
+      });
+    }
+
+    // 3) Budget over-pace warning
+    const today = new Date();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const dayOfMonth = today.getDate();
+    if (dayOfMonth < daysInMonth) {
+      state.categories.forEach((cat) => {
+        const limit = effectiveLimitFor(cat, m);
+        if (limit <= 0) return;
+        const spent = monthExpenses.filter((e) => e.categoryId === cat.id).reduce((s, e) => s + Number(e.amount), 0);
+        if (spent === 0) return;
+        const projected = (spent / dayOfMonth) * daysInMonth;
+        if (projected > limit * 1.10) {
+          insights.push({
+            icon: "⚠️",
+            tone: "danger",
+            text: `At this pace, <strong>${cat.name}</strong> will hit ${fmt(projected)} (${(projected / limit * 100).toFixed(0)}% of ${fmt(limit)} budget).`,
+          });
+        }
+      });
+    }
+
+    // 4) Savings rate insight
+    const incomeReal = state.expenses
+      .filter((e) => e.type === "income" && monthKey(e.date) === m)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    const incomeTarget = incomeForMonth(m);
+    const incomeForRate = incomeReal > 0 ? incomeReal : incomeTarget;
+    if (incomeForRate > 0) {
+      const rate = ((incomeForRate - totalThisMonth) / incomeForRate) * 100;
+      if (rate >= 50) {
+        insights.push({
+          icon: "🏆",
+          tone: "positive",
+          text: `Saving <strong>${rate.toFixed(0)}%</strong> of income — that's exceptional. You're on FIRE pace.`,
+        });
+      } else if (rate >= 20) {
+        insights.push({
+          icon: "✨",
+          tone: "positive",
+          text: `Saving <strong>${rate.toFixed(0)}%</strong> of income — solid budgeting.`,
+        });
+      } else if (rate < 0) {
+        insights.push({
+          icon: "🚨",
+          tone: "danger",
+          text: `Spending <strong>${Math.abs(rate).toFixed(0)}% more</strong> than income this month. Reduce spending or boost income.`,
+        });
+      }
+    }
+
+    // 5) Subscription bloat
+    const subTotal = state.recurring
+      .filter((r) => r.active && r.type === "expense")
+      .reduce((s, r) => s + Number(r.amount), 0);
+    if (subTotal > 0 && incomeForRate > 0) {
+      const subPct = (subTotal / incomeForRate) * 100;
+      if (subPct >= 30) {
+        insights.push({
+          icon: "📺",
+          tone: "warn",
+          text: `Recurring bills total <strong>${fmt(subTotal)}/mo</strong>, ${subPct.toFixed(0)}% of income. Consider auditing subscriptions.`,
+        });
+      }
+    }
+
+    // 6) Big-ticket detection (largest single transaction)
+    const sortedExp = [...monthExpenses].sort((a, b) => Number(b.amount) - Number(a.amount));
+    if (sortedExp[0] && totalThisMonth > 0) {
+      const biggest = sortedExp[0];
+      const pct = (Number(biggest.amount) / totalThisMonth) * 100;
+      if (pct >= 25) {
+        insights.push({
+          icon: "💰",
+          tone: "warn",
+          text: `Largest expense: <strong>${escapeHtml(biggest.desc)}</strong> at ${fmt(biggest.amount)} (${pct.toFixed(0)}% of monthly spend).`,
+        });
+      }
+    }
+
+    // 7) Anomaly: transaction unusually large for its category
+    monthExpenses.forEach((e) => {
+      if (!e.categoryId) return;
+      const sameCatPast = state.expenses.filter(
+        (x) =>
+          x.categoryId === e.categoryId &&
+          x.type !== "income" && x.type !== "transfer-in" && x.type !== "transfer-out" &&
+          x.id !== e.id
+      );
+      if (sameCatPast.length < 5) return;
+      const avg = sameCatPast.reduce((s, x) => s + Number(x.amount), 0) / sameCatPast.length;
+      if (Number(e.amount) >= avg * 3 && Number(e.amount) >= 50) {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        insights.push({
+          icon: "🔎",
+          tone: "warn",
+          text: `<strong>${escapeHtml(e.desc)}</strong> (${fmt(e.amount)}) is ${(Number(e.amount) / avg).toFixed(1)}× your average ${cat ? cat.name : "category"} spend.`,
+        });
+      }
+    });
+
+    // 8) Goal progress
+    state.goals.forEach((g) => {
+      const target = Number(g.target) || 0;
+      const saved = Number(g.saved) || 0;
+      if (target <= 0 || saved <= 0) return;
+      const pct = (saved / target) * 100;
+      if (pct >= 100) {
+        insights.push({
+          icon: "🎉",
+          tone: "positive",
+          text: `Goal <strong>${escapeHtml(g.name)}</strong> reached! ${fmt(saved)} saved.`,
+        });
+      } else if (pct >= 75) {
+        insights.push({
+          icon: "🚀",
+          tone: "positive",
+          text: `<strong>${escapeHtml(g.name)}</strong> is ${pct.toFixed(0)}% funded. Keep going.`,
+        });
+      }
+    });
+
+    // Cap to 6 most relevant
+    return insights.slice(0, 6);
   }
 
   function renderIncomeOverview() {
@@ -1445,6 +1761,28 @@
       .reduce((s, e) => s + Number(e.amount), 0);
     $("#statFamily").textContent = fmt(totalFamily);
 
+    // Savings rate = (income - spending) / income
+    // Use real income transactions if logged, otherwise target
+    const incomeForRate = totalIncomeReal > 0 ? totalIncomeReal : totalIncome;
+    const savingsRate = incomeForRate > 0
+      ? ((incomeForRate - totalSpent) / incomeForRate) * 100
+      : 0;
+    $("#statSavingsRate").textContent = `${savingsRate.toFixed(0)}%`;
+    const rateHint = $("#statSavingsRateHint");
+    if (incomeForRate === 0) {
+      rateHint.textContent = "Add income";
+    } else if (savingsRate >= 50) {
+      rateHint.innerHTML = '<span class="positive">Excellent</span>';
+    } else if (savingsRate >= 20) {
+      rateHint.innerHTML = '<span class="positive">Good</span>';
+    } else if (savingsRate >= 10) {
+      rateHint.innerHTML = '<span style="color:var(--warning)">Fair</span>';
+    } else if (savingsRate > 0) {
+      rateHint.innerHTML = '<span class="negative">Low</span>';
+    } else {
+      rateHint.innerHTML = '<span class="negative">Spending more than earning</span>';
+    }
+
     // Hide first-use hint once any transactions exist
     const hint = $("#firstUseHint");
     if (hint) hint.hidden = state.expenses.length > 0;
@@ -1467,6 +1805,23 @@
           const rolloverNote = state.settings.rollover && effectiveLimit !== Number(cat.limit)
             ? `<span class="rollover-tag">+${fmt(effectiveLimit - cat.limit)} rolled over</span>`
             : "";
+
+          // Forecast: pace * days in month
+          const today = new Date();
+          const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+          const dayOfMonth = today.getDate();
+          const projected = dayOfMonth > 0 ? (spent / dayOfMonth) * daysInMonth : spent;
+          let forecastTag = "";
+          if (effectiveLimit > 0 && spent > 0 && dayOfMonth < daysInMonth) {
+            if (projected > effectiveLimit * 1.05) {
+              forecastTag = `<span class="forecast-tag forecast-over">📈 ${fmt(projected)} projected (over by ${fmt(projected - effectiveLimit)})</span>`;
+            } else if (projected > effectiveLimit * 0.85) {
+              forecastTag = `<span class="forecast-tag forecast-warn">📈 ${fmt(projected)} projected</span>`;
+            } else {
+              forecastTag = `<span class="forecast-tag forecast-ok">📈 ${fmt(projected)} projected · on track</span>`;
+            }
+          }
+
           return `
             <div class="progress-item">
               <div class="progress-header">
@@ -1476,6 +1831,7 @@
               <div class="progress-bar">
                 <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
               </div>
+              ${forecastTag}
             </div>`;
         })
         .join("");
@@ -1520,6 +1876,8 @@
 
     // Income Overview card on dashboard
     renderIncomeOverview();
+    renderBillsCalendar();
+    renderSmartInsights();
   }
 
   function renderBalances() {
@@ -1789,6 +2147,7 @@
     renderCashFlowChart();
     renderIncomeSourcesChart();
     renderIncomeTypeChart();
+    renderNetWorthChart();
   }
 
   function filterExpensesForInsights() {
@@ -3486,6 +3845,59 @@
     });
   }
 
+  function renderNetWorthChart() {
+    destroyChart("netWorth");
+    const ctx = $("#chartNetWorth");
+    if (!ctx) return;
+
+    const history = state.netWorthHistory || [];
+    if (history.length < 2) {
+      $("#netWorthEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#netWorthEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+    const labels = sorted.map((s) => {
+      const [y, m, d] = s.date.split("-");
+      return new Date(Number(y), Number(m) - 1, Number(d))
+        .toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    });
+    const data = sorted.map((s) => s.value);
+
+    charts.netWorth = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Net Worth",
+          data,
+          borderColor: "#5b3fb8",
+          backgroundColor: "rgba(91, 63, 184, 0.1)",
+          tension: 0.3,
+          fill: true,
+          pointRadius: 2,
+          pointHoverRadius: 5,
+          borderWidth: 3,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => `Net worth: ${fmt(ctx.parsed.y)}` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -4929,6 +5341,30 @@
       localStorage.setItem(KEYS.currency, currency);
       renderAll();
     });
+
+    // Auto-lock timeout
+    const autoLockSel = $("#autoLockSelect");
+    if (autoLockSel) {
+      autoLockSel.value = localStorage.getItem(KEYS.autoLock) || "10";
+      autoLockSel.addEventListener("change", (e) => {
+        localStorage.setItem(KEYS.autoLock, e.target.value);
+        autoLockMinutes = parseInt(e.target.value, 10);
+        resetAutoLockTimer();
+        showToast(autoLockMinutes === 0 ? "Auto-lock disabled" : `Auto-lock set to ${autoLockMinutes} min`);
+      });
+    }
+
+    // Hide amounts (stealth mode)
+    const hideToggle = $("#hideAmountsToggle");
+    if (hideToggle) {
+      hideToggle.checked = hideAmounts;
+      hideToggle.addEventListener("change", (e) => {
+        hideAmounts = e.target.checked;
+        localStorage.setItem(KEYS.hideAmounts, hideAmounts ? "true" : "false");
+        renderAll();
+        showToast(hideAmounts ? "Stealth mode on" : "Stealth mode off");
+      });
+    }
 
     // Change password
     $("#changePasswordBtn").addEventListener("click", async () => {
