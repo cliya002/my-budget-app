@@ -253,6 +253,7 @@
     // Restore last sync time
     const ls = parseInt(localStorage.getItem("mb_last_synced") || "0", 10);
     if (ls > 0) lastSyncedAt = ls;
+    lastSyncedHash = localStorage.getItem("mb_last_synced_hash") || null;
 
     // Apply saved theme (or auto-detect on first launch)
     theme = localStorage.getItem(KEYS.theme);
@@ -577,6 +578,7 @@
       }
     }
     await loadData();
+    purgeOldTombstones();
     processRecurring();
     renderAll();
     checkBudgetAlerts();
@@ -585,8 +587,9 @@
     updateSyncIndicator("synced");
     // If sync is set up, automatically merge cloud data on open
     if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId)) {
-      // Silent merge — never overwrites local with older data
-      setTimeout(() => syncPull({ skipConfirm: true, silent: true }), 1000);
+      // Wait for initial render to finish, then silently merge cloud data
+      // (longer delay prevents flicker / duplicate-render race)
+      setTimeout(() => syncPull({ skipConfirm: true, silent: true }), 2000);
     }
     maybeStartTour();
   }
@@ -6007,6 +6010,29 @@
       }
     });
 
+    // Force overwrite cloud with local (skip merge step)
+    $("#syncForceOverwriteBtn")?.addEventListener("click", async () => {
+      if (!confirm("⚠️ Push your local data to cloud, REPLACING whatever's there. Other devices will pull this and lose any unmerged changes. Continue?")) return;
+      lastSyncedHash = null; // bust echo prevention
+      await syncPush({ force: true });
+    });
+
+    // Force replace local with cloud (skip merge — wipe local first)
+    $("#syncForceReplaceBtn")?.addEventListener("click", async () => {
+      if (!confirm("⚠️ Wipe local data and replace it with cloud's data exactly. You will lose any local changes that aren't in the cloud. Continue?")) return;
+      // Clear all relevant collections so merge effectively becomes a replace
+      const empty = {
+        income: 0, monthlyIncome: {}, categories: [], expenses: [], goals: [],
+        presets: [], recurring: [], cards: [], creditScores: [], accounts: [], people: [],
+        netWorthHistory: [], creditInquiries: [], negativeItems: [], limitIncreases: [],
+        creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {},
+        settings: { rollover: false, alertsShown: {} },
+      };
+      state = empty;
+      saveData();
+      await syncPull({ skipConfirm: true });
+    });
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -7604,6 +7630,23 @@
     state.deletions[collection][id] = Date.now();
   }
 
+  // Purge tombstones older than 90 days — anything that old is unlikely to come back from a stale device
+  function purgeOldTombstones() {
+    if (!state.deletions) return;
+    const cutoff = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    let purged = 0;
+    Object.keys(state.deletions).forEach((coll) => {
+      const map = state.deletions[coll] || {};
+      Object.keys(map).forEach((id) => {
+        if (map[id] < cutoff) {
+          delete map[id];
+          purged += 1;
+        }
+      });
+    });
+    return purged;
+  }
+
   function touchRecord(rec) {
     rec.updatedAt = Date.now();
     return rec;
@@ -7616,6 +7659,10 @@
   let syncRetryCount = 0;
   // Track IDs added on the most recent pull, so the UI can highlight them
   const recentlyPulledIds = new Set();
+  // Hash of the most recently synced encrypted blob — for echo prevention
+  let lastSyncedHash = null;
+  // Most recent remote updated_at we've seen — for cheap freshness check
+  let lastKnownRemoteUpdate = null;
   const SYNC_HISTORY_KEY = "mb_sync_history";
 
   function logSyncEvent(action, status, message) {
@@ -7632,6 +7679,16 @@
     } catch (e) { /* ignore */ }
   }
 
+  // Cheap, fast hash for echo prevention (not cryptographic)
+  function quickHash(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = ((h << 5) - h) + str.charCodeAt(i);
+      h |= 0;
+    }
+    return String(h);
+  }
+
   function startAutoSync() {
     stopAutoSync();
     if (localStorage.getItem("mb_auto_sync") !== "true") return;
@@ -7644,12 +7701,36 @@
 
     // Pull every 30 seconds when app is visible (so other devices' changes show up)
     if (window._pullPollTimer) clearInterval(window._pullPollTimer);
-    window._pullPollTimer = setInterval(() => {
+    window._pullPollTimer = setInterval(async () => {
       if (document.hidden) return;
       if (!navigator.onLine) return;
       if (!localStorage.getItem(KEYS.syncGistId)) return;
-      // Silent pull-merge — only updates if remote has newer/different data
-      syncPull({ skipConfirm: true, silent: true });
+
+      // Cheap freshness check: hit the Gist endpoint but only check updated_at.
+      // GitHub still returns the full payload but we skip parsing if not newer.
+      try {
+        const token = localStorage.getItem(KEYS.syncToken);
+        const gistId = localStorage.getItem(KEYS.syncGistId);
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          if (res.status === 401) {
+            showAlertToast("⚠️ Sync token rejected — it may have expired. Generate a new one in Settings.", "danger");
+            stopAutoSync();
+            return;
+          }
+          return;
+        }
+        const data = await res.json();
+        if (lastKnownRemoteUpdate && data.updated_at === lastKnownRemoteUpdate) {
+          // Nothing new — skip the full pull
+          return;
+        }
+        lastKnownRemoteUpdate = data.updated_at;
+        // Newer remote — do a silent pull
+        syncPull({ skipConfirm: true, silent: true });
+      } catch (e) { /* network blip */ }
     }, 30 * 1000);
 
     // Refresh "X min ago" badge every minute
@@ -7827,6 +7908,15 @@
       const encBlob = await encryptState(state);
       if (!encBlob) throw new Error("Encryption failed");
 
+      // Echo prevention: skip if encrypted blob hash matches last successful sync.
+      // This avoids pointless re-pushes after a pull-merge that produced no actual change.
+      const blobHash = quickHash(encBlob);
+      if (!force && lastSyncedHash === blobHash && dirtyForSync === false) {
+        if (!silent) showSyncStatus("Already synced — nothing to push.", "success");
+        updateSyncIndicator("synced");
+        return;
+      }
+
       // Read this device's local sync history to include in the payload
       let localHistory = [];
       try { localHistory = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]"); }
@@ -7878,15 +7968,35 @@
       const sizeMsg = `Pushed ${(payload.length / 1024).toFixed(1)} KB · ${new Date().toLocaleTimeString()}`;
       showSyncStatus(`✓ ${sizeMsg}`, "success");
       lastSyncedAt = Date.now();
+      lastSyncedHash = blobHash;
+      lastKnownRemoteUpdate = data.updated_at || null;
       localStorage.setItem("mb_last_synced", String(lastSyncedAt));
+      localStorage.setItem("mb_last_synced_hash", lastSyncedHash);
       dirtyForSync = false;
       syncRetryCount = 0;
       updateSyncIndicator("synced");
       logSyncEvent("push", "success", sizeMsg);
+
+      // Size warning at 80% of 1 MB Gist limit
+      const usagePct = (payload.length / (1024 * 1024)) * 100;
+      if (usagePct >= 80) {
+        showAlertToast(`⚠️ Sync data at ${usagePct.toFixed(0)}% of GitHub Gist's 1 MB limit. Consider deleting old receipts.`, "warning");
+      }
       renderSyncHistory();
     } catch (e) {
       console.error(e);
       logSyncEvent("push", "error", e.message);
+
+      // Specific guidance for token expiration / auth errors
+      const isAuth = /401|403|bad credentials|unauthorized|expired|invalid/i.test(String(e.message));
+      if (isAuth) {
+        showAlertToast("⚠️ Sync token rejected — generate a new one in Settings → Sync.", "danger");
+        stopAutoSync();
+        updateSyncIndicator("error");
+        renderSyncHistory();
+        return;
+      }
+
       // Retry with backoff (max 3 attempts)
       if (silent && syncRetryCount < 3) {
         syncRetryCount += 1;
