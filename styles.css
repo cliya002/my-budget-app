@@ -1443,3 +1443,91 @@ label {
   font-weight: 500;
 }
 .detected-toggle input[type="checkbox"] { width: auto; margin: 0; accent-color: var(--primary); }
+
+/* ================ Debt Payoff Calculator ================ */
+.payoff-controls { margin-bottom: 0.5rem; }
+.payoff-results { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.payoff-warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--warning);
+  font-size: 0.9rem;
+}
+.payoff-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.payoff-stat {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  text-align: center;
+}
+.payoff-stat-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.25rem;
+}
+.payoff-stat-value { font-size: 1.25rem; font-weight: 700; }
+.payoff-stat-value.negative { color: var(--pink); }
+
+.payoff-order-title {
+  font-weight: 700;
+  margin: 0.5rem 0 0.6rem;
+  font-size: 0.95rem;
+}
+.payoff-order {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.payoff-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.payoff-rank {
+  background: var(--primary);
+  color: #fff;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+.payoff-info { flex: 1; min-width: 0; }
+.payoff-name { font-weight: 600; }
+.payoff-detail { font-size: 0.8rem; color: var(--text-dim); }
+.payoff-when { font-weight: 600; color: var(--primary); white-space: nowrap; }
+
+.payoff-compare {
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+}
+
+@media (max-width: 480px) {
+  .payoff-summary { grid-template-columns: 1fr; }
+}

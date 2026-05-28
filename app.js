@@ -1427,6 +1427,219 @@
     renderScoreList();
     renderCreditTrend();
     renderCreditTips();
+    renderPayoffEmpty();
+  }
+
+  function renderPayoffEmpty() {
+    const eligible = state.cards.filter((c) => Number(c.balance) > 0);
+    $("#payoffEmpty").hidden = eligible.length > 0;
+  }
+
+  function calculatePayoff() {
+    const monthly = parseFloat($("#payoffMonthly").value);
+    const strategy = $("#payoffStrategy").value;
+    const cards = state.cards
+      .filter((c) => Number(c.balance) > 0)
+      .map((c) => ({
+        id: c.id,
+        name: c.name,
+        balance: Number(c.balance),
+        apr: Number(c.apr) || 22.99, // assume 22.99% if missing
+      }));
+
+    if (!cards.length) {
+      $("#payoffResults").hidden = true;
+      showToast("Add cards with balances first");
+      return;
+    }
+    if (!monthly || monthly <= 0) {
+      showToast("Enter a monthly payment");
+      return;
+    }
+
+    // Minimum payment estimate: 2% of balance, min $25 per card
+    const minPerCard = (bal) => Math.min(bal, Math.max(25, bal * 0.02));
+    const totalMin = cards.reduce((s, c) => s + minPerCard(c.balance), 0);
+
+    if (monthly < totalMin) {
+      $("#payoffResults").innerHTML = `
+        <div class="payoff-warning">
+          ⚠️ Your monthly payment (${fmt(monthly)}) is less than the estimated minimum across all cards (${fmt(totalMin)}).
+          Increase the payment to start paying down principal.
+        </div>`;
+      $("#payoffResults").hidden = false;
+      return;
+    }
+
+    // Sort by strategy
+    if (strategy === "snowball") {
+      cards.sort((a, b) => a.balance - b.balance);
+    } else {
+      cards.sort((a, b) => b.apr - a.apr);
+    }
+
+    // Simulate month by month, max 600 months (50 years) safety
+    let month = 0;
+    let totalInterest = 0;
+    const payoffOrder = [];
+    const working = cards.map((c) => ({ ...c, paidOff: false, monthPaid: null, interestPaid: 0 }));
+
+    while (working.some((c) => c.balance > 0.01) && month < 600) {
+      month += 1;
+
+      // Apply interest first
+      working.forEach((c) => {
+        if (c.balance > 0) {
+          const monthlyRate = c.apr / 100 / 12;
+          const interest = c.balance * monthlyRate;
+          c.interestPaid += interest;
+          c.balance += interest;
+          totalInterest += interest;
+        }
+      });
+
+      // Pay minimums on all cards
+      let leftover = monthly;
+      working.forEach((c) => {
+        if (c.balance <= 0) return;
+        const min = Math.min(c.balance, minPerCard(c.balance));
+        c.balance -= min;
+        leftover -= min;
+      });
+
+      // Apply leftover to highest-priority unpaid card
+      const target = working.find((c) => c.balance > 0);
+      if (target && leftover > 0) {
+        const pay = Math.min(leftover, target.balance);
+        target.balance -= pay;
+        leftover -= pay;
+      }
+
+      // Cascade any remaining leftover (target was paid off)
+      while (leftover > 0.01) {
+        const next = working.find((c) => c.balance > 0);
+        if (!next) break;
+        const pay = Math.min(leftover, next.balance);
+        next.balance -= pay;
+        leftover -= pay;
+      }
+
+      // Check newly paid-off cards
+      working.forEach((c) => {
+        if (c.balance <= 0.01 && !c.paidOff) {
+          c.paidOff = true;
+          c.monthPaid = month;
+          payoffOrder.push(c);
+        }
+      });
+    }
+
+    // Render results
+    const totalPaid = monthly * month;
+    const totalStartBal = cards.reduce((s, c) => s + c.balance, 0);
+    let html = `
+      <div class="payoff-summary">
+        <div class="payoff-stat">
+          <div class="payoff-stat-label">Time to debt-free</div>
+          <div class="payoff-stat-value">${formatMonths(month)}</div>
+        </div>
+        <div class="payoff-stat">
+          <div class="payoff-stat-label">Total interest</div>
+          <div class="payoff-stat-value negative">${fmt(totalInterest)}</div>
+        </div>
+        <div class="payoff-stat">
+          <div class="payoff-stat-label">Total paid</div>
+          <div class="payoff-stat-value">${fmt(totalPaid)}</div>
+        </div>
+      </div>
+      <div class="payoff-order-title">Payoff order</div>
+      <ol class="payoff-order">
+    `;
+
+    payoffOrder.forEach((c, i) => {
+      const monthsToPayoff = c.monthPaid;
+      html += `
+        <li class="payoff-item">
+          <span class="payoff-rank">#${i + 1}</span>
+          <div class="payoff-info">
+            <div class="payoff-name">${escapeHtml(c.name)}</div>
+            <div class="payoff-detail">${fmt(c.interestPaid)} interest · ${formatMonths(monthsToPayoff)} to pay off</div>
+          </div>
+          <span class="payoff-when">Month ${monthsToPayoff}</span>
+        </li>`;
+    });
+    html += "</ol>";
+
+    // Compare with the other strategy briefly
+    const compareStrategy = strategy === "avalanche" ? "snowball" : "avalanche";
+    const compare = simulateQuick(monthly, compareStrategy);
+    if (compare && compare.month > 0) {
+      const interestDiff = compare.totalInterest - totalInterest;
+      const monthDiff = compare.month - month;
+      let comparison = "";
+      if (Math.abs(interestDiff) > 1 || Math.abs(monthDiff) > 0) {
+        const better = interestDiff > 0 || monthDiff > 0;
+        const word = better ? "saves" : "costs more by";
+        comparison = `
+          <div class="payoff-compare">
+            💡 vs <strong>${compareStrategy}</strong>: ${strategy} ${word}
+            ${Math.abs(interestDiff).toFixed(0) > 0 ? `${fmt(Math.abs(interestDiff))} in interest` : ""}
+            ${Math.abs(monthDiff) > 0 ? ` and ${Math.abs(monthDiff)} month${Math.abs(monthDiff) === 1 ? "" : "s"}` : ""}
+          </div>`;
+      }
+      html += comparison;
+    }
+
+    $("#payoffResults").innerHTML = html;
+    $("#payoffResults").hidden = false;
+  }
+
+  function simulateQuick(monthly, strategy) {
+    const cards = state.cards
+      .filter((c) => Number(c.balance) > 0)
+      .map((c) => ({ balance: Number(c.balance), apr: Number(c.apr) || 22.99 }));
+    if (!cards.length || monthly <= 0) return null;
+
+    if (strategy === "snowball") cards.sort((a, b) => a.balance - b.balance);
+    else cards.sort((a, b) => b.apr - a.apr);
+
+    const minPerCard = (bal) => Math.min(bal, Math.max(25, bal * 0.02));
+    let month = 0;
+    let totalInterest = 0;
+    while (cards.some((c) => c.balance > 0.01) && month < 600) {
+      month += 1;
+      cards.forEach((c) => {
+        if (c.balance > 0) {
+          const i = c.balance * (c.apr / 100 / 12);
+          c.balance += i;
+          totalInterest += i;
+        }
+      });
+      let leftover = monthly;
+      cards.forEach((c) => {
+        if (c.balance <= 0) return;
+        const min = Math.min(c.balance, minPerCard(c.balance));
+        c.balance -= min;
+        leftover -= min;
+      });
+      while (leftover > 0.01) {
+        const next = cards.find((c) => c.balance > 0);
+        if (!next) break;
+        const pay = Math.min(leftover, next.balance);
+        next.balance -= pay;
+        leftover -= pay;
+      }
+    }
+    return { month, totalInterest };
+  }
+
+  function formatMonths(m) {
+    if (m <= 0) return "—";
+    if (m < 12) return `${m} month${m === 1 ? "" : "s"}`;
+    const years = Math.floor(m / 12);
+    const remMonths = m % 12;
+    if (remMonths === 0) return `${years} year${years === 1 ? "" : "s"}`;
+    return `${years}y ${remMonths}m`;
   }
 
   function totalCardLimit() {
@@ -2555,6 +2768,9 @@
       parseCreditReport(text);
     });
     $("#importApplyBtn").addEventListener("click", applyImport);
+
+    // Debt payoff
+    $("#payoffCalcBtn").addEventListener("click", calculatePayoff);
 
     // Card form
     $("#cardForm").addEventListener("submit", (e) => {
