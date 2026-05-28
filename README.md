@@ -1,4 +1,4 @@
-# 💰 My Budget
+# 👛 Pocket Budget App
 
 A mobile-friendly, offline-first budget app that runs entirely in your browser. Track monthly income and expenses, set savings goals, and snap photos of receipts on your phone.
 

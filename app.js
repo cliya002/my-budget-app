@@ -1,5 +1,5 @@
 /* ============================================================
- * Pursenal — local-only budget app
+ * Pocket Budget App — local-only budget app
  * Data persists in localStorage. Receipts as data URLs.
  * Password stored as SHA-256 hash (see README — not encryption).
  * ============================================================ */
@@ -960,7 +960,7 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `pursenal-${todayStr()}.json`;
+      a.download = `pocket-budget-${todayStr()}.json`;
       a.click();
       URL.revokeObjectURL(url);
     });
