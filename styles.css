@@ -57,6 +57,9 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 
+/* Global safety: HTML hidden attribute always wins over display: flex/grid/etc. */
+[hidden] { display: none !important; }
+
 html, body {
   margin: 0;
   padding: 0;
@@ -2444,6 +2447,7 @@ input[type="color"] {
   align-items: flex-end;
   animation: fabMenuPop 0.2s ease;
 }
+.fab-menu[hidden] { display: none !important; }
 @keyframes fabMenuPop {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
@@ -2475,6 +2479,9 @@ input[type="color"] {
   align-items: flex-start;
   justify-content: center;
   padding: 4rem 1rem 1rem;
+}
+.search-overlay[hidden] {
+  display: none !important;
 }
 .search-modal {
   background: var(--card);
