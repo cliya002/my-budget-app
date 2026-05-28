@@ -251,7 +251,12 @@
 
     if (loaded) state = { ...state, ...loaded };
 
-    currency = localStorage.getItem(KEYS.currency) || "USD";
+    // Currency: prefer state.settings.currency (cross-device), fall back to per-device localStorage
+    if (state.settings && state.settings.currency) {
+      currency = state.settings.currency;
+    } else {
+      currency = localStorage.getItem(KEYS.currency) || "USD";
+    }
     hideAmounts = localStorage.getItem(KEYS.hideAmounts) === "true";
 
     // Restore last sync time
@@ -814,6 +819,11 @@
 
   /* ---------- Renderers ---------- */
   function renderAll() {
+    // Pick up synced currency setting if it changed via cross-device sync
+    if (state.settings && state.settings.currency && state.settings.currency !== currency) {
+      currency = state.settings.currency;
+      localStorage.setItem(KEYS.currency, currency);
+    }
     $("#monthLabel").textContent = monthLabel(currentMonth());
     renderDashboard();
     renderBalances();
@@ -2059,8 +2069,26 @@
   }
 
   /* ---------- Rollover & alerts ---------- */
+  // Returns the limit that was effective for `cat` during `month` (YYYY-MM).
+  // Falls back to current cat.limit if no history is recorded.
+  // History format: [{ until: "YYYY-MM", limit: number }, ...] — each entry
+  // describes a past period whose limit applied through `until` (inclusive).
+  function limitForMonth(cat, month) {
+    const history = Array.isArray(cat.limitHistory) ? cat.limitHistory : [];
+    if (!history.length) return Number(cat.limit) || 0;
+    // Find the earliest history entry whose `until` >= month
+    const sorted = [...history].sort((a, b) =>
+      String(a.until || "").localeCompare(String(b.until || ""))
+    );
+    for (const h of sorted) {
+      if (h.until && h.until >= month) return Number(h.limit) || 0;
+    }
+    // No history entry covers this month — use current limit
+    return Number(cat.limit) || 0;
+  }
+
   function effectiveLimitFor(cat, month) {
-    const base = Number(cat.limit) || 0;
+    const base = limitForMonth(cat, month);
     if (!state.settings.rollover) return base;
 
     // Walk back month-by-month, accumulating leftover until we hit a month
@@ -2074,7 +2102,7 @@
       );
       if (!monthExp.length) break;
       const spent = monthExp.reduce((s, e) => s + Number(e.amount), 0);
-      const leftover = base - spent;
+      const leftover = limitForMonth(cat, m) - spent;
       if (leftover <= 0) break;
       extra += leftover;
       m = prevMonth(m);
@@ -6874,18 +6902,48 @@
         if (newLimit === null) return;
         cat.name = newName.trim() || cat.name;
         const lim = parseFloat(newLimit);
-        if (!isNaN(lim)) cat.limit = lim;
+        if (!isNaN(lim) && lim !== Number(cat.limit)) {
+          // Snapshot the old limit as effective through the current month.
+          // The new limit applies starting next month (current-month spend stays
+          // measured against the limit it was tracking with).
+          if (!Array.isArray(cat.limitHistory)) cat.limitHistory = [];
+          cat.limitHistory.push({ until: currentMonth(), limit: Number(cat.limit) || 0 });
+          cat.limit = lim;
+        } else if (!isNaN(lim)) {
+          cat.limit = lim;
+        }
         touchRecord(cat);
         saveData();
         renderAll();
       } else if (action === "del-exp") {
         const txn = state.expenses.find((x) => x.id === id);
         if (txn && confirm("Delete this transaction?")) {
-          tombstoneRecord("expenses", id);
-          state.expenses = state.expenses.filter((x) => x.id !== id);
+          // Find any linked transactions (transfer pair, paycheck deductions+splits)
+          const linked = [];
+          if (txn.transferGroupId) {
+            state.expenses.forEach((e) => {
+              if (e.transferGroupId === txn.transferGroupId && e.id !== id) linked.push(e);
+            });
+          }
+          if (txn.paycheckId) {
+            state.expenses.forEach((e) => {
+              if (e.paycheckId === txn.paycheckId && e.id !== id) linked.push(e);
+            });
+          }
+          if (linked.length > 0) {
+            const proceed = confirm(
+              `This is part of a ${txn.transferGroupId ? "transfer" : "paycheck"} group of ${linked.length + 1} linked transactions. ` +
+              `Delete the whole group?`
+            );
+            if (!proceed) return;
+          }
+          const allRemoved = [txn, ...linked];
+          allRemoved.forEach((t) => tombstoneRecord("expenses", t.id));
+          const removeIds = new Set(allRemoved.map((t) => t.id));
+          state.expenses = state.expenses.filter((x) => !removeIds.has(x.id));
           saveData();
           renderAll();
-          showUndoToast([txn]);
+          showUndoToast(allRemoved);
         }
       } else if (action === "select-txn") {
         if (selectedTxns.has(id)) selectedTxns.delete(id);
@@ -7131,6 +7189,9 @@
     $("#currencySelect").addEventListener("change", (e) => {
       currency = e.target.value;
       localStorage.setItem(KEYS.currency, currency);
+      // Also store in state.settings so it syncs across devices
+      setSetting("currency", currency);
+      saveData();
       renderAll();
     });
 
