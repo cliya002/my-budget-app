@@ -1230,6 +1230,47 @@
   }
 
   /* ---------- Smart Insights ---------- */
+  function renderDashSyncCard() {
+    const card = $("#dashSyncCard");
+    const body = $("#dashSyncCardBody");
+    if (!card || !body) return;
+    const enabled = localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId);
+    if (!enabled) {
+      card.hidden = true;
+      return;
+    }
+    card.hidden = false;
+    const devices = getDevicesFromHistory().slice(0, 4);
+    const myName = getDeviceLabel();
+    const syncedText = lastSyncedAt
+      ? `Last synced ${formatSyncRelative(lastSyncedAt)} from ${escapeHtml(myName)}`
+      : "Not yet synced";
+
+    let devicesHtml = "";
+    if (devices.length) {
+      devicesHtml = '<div class="sync-card-devices">' +
+        devices.map((d) => {
+          const isThis = d.name === myName;
+          return `<span class="sync-card-device ${isThis ? "this" : ""}">${isThis ? "📍" : "🖥️"} ${escapeHtml(d.name)} · ${formatSyncRelative(d.lastTs)}</span>`;
+        }).join("") +
+        "</div>";
+    }
+
+    const status = dirtyForSync
+      ? '<span class="sync-card-status dirty">🟡 Pending</span>'
+      : !navigator.onLine
+        ? '<span class="sync-card-status offline">📵 Offline</span>'
+        : '<span class="sync-card-status synced">🟢 Synced</span>';
+
+    body.innerHTML = `
+      <div class="sync-card-row">
+        ${status}
+        <span class="sync-card-time">${syncedText}</span>
+      </div>
+      ${devicesHtml}
+    `;
+  }
+
   function renderSmartInsights() {
     const el = $("#smartInsights");
     if (!el) return;
@@ -2144,6 +2185,7 @@
     renderIncomeOverview();
     renderBillsCalendar();
     renderSmartInsights();
+    renderDashSyncCard();
   }
 
   function renderBalances() {
@@ -2226,6 +2268,7 @@
     else if (isTransferOut) { sign = "-"; amountClass = "negative"; tag = "Transfer out"; }
     else { sign = "-"; amountClass = "negative"; tag = "Spent"; }
     const isSelected = selectedTxns.has(exp.id);
+    const isNew = recentlyPulledIds.has(exp.id);
     const tagsHtml = (exp.tags && exp.tags.length)
       ? `<div class="txn-tags">${exp.tags.map((t) => `<span class="txn-tag-chip">${escapeHtml(t)}</span>`).join("")}</div>`
       : "";
@@ -2234,7 +2277,7 @@
       ? `<div class="txn-person" style="color: ${person.color || "var(--primary)"}">→ ${escapeHtml(person.name)}</div>`
       : "";
     return `
-      <li class="txn-item ${isSelected ? "selected" : ""}" data-txn-row="${exp.id}">
+      <li class="txn-item ${isSelected ? "selected" : ""} ${isNew ? "newly-synced" : ""}" data-txn-row="${exp.id}">
         <input type="checkbox" class="txn-check" data-action="select-txn" data-id="${exp.id}" ${isSelected ? "checked" : ""} aria-label="Select transaction" />
         ${receiptHtml}
         <div class="txn-date">
@@ -5896,6 +5939,16 @@
       }
     });
 
+    // Sync devices view
+    $("#syncDevicesBtn")?.addEventListener("click", () => {
+      renderSyncDevices();
+      $("#syncDevicesModal").classList.add("open");
+    });
+    $("#syncDevicesClose")?.addEventListener("click", () => $("#syncDevicesModal").classList.remove("open"));
+    $("#syncDevicesModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "syncDevicesModal") $("#syncDevicesModal").classList.remove("open");
+    });
+
     // AI insights settings
     const aiProvSel = $("#aiProvider");
     const aiKeyInput = $("#aiKey");
@@ -7383,6 +7436,8 @@
   let lastSyncedAt = null;
   let pushDebounceTimer = null;
   let syncRetryCount = 0;
+  // Track IDs added on the most recent pull, so the UI can highlight them
+  const recentlyPulledIds = new Set();
   const SYNC_HISTORY_KEY = "mb_sync_history";
 
   function logSyncEvent(action, status, message) {
@@ -7502,6 +7557,9 @@
       }
       el.title = p.title;
     });
+
+    // Re-render the dashboard sync card too (cheap)
+    if (typeof renderDashSyncCard === "function") renderDashSyncCard();
   }
 
   function formatSyncRelative(ts) {
@@ -7726,17 +7784,37 @@
       const decrypted = await decryptState(payload.encrypted);
       if (!decrypted) throw new Error("Decryption failed — wrong password?");
 
+      // Compute "what's new" by comparing IDs
+      const localIds = new Set(state.expenses.map((e) => e.id));
+      recentlyPulledIds.clear();
+      (decrypted.expenses || []).forEach((e) => {
+        if (!localIds.has(e.id)) recentlyPulledIds.add(e.id);
+      });
+
+      const addedCount = recentlyPulledIds.size;
       state = { ...state, ...decrypted };
       saveData();
       renderAll();
       const msg = `Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()} (${payload.device || "unknown"})`;
-      showSyncStatus(`✓ ${msg}`, "success");
+      const summary = addedCount > 0
+        ? `✓ ${msg} · ${addedCount} new transaction${addedCount === 1 ? "" : "s"} highlighted`
+        : `✓ ${msg}`;
+      showSyncStatus(summary, "success");
+      if (addedCount > 0) {
+        showAlertToast(`${addedCount} new transaction${addedCount === 1 ? "" : "s"} pulled — highlighted in lists`, "success");
+      }
       lastSyncedAt = Date.now();
       localStorage.setItem("mb_last_synced", String(lastSyncedAt));
       dirtyForSync = false;
       updateSyncIndicator("synced");
       logSyncEvent("pull", "success", msg);
       renderSyncHistory();
+
+      // Auto-clear the highlight after 30 seconds
+      setTimeout(() => {
+        recentlyPulledIds.clear();
+        renderAll();
+      }, 30000);
     } catch (e) {
       console.error(e);
       logSyncEvent("pull", "error", e.message);
@@ -7819,6 +7897,53 @@
           <div class="list-item-main">
             <div class="list-item-title ${cls}">${icon} ${ev.action.toUpperCase()}${dev}</div>
             <div class="list-item-sub">${time} · ${escapeHtml(ev.message)}</div>
+          </div>
+        </li>`;
+    }).join("");
+  }
+
+  /* ---------- Synced devices view ---------- */
+  function getDevicesFromHistory() {
+    let history;
+    try { history = JSON.parse(localStorage.getItem(SYNC_HISTORY_KEY) || "[]"); }
+    catch (e) { history = []; }
+    const devices = {};
+    history.forEach((ev) => {
+      if (!ev.device) return;
+      if (ev.status !== "success") return;
+      if (!devices[ev.device] || ev.ts > devices[ev.device].lastTs) {
+        devices[ev.device] = {
+          name: ev.device,
+          lastTs: ev.ts,
+          lastAction: ev.action,
+          count: (devices[ev.device]?.count || 0) + 1,
+        };
+      } else {
+        devices[ev.device].count += 1;
+      }
+    });
+    return Object.values(devices).sort((a, b) => b.lastTs - a.lastTs);
+  }
+
+  function renderSyncDevices() {
+    const list = $("#syncDevicesList");
+    if (!list) return;
+    const devices = getDevicesFromHistory();
+    if (!devices.length) {
+      list.innerHTML = '<li class="empty">No devices yet — make a push to start.</li>';
+      return;
+    }
+    const myName = getDeviceLabel();
+    list.innerHTML = devices.map((d) => {
+      const isThis = d.name === myName;
+      const action = d.lastAction === "push" ? "⬆️ Push" : "⬇️ Pull";
+      return `
+        <li class="list-item ${isThis ? "this-device" : ""}">
+          <div class="list-item-main">
+            <div class="list-item-title">
+              ${isThis ? "📍 " : "🖥️ "}${escapeHtml(d.name)}${isThis ? " <span class=\"this-tag\">This device</span>" : ""}
+            </div>
+            <div class="list-item-sub">${action} · ${formatSyncRelative(d.lastTs)} · ${d.count} sync${d.count === 1 ? "" : "s"}</div>
           </div>
         </li>`;
     }).join("");

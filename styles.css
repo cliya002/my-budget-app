@@ -2630,3 +2630,70 @@ input[type="color"] {
   font-weight: 500;
   border: 1px solid var(--border);
 }
+
+/* ================ Devices view + Dashboard sync card ================ */
+.list-item.this-device {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+.this-tag {
+  font-size: 0.7rem;
+  background: var(--primary);
+  color: #fff;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  margin-left: 0.4rem;
+  font-weight: 600;
+}
+
+.sync-card-dashboard {
+  background: var(--card);
+  border-left: 4px solid var(--primary);
+}
+.sync-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.sync-card-status {
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.sync-card-status.synced { color: var(--success); }
+.sync-card-status.dirty { color: var(--warning); }
+.sync-card-status.offline { color: var(--text-dim); }
+.sync-card-time { color: var(--text-dim); font-size: 0.85rem; }
+.sync-card-devices {
+  margin-top: 0.6rem;
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.sync-card-device {
+  background: var(--card-soft);
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+}
+.sync-card-device.this {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-color: var(--primary);
+  font-weight: 600;
+}
+
+/* "Newly synced" highlight */
+.txn-item.newly-synced {
+  background: linear-gradient(90deg, rgba(91, 63, 184, 0.12) 0%, transparent 100%);
+  border-left: 3px solid var(--primary);
+  padding-left: 0.5rem;
+  animation: newSyncPulse 1.5s ease 1;
+}
+@keyframes newSyncPulse {
+  0% { background: rgba(91, 63, 184, 0.3); }
+  100% { background: linear-gradient(90deg, rgba(91, 63, 184, 0.12) 0%, transparent 100%); }
+}
