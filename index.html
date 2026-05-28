@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=16" />
+  <link rel="stylesheet" href="styles.css?v=17" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -81,6 +81,9 @@
           </button>
           <button class="nav-item" data-tab="insights">
             <span class="nav-icon">📊</span> Insights
+          </button>
+          <button class="nav-item" data-tab="credit">
+            <span class="nav-icon">📈</span> Credit
           </button>
           <button class="nav-item" data-tab="settings">
             <span class="nav-icon">⚙</span> Settings
@@ -347,6 +350,68 @@
           </div>
         </div>
 
+        <!-- Credit -->
+        <div class="page" id="credit">
+          <div class="page-header">
+            <h1>Credit</h1>
+            <div class="page-actions">
+              <span id="creditScorePill" class="month-pill">No score yet</span>
+              <button id="addScoreBtn" class="btn-secondary">+ Log Score</button>
+              <button id="addCardBtn" class="btn-primary">+ Add Card</button>
+            </div>
+          </div>
+
+          <div class="stat-grid credit-stat-grid">
+            <div class="stat-card stat-score">
+              <div class="stat-label">Current Score</div>
+              <div class="stat-value" id="creditCurrent">—</div>
+              <div class="stat-meta" id="creditChange"></div>
+            </div>
+            <div class="stat-card stat-util">
+              <div class="stat-label">Utilization</div>
+              <div class="stat-value" id="creditUtil">0%</div>
+              <div class="stat-meta" id="creditUtilHint"></div>
+            </div>
+            <div class="stat-card stat-limit">
+              <div class="stat-label">Total Limit</div>
+              <div class="stat-value" id="creditLimit">$0</div>
+            </div>
+            <div class="stat-card stat-balance">
+              <div class="stat-label">Total Balance</div>
+              <div class="stat-value" id="creditBalance">$0</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Score Trend</div>
+            <div class="chart-wrap"><canvas id="chartCreditTrend"></canvas></div>
+            <div id="creditTrendEmpty" class="empty" hidden>
+              No score history yet. Tap <strong>+ Log Score</strong> to start tracking.
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Score Tips</div>
+            <ul id="creditTips" class="tips-list">
+              <li class="empty">Add a card and log a score to get personalized tips.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Cards</div>
+            <ul id="cardList" class="list">
+              <li class="empty">No cards yet. Tap <strong>+ Add Card</strong>.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Score History</div>
+            <ul id="scoreList" class="list">
+              <li class="empty">No score entries yet.</li>
+            </ul>
+          </div>
+        </div>
+
         <!-- Settings -->
         <div class="page" id="settings">
           <div class="page-header"><h1>Settings</h1></div>
@@ -485,11 +550,111 @@
     </div>
   </div>
 
+  <!-- Add Card Modal -->
+  <div id="cardModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="cardModalTitle">Add Credit Card</h2>
+        <button class="modal-close" id="cardModalClose">×</button>
+      </div>
+      <form id="cardForm" class="stack-form">
+        <input type="hidden" id="cardEditId" />
+        <div class="form-row">
+          <label>Card name</label>
+          <input type="text" id="cardName" placeholder="e.g. Chase Sapphire" required />
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Issuer (optional)</label>
+            <input type="text" id="cardIssuer" placeholder="Chase, Amex, etc." />
+          </div>
+          <div>
+            <label>Last 4 digits (optional)</label>
+            <input type="text" id="cardLast4" maxlength="4" pattern="[0-9]*" placeholder="1234" />
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Credit limit</label>
+            <input type="number" id="cardLimit" step="0.01" min="0" placeholder="0.00" required />
+          </div>
+          <div>
+            <label>Current balance</label>
+            <input type="number" id="cardBalance" step="0.01" min="0" placeholder="0.00" required />
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>APR % (optional)</label>
+            <input type="number" id="cardApr" step="0.01" min="0" placeholder="22.99" />
+          </div>
+          <div>
+            <label>Statement due day (1-28)</label>
+            <input type="number" id="cardDueDay" min="1" max="28" placeholder="15" />
+          </div>
+        </div>
+        <label class="toggle-row" style="border-top:1px solid var(--border); padding-top:0.75rem">
+          <span><strong>Autopay enabled</strong></span>
+          <input type="checkbox" id="cardAutopay" />
+        </label>
+        <button type="submit" class="btn-primary block">Save Card</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Add Score Modal -->
+  <div id="scoreModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Log Credit Score</h2>
+        <button class="modal-close" id="scoreModalClose">×</button>
+      </div>
+      <form id="scoreForm" class="stack-form">
+        <div class="form-row two-col">
+          <div>
+            <label>Score (300-850)</label>
+            <input type="number" id="scoreValue" min="300" max="850" required />
+          </div>
+          <div>
+            <label>Date</label>
+            <input type="date" id="scoreDate" required />
+          </div>
+        </div>
+        <div class="form-row two-col">
+          <div>
+            <label>Source</label>
+            <select id="scoreSource">
+              <option value="Credit Karma">Credit Karma</option>
+              <option value="Experian">Experian</option>
+              <option value="Equifax">Equifax</option>
+              <option value="TransUnion">TransUnion</option>
+              <option value="FICO">FICO</option>
+              <option value="Bank app">Bank app</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div>
+            <label>Type</label>
+            <select id="scoreType">
+              <option value="VantageScore">VantageScore</option>
+              <option value="FICO">FICO</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <label>Note (optional)</label>
+          <input type="text" id="scoreNote" placeholder="e.g. After paying down balance" />
+        </div>
+        <button type="submit" class="btn-primary block">Save Score</button>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

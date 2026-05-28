@@ -1117,3 +1117,76 @@ label {
   cursor: pointer;
 }
 .toast-action:hover { background: rgba(255,255,255,0.25); }
+
+/* ================ Credit Tracker ================ */
+.credit-stat-grid .stat-score { border-left-color: var(--primary); }
+.credit-stat-grid .stat-util { border-left-color: var(--warning); }
+.credit-stat-grid .stat-limit { border-left-color: var(--blue); }
+.credit-stat-grid .stat-balance { border-left-color: var(--pink); }
+
+.stat-meta {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+.stat-meta .positive { color: var(--success); font-weight: 600; }
+.stat-meta .negative { color: var(--danger); font-weight: 600; }
+
+.card-item {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.6rem;
+}
+.card-item-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.2rem;
+}
+.card-item-title { font-weight: 700; }
+.card-item-sub { font-size: 0.85rem; color: var(--text-dim); margin-bottom: 0.5rem; }
+.card-item-bal {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+.card-item-bal .positive { color: var(--success); }
+.card-item-bal .negative { color: var(--danger); }
+
+.score-band {
+  font-size: 0.75rem;
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  margin-left: 0.4rem;
+  font-weight: 600;
+}
+
+.tips-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.tip-item {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  background: var(--card-soft);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  font-size: 0.9rem;
+}
+.tip-icon { font-size: 1.1rem; flex-shrink: 0; }
+
+#chartCreditTrend { max-height: 280px; }
+.card .chart-wrap { height: 240px; }

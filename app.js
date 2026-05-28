@@ -10,8 +10,11 @@
   const KEYS = {
     pwd: "mb_password_hash",
     data: "mb_data",
+    dataEnc: "mb_data_enc",      // AES-GCM encrypted blob (preferred)
+    salt: "mb_salt",              // PBKDF2 salt
     currency: "mb_currency",
     theme: "mb_theme",
+    autoLock: "mb_auto_lock",     // minutes; 0 = disabled
   };
 
   const DEFAULT_PWD_HASH =
@@ -24,6 +27,8 @@
     goals: [],
     presets: [],           // each: { id, type, desc, amount, categoryId }
     recurring: [],         // each: { id, type, desc, amount, categoryId, dayOfMonth, lastRunMonth, active }
+    cards: [],             // each: { id, name, issuer, last4, limit, balance, apr, dueDay, autopay }
+    creditScores: [],      // each: { id, score, date, source, type, note }
     settings: {
       rollover: false,     // when true, unused budget rolls over to next month
       alertsShown: {},     // map "YYYY-MM:catId:level" -> true (already alerted)
@@ -111,6 +116,76 @@
       .join("");
   }
 
+  /* ---------- AES-GCM encryption ---------- */
+  let cryptoKey = null; // CryptoKey derived from password (held in memory only)
+
+  function getOrCreateSalt() {
+    let salt = localStorage.getItem(KEYS.salt);
+    if (!salt) {
+      const arr = crypto.getRandomValues(new Uint8Array(16));
+      salt = btoa(String.fromCharCode(...arr));
+      localStorage.setItem(KEYS.salt, salt);
+    }
+    const bin = atob(salt);
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  async function deriveKey(password) {
+    const enc = new TextEncoder();
+    const baseKey = await crypto.subtle.importKey(
+      "raw",
+      enc.encode(password),
+      { name: "PBKDF2" },
+      false,
+      ["deriveKey"]
+    );
+    return crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt: getOrCreateSalt(),
+        iterations: 200000,
+        hash: "SHA-256",
+      },
+      baseKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  async function encryptState(stateObj) {
+    if (!cryptoKey) return null;
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const data = new TextEncoder().encode(JSON.stringify(stateObj));
+    const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, data);
+    const ctArr = new Uint8Array(ct);
+    // Pack iv + ciphertext into base64
+    const combined = new Uint8Array(iv.length + ctArr.length);
+    combined.set(iv, 0);
+    combined.set(ctArr, iv.length);
+    let bin = "";
+    combined.forEach((b) => (bin += String.fromCharCode(b)));
+    return btoa(bin);
+  }
+
+  async function decryptState(b64) {
+    if (!cryptoKey) return null;
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const iv = arr.slice(0, 12);
+    const ct = arr.slice(12);
+    try {
+      const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, ct);
+      return JSON.parse(new TextDecoder().decode(pt));
+    } catch (e) {
+      console.error("Decryption failed", e);
+      return null;
+    }
+  }
+
   function showToast(msg) {
     const toast = $("#toast");
     toast.textContent = msg;
@@ -119,13 +194,27 @@
     showToast._t = setTimeout(() => (toast.hidden = true), 2200);
   }
 
-  function loadData() {
-    try {
-      const raw = localStorage.getItem(KEYS.data);
-      if (raw) state = { ...state, ...JSON.parse(raw) };
-    } catch (e) {
-      console.error("Failed to load data", e);
+  async function loadData() {
+    let loaded = null;
+
+    // Prefer encrypted blob if available and we have the key
+    const encBlob = localStorage.getItem(KEYS.dataEnc);
+    if (encBlob && cryptoKey) {
+      loaded = await decryptState(encBlob);
     }
+
+    // Fallback: legacy plaintext (will be migrated to encrypted on next save)
+    if (!loaded) {
+      try {
+        const raw = localStorage.getItem(KEYS.data);
+        if (raw) loaded = JSON.parse(raw);
+      } catch (e) {
+        console.error("Failed to load data", e);
+      }
+    }
+
+    if (loaded) state = { ...state, ...loaded };
+
     currency = localStorage.getItem(KEYS.currency) || "USD";
 
     // Apply saved theme (or auto-detect on first launch)
@@ -147,6 +236,8 @@
     // Ensure presets array exists
     if (!Array.isArray(state.presets)) state.presets = [];
     if (!Array.isArray(state.recurring)) state.recurring = [];
+    if (!Array.isArray(state.cards)) state.cards = [];
+    if (!Array.isArray(state.creditScores)) state.creditScores = [];
     if (!state.settings) state.settings = { rollover: false, alertsShown: {} };
     if (!state.settings.alertsShown) state.settings.alertsShown = {};
     if (typeof state.settings.rollover !== "boolean") state.settings.rollover = false;
@@ -177,6 +268,25 @@
     }
 
     if (migrated) saveData();
+  }
+
+  /* ---------- Save (encrypted when available, plaintext as fallback) ---------- */
+  function saveData() {
+    if (cryptoKey) {
+      // Encrypt asynchronously and write to localStorage; remove plaintext on success
+      encryptState(state).then((b64) => {
+        if (b64) {
+          localStorage.setItem(KEYS.dataEnc, b64);
+          // Once encrypted blob exists, drop plaintext
+          localStorage.removeItem(KEYS.data);
+        }
+      }).catch((e) => {
+        console.error("Encrypt save failed, writing plaintext", e);
+        localStorage.setItem(KEYS.data, JSON.stringify(state));
+      });
+    } else {
+      localStorage.setItem(KEYS.data, JSON.stringify(state));
+    }
   }
 
   /* ---------- Recurring transactions ---------- */
@@ -254,10 +364,6 @@
     localStorage.setItem(KEYS.theme, t);
   }
 
-  function saveData() {
-    localStorage.setItem(KEYS.data, JSON.stringify(state));
-  }
-
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -308,11 +414,11 @@
         }
         const hash = await sha256(pwd);
         localStorage.setItem(KEYS.pwd, hash);
-        unlock();
+        await unlock(pwd);
       } else {
         const hash = await sha256(pwd);
         if (hash === stored) {
-          unlock();
+          await unlock(pwd);
         } else {
           errEl.textContent = "Incorrect password";
           errEl.hidden = false;
@@ -324,6 +430,8 @@
     resetBtn.addEventListener("click", () => {
       if (confirm("This will erase your data and reset the password to the preset. Continue?")) {
         localStorage.removeItem(KEYS.data);
+        localStorage.removeItem(KEYS.dataEnc);
+        localStorage.removeItem(KEYS.salt);
         localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
         location.reload();
       }
@@ -332,21 +440,58 @@
     setTimeout(() => $("#passwordInput")?.focus(), 100);
   }
 
-  function unlock() {
+  async function unlock(password) {
     $("#lockScreen").classList.remove("open");
     $("#app").hidden = false;
-    loadData();
+    if (password) {
+      try {
+        cryptoKey = await deriveKey(password);
+      } catch (e) {
+        console.error("Key derivation failed", e);
+        cryptoKey = null;
+      }
+    }
+    await loadData();
     processRecurring();
     renderAll();
     checkBudgetAlerts();
+    startAutoLock();
   }
 
   function lockNow() {
+    cryptoKey = null;
+    stopAutoLock();
     $("#app").hidden = true;
     $("#lockScreen").classList.add("open");
     $("#passwordInput").value = "";
     $("#passwordConfirm").value = "";
     $("#lockError").hidden = true;
+  }
+
+  /* ---------- Auto-lock ---------- */
+  let autoLockTimer = null;
+  let autoLockMinutes = 10;
+
+  function startAutoLock() {
+    autoLockMinutes = parseInt(localStorage.getItem(KEYS.autoLock) || "10", 10);
+    resetAutoLockTimer();
+    ["click", "keydown", "mousemove", "touchstart"].forEach((ev) =>
+      document.addEventListener(ev, resetAutoLockTimer, { passive: true })
+    );
+  }
+
+  function stopAutoLock() {
+    clearTimeout(autoLockTimer);
+    autoLockTimer = null;
+  }
+
+  function resetAutoLockTimer() {
+    if (!autoLockMinutes || autoLockMinutes <= 0) return;
+    clearTimeout(autoLockTimer);
+    autoLockTimer = setTimeout(() => {
+      lockNow();
+      showToast("Auto-locked");
+    }, autoLockMinutes * 60 * 1000);
   }
 
   /* ---------- Navigation ---------- */
@@ -363,6 +508,9 @@
         // Re-render charts when entering insights so canvases size correctly
         if (btn.dataset.tab === "insights") {
           setTimeout(renderInsights, 50);
+        }
+        if (btn.dataset.tab === "credit") {
+          setTimeout(renderCreditTrend, 50);
         }
       });
     });
@@ -384,6 +532,7 @@
     renderBalances();
     renderTransactions();
     renderInsights();
+    renderCredit();
     renderPresetsManage();
     renderRecurringList();
     renderThemeButtons();
@@ -1271,6 +1420,300 @@
     });
   }
 
+  /* ---------- Credit tracker ---------- */
+  function renderCredit() {
+    renderCreditStats();
+    renderCardList();
+    renderScoreList();
+    renderCreditTrend();
+    renderCreditTips();
+  }
+
+  function totalCardLimit() {
+    return state.cards.reduce((s, c) => s + (Number(c.limit) || 0), 0);
+  }
+  function totalCardBalance() {
+    return state.cards.reduce((s, c) => s + (Number(c.balance) || 0), 0);
+  }
+  function utilizationPct() {
+    const lim = totalCardLimit();
+    if (lim <= 0) return 0;
+    return (totalCardBalance() / lim) * 100;
+  }
+  function latestScore() {
+    if (!state.creditScores.length) return null;
+    return [...state.creditScores].sort((a, b) =>
+      b.date.localeCompare(a.date)
+    )[0];
+  }
+  function previousScore() {
+    if (state.creditScores.length < 2) return null;
+    const sorted = [...state.creditScores].sort((a, b) => b.date.localeCompare(a.date));
+    return sorted[1];
+  }
+
+  function renderCreditStats() {
+    const cur = latestScore();
+    const prev = previousScore();
+    $("#creditCurrent").textContent = cur ? cur.score : "—";
+
+    const change = $("#creditChange");
+    if (cur && prev) {
+      const diff = cur.score - prev.score;
+      const sign = diff > 0 ? "↑" : diff < 0 ? "↓" : "→";
+      const cls = diff > 0 ? "positive" : diff < 0 ? "negative" : "";
+      change.innerHTML = `<span class="${cls}">${sign} ${Math.abs(diff)} since last entry</span>`;
+    } else if (cur) {
+      change.textContent = `${cur.source} · ${cur.date}`;
+    } else {
+      change.textContent = "";
+    }
+
+    const util = utilizationPct();
+    $("#creditUtil").textContent = `${util.toFixed(0)}%`;
+    const utilHint = $("#creditUtilHint");
+    if (util === 0 && totalCardLimit() === 0) {
+      utilHint.textContent = "Add a card to track";
+    } else if (util < 10) {
+      utilHint.innerHTML = '<span class="positive">Excellent</span>';
+    } else if (util < 30) {
+      utilHint.innerHTML = '<span class="positive">Good</span>';
+    } else if (util < 50) {
+      utilHint.innerHTML = '<span style="color:var(--warning)">Watch out</span>';
+    } else {
+      utilHint.innerHTML = '<span class="negative">Hurting your score</span>';
+    }
+
+    $("#creditLimit").textContent = fmt(totalCardLimit());
+    $("#creditBalance").textContent = fmt(totalCardBalance());
+
+    const pill = $("#creditScorePill");
+    if (cur) {
+      pill.textContent = `${cur.score} ${cur.type || ""}`;
+    } else {
+      pill.textContent = "No score yet";
+    }
+  }
+
+  function renderCardList() {
+    const list = $("#cardList");
+    if (!state.cards.length) {
+      list.innerHTML = '<li class="empty">No cards yet. Tap <strong>+ Add Card</strong>.</li>';
+      return;
+    }
+    list.innerHTML = state.cards
+      .map((c) => {
+        const lim = Number(c.limit) || 0;
+        const bal = Number(c.balance) || 0;
+        const util = lim > 0 ? (bal / lim) * 100 : 0;
+        let cls = "success";
+        if (util >= 50) cls = "danger";
+        else if (util >= 30) cls = "warning";
+        const last4 = c.last4 ? ` · ••${escapeHtml(c.last4)}` : "";
+        const issuer = c.issuer ? `${escapeHtml(c.issuer)} · ` : "";
+        const due = c.dueDay ? `Due day ${c.dueDay}` : "No due date";
+        const apr = c.apr ? ` · ${c.apr}% APR` : "";
+        const autopay = c.autopay ? '<span class="rollover-tag">Autopay</span>' : "";
+        return `
+          <li class="card-item">
+            <div class="card-item-head">
+              <div class="card-item-title">${escapeHtml(c.name)}${last4} ${autopay}</div>
+              <div class="list-item-actions">
+                <button data-action="edit-card" data-id="${c.id}" title="Edit">✏️</button>
+                <button data-action="del-card" data-id="${c.id}" title="Delete">🗑️</button>
+              </div>
+            </div>
+            <div class="card-item-sub">${issuer}${due}${apr}</div>
+            <div class="card-item-bal">
+              <span>${fmt(bal)} of ${fmt(lim)}</span>
+              <span class="${util >= 30 ? (util >= 50 ? "negative" : "") : "positive"}">${util.toFixed(0)}% util</span>
+            </div>
+            <div class="progress-bar">
+              <div class="progress-fill ${cls}" style="width: ${Math.min(util, 100)}%"></div>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function renderScoreList() {
+    const list = $("#scoreList");
+    if (!state.creditScores.length) {
+      list.innerHTML = '<li class="empty">No score entries yet.</li>';
+      return;
+    }
+    const sorted = [...state.creditScores].sort((a, b) => b.date.localeCompare(a.date));
+    list.innerHTML = sorted
+      .map((s) => {
+        const note = s.note ? ` · ${escapeHtml(s.note)}` : "";
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${s.score} <span class="score-band">${scoreBand(s.score)}</span></div>
+              <div class="list-item-sub">${s.date} · ${escapeHtml(s.source || "")} ${escapeHtml(s.type || "")}${note}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="del-score" data-id="${s.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
+  }
+
+  function scoreBand(s) {
+    const n = Number(s);
+    if (n >= 800) return "Exceptional";
+    if (n >= 740) return "Very Good";
+    if (n >= 670) return "Good";
+    if (n >= 580) return "Fair";
+    return "Poor";
+  }
+
+  function renderCreditTrend() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("creditTrend");
+    const ctx = $("#chartCreditTrend");
+    if (!ctx) return;
+
+    if (state.creditScores.length < 1) {
+      $("#creditTrendEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#creditTrendEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    const sorted = [...state.creditScores].sort((a, b) => a.date.localeCompare(b.date));
+    const labels = sorted.map((s) => s.date);
+    const data = sorted.map((s) => s.score);
+
+    charts.creditTrend = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [{
+          label: "Score",
+          data,
+          borderColor: "#5b3fb8",
+          backgroundColor: "rgba(91, 63, 184, 0.1)",
+          tension: 0.3,
+          fill: true,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { grid: { display: false } },
+          y: {
+            min: 300,
+            max: 850,
+            grid: { color: "rgba(0,0,0,0.05)" },
+            ticks: { stepSize: 50 },
+          },
+        },
+      },
+    });
+  }
+
+  function renderCreditTips() {
+    const tips = [];
+    const util = utilizationPct();
+    const cur = latestScore();
+    const totalCards = state.cards.length;
+
+    if (totalCards === 0) {
+      tips.push({ icon: "💳", text: "Add your credit cards to see personalized tips." });
+    }
+    if (util >= 30 && totalCards > 0) {
+      tips.push({
+        icon: "⚠️",
+        text: `Total utilization is ${util.toFixed(0)}%. Aim for under 30% — ideally under 10% — to boost your score. Pay down balances or request a credit limit increase.`,
+      });
+    } else if (util > 0 && util < 10 && totalCards > 0) {
+      tips.push({ icon: "✅", text: "Utilization is excellent (under 10%). Keep it there." });
+    }
+    state.cards.forEach((c) => {
+      const lim = Number(c.limit) || 0;
+      const bal = Number(c.balance) || 0;
+      if (lim > 0 && bal / lim >= 0.5) {
+        tips.push({
+          icon: "🚨",
+          text: `${c.name} is at ${((bal / lim) * 100).toFixed(0)}% utilization. Pay down before the statement closes for best impact.`,
+        });
+      }
+      if (!c.autopay && c.dueDay) {
+        tips.push({
+          icon: "🔔",
+          text: `Set up autopay for ${c.name} so you never miss a payment — payment history is 35% of your FICO score.`,
+        });
+      }
+    });
+
+    if (state.creditScores.length >= 2) {
+      const sorted = [...state.creditScores].sort((a, b) => a.date.localeCompare(b.date));
+      const oldest = sorted[0];
+      const newest = sorted[sorted.length - 1];
+      const diff = newest.score - oldest.score;
+      if (diff > 0) {
+        tips.push({ icon: "📈", text: `Your score is up ${diff} points since you started tracking. Nice work.` });
+      } else if (diff < 0) {
+        tips.push({ icon: "📉", text: `Your score is down ${Math.abs(diff)} points. Check for late payments, increased balances, or new hard inquiries.` });
+      }
+    }
+
+    if (cur && cur.score >= 740) {
+      tips.push({ icon: "🏆", text: "You're in the Very Good range. You'll qualify for the best rates on most loans." });
+    }
+    if (cur && cur.score < 670 && cur.score >= 580) {
+      tips.push({ icon: "🎯", text: "Focus areas: pay every bill on time, keep balances low, and avoid opening new accounts unless necessary." });
+    }
+
+    if (!tips.length) {
+      tips.push({ icon: "💡", text: "Log a credit score to start getting personalized tips." });
+    }
+
+    const list = $("#creditTips");
+    list.innerHTML = tips
+      .map((t) => `<li class="tip-item"><span class="tip-icon">${t.icon}</span><span>${escapeHtml(t.text)}</span></li>`)
+      .join("");
+  }
+
+  function openCardModal(card) {
+    const isEdit = !!card;
+    $("#cardModalTitle").textContent = isEdit ? "Edit Card" : "Add Credit Card";
+    $("#cardEditId").value = isEdit ? card.id : "";
+    $("#cardName").value = isEdit ? card.name : "";
+    $("#cardIssuer").value = isEdit ? (card.issuer || "") : "";
+    $("#cardLast4").value = isEdit ? (card.last4 || "") : "";
+    $("#cardLimit").value = isEdit ? card.limit : "";
+    $("#cardBalance").value = isEdit ? card.balance : "";
+    $("#cardApr").value = isEdit ? (card.apr || "") : "";
+    $("#cardDueDay").value = isEdit ? (card.dueDay || "") : "";
+    $("#cardAutopay").checked = isEdit ? !!card.autopay : false;
+    $("#cardModal").classList.add("open");
+    setTimeout(() => $("#cardName")?.focus(), 50);
+  }
+
+  function closeCardModal() {
+    $("#cardModal").classList.remove("open");
+    $("#cardForm").reset();
+    $("#cardEditId").value = "";
+  }
+
+  function openScoreModal() {
+    $("#scoreDate").value = todayStr();
+    $("#scoreModal").classList.add("open");
+    setTimeout(() => $("#scoreValue")?.focus(), 50);
+  }
+  function closeScoreModal() {
+    $("#scoreModal").classList.remove("open");
+    $("#scoreForm").reset();
+  }
+
   function populateExpenseCategorySelect() {
     const sel = $("#expCategory");
     sel.innerHTML =
@@ -1623,6 +2066,66 @@
       showToast(state.settings.rollover ? "Rollover enabled" : "Rollover disabled");
     });
 
+    // Credit: open card/score modals
+    $("#addCardBtn").addEventListener("click", () => openCardModal(null));
+    $("#addScoreBtn").addEventListener("click", () => openScoreModal());
+    $("#cardModalClose").addEventListener("click", closeCardModal);
+    $("#cardModal").addEventListener("click", (e) => {
+      if (e.target.id === "cardModal") closeCardModal();
+    });
+    $("#scoreModalClose").addEventListener("click", closeScoreModal);
+    $("#scoreModal").addEventListener("click", (e) => {
+      if (e.target.id === "scoreModal") closeScoreModal();
+    });
+
+    // Card form
+    $("#cardForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const editId = $("#cardEditId").value;
+      const card = {
+        id: editId || uid(),
+        name: $("#cardName").value.trim(),
+        issuer: $("#cardIssuer").value.trim(),
+        last4: $("#cardLast4").value.trim(),
+        limit: parseFloat($("#cardLimit").value) || 0,
+        balance: parseFloat($("#cardBalance").value) || 0,
+        apr: parseFloat($("#cardApr").value) || null,
+        dueDay: parseInt($("#cardDueDay").value, 10) || null,
+        autopay: $("#cardAutopay").checked,
+      };
+      if (!card.name) return;
+      if (editId) {
+        const idx = state.cards.findIndex((c) => c.id === editId);
+        if (idx >= 0) state.cards[idx] = card;
+      } else {
+        state.cards.push(card);
+      }
+      saveData();
+      closeCardModal();
+      renderCredit();
+      showToast(editId ? "Card updated" : "Card added");
+    });
+
+    // Score form
+    $("#scoreForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const score = parseInt($("#scoreValue").value, 10);
+      const date = $("#scoreDate").value;
+      if (!score || score < 300 || score > 850 || !date) return;
+      state.creditScores.push({
+        id: uid(),
+        score,
+        date,
+        source: $("#scoreSource").value,
+        type: $("#scoreType").value,
+        note: $("#scoreNote").value.trim(),
+      });
+      saveData();
+      closeScoreModal();
+      renderCredit();
+      showToast("Score logged");
+    });
+
     // Filters
     $("#filterStart").addEventListener("change", (e) => {
       filters.start = e.target.value;
@@ -1766,6 +2269,21 @@
           saveData();
           renderRecurringList();
         }
+      } else if (action === "edit-card") {
+        const card = state.cards.find((c) => c.id === id);
+        if (card) openCardModal(card);
+      } else if (action === "del-card") {
+        if (confirm("Delete this card?")) {
+          state.cards = state.cards.filter((c) => c.id !== id);
+          saveData();
+          renderCredit();
+        }
+      } else if (action === "del-score") {
+        if (confirm("Delete this score entry?")) {
+          state.creditScores = state.creditScores.filter((s) => s.id !== id);
+          saveData();
+          renderCredit();
+        }
       } else if (action === "del-goal") {
         if (confirm("Delete this goal?")) {
           state.goals = state.goals.filter((g) => g.id !== id);
@@ -1842,6 +2360,8 @@
             goals: data.goals || [],
             presets: data.presets || [],
             recurring: data.recurring || [],
+            cards: data.cards || [],
+            creditScores: data.creditScores || [],
             settings: data.settings || { rollover: false, alertsShown: {} },
           };
           saveData();
@@ -1865,6 +2385,8 @@
           goals: [],
           presets: [],
           recurring: [],
+          cards: [],
+          creditScores: [],
           settings: { rollover: false, alertsShown: {} },
         };
         saveData();
