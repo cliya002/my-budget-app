@@ -362,6 +362,10 @@
         { id: uid(), name: "Transport", limit: 150 },
         { id: uid(), name: "Eating Out", limit: 200 },
         { id: uid(), name: "Subscriptions", limit: 100 },
+        { id: uid(), name: "Healthcare", limit: 150 },
+        { id: uid(), name: "Entertainment", limit: 100 },
+        { id: uid(), name: "Shopping", limit: 200 },
+        { id: uid(), name: "Personal Care", limit: 75 },
         { id: uid(), name: "Other", limit: 200 },
       ];
       migrated = true;
@@ -396,14 +400,25 @@
     const subsCat = state.categories.find((c) => c.name === "Subscriptions");
     const utilCat = state.categories.find((c) => c.name === "Utilities");
     const rentCat = state.categories.find((c) => c.name === "Rent");
+    const healthCat = state.categories.find((c) => c.name === "Healthcare");
+    const entCat = state.categories.find((c) => c.name === "Entertainment");
+    const careCat = state.categories.find((c) => c.name === "Personal Care");
+    const shopCat = state.categories.find((c) => c.name === "Shopping");
+    const transportCat = state.categories.find((c) => c.name === "Transport");
     const subscriptionDescs = new Set([
-      "netflix", "spotify", "amazon prime", "disney+", "youtube premium",
-      "apple icloud", "gym",
+      "netflix", "spotify", "amazon prime", "disney+", "hbo max", "apple tv+",
+      "paramount+", "peacock", "youtube premium", "apple icloud", "google one",
+      "dropbox", "chatgpt plus", "claude pro", "github copilot", "gym",
     ]);
     const utilityDescs = new Set([
       "phone bill", "internet", "electric bill", "water bill",
     ]);
     const rentDescs = new Set(["rent"]);
+    const healthDescs = new Set(["pharmacy", "car insurance", "health insurance"]);
+    const entDescs = new Set(["movie"]);
+    const careDescs = new Set(["haircut"]);
+    const shopDescs = new Set(["clothing"]);
+    const transportDescs = new Set(["parking"]);
     state.presets = state.presets.map((p) => {
       if (p.categoryId) return p; // already categorized
       const key = String(p.desc || "").toLowerCase().trim();
@@ -411,6 +426,11 @@
       if (subsCat && subscriptionDescs.has(key)) newCatId = subsCat.id;
       else if (utilCat && utilityDescs.has(key)) newCatId = utilCat.id;
       else if (rentCat && rentDescs.has(key)) newCatId = rentCat.id;
+      else if (healthCat && healthDescs.has(key)) newCatId = healthCat.id;
+      else if (entCat && entDescs.has(key)) newCatId = entCat.id;
+      else if (careCat && careDescs.has(key)) newCatId = careCat.id;
+      else if (shopCat && shopDescs.has(key)) newCatId = shopCat.id;
+      else if (transportCat && transportDescs.has(key)) newCatId = transportCat.id;
       if (newCatId) {
         migrated = true;
         return { ...p, categoryId: newCatId, updatedAt: Date.now() };
@@ -434,25 +454,53 @@
       { id: uid(), type: "expense", desc: "Uber/Lyft", amount: 18, categoryId: findCat("Transport"), icon: "🚗", group: "daily" },
       { id: uid(), type: "expense", desc: "Public transit", amount: 5, categoryId: findCat("Transport"), icon: "🚇", group: "daily" },
       { id: uid(), type: "expense", desc: "Snacks", amount: 8, categoryId: findCat("Eating Out"), icon: "🍿", group: "daily" },
+      { id: uid(), type: "expense", desc: "Pharmacy", amount: 20, categoryId: findCat("Healthcare"), icon: "💊", group: "daily" },
+      { id: uid(), type: "expense", desc: "Haircut", amount: 30, categoryId: findCat("Personal Care"), icon: "💇", group: "daily" },
+      { id: uid(), type: "expense", desc: "Parking", amount: 10, categoryId: findCat("Transport"), icon: "🅿️", group: "daily" },
+      { id: uid(), type: "expense", desc: "Movie", amount: 15, categoryId: findCat("Entertainment"), icon: "🎟️", group: "daily" },
+      { id: uid(), type: "expense", desc: "Clothing", amount: 60, categoryId: findCat("Shopping"), icon: "👕", group: "daily" },
 
-      // Subscriptions
+      // Subscriptions — streaming
       { id: uid(), type: "expense", desc: "Netflix", amount: 15.49, categoryId: findCat("Subscriptions"), icon: "🎬", group: "subscription" },
       { id: uid(), type: "expense", desc: "Spotify", amount: 11.99, categoryId: findCat("Subscriptions"), icon: "🎵", group: "subscription" },
       { id: uid(), type: "expense", desc: "Amazon Prime", amount: 14.99, categoryId: findCat("Subscriptions"), icon: "📦", group: "subscription" },
       { id: uid(), type: "expense", desc: "Disney+", amount: 13.99, categoryId: findCat("Subscriptions"), icon: "✨", group: "subscription" },
+      { id: uid(), type: "expense", desc: "HBO Max", amount: 15.99, categoryId: findCat("Subscriptions"), icon: "🎭", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Apple TV+", amount: 9.99, categoryId: findCat("Subscriptions"), icon: "🍎", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Paramount+", amount: 11.99, categoryId: findCat("Subscriptions"), icon: "⛰️", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Peacock", amount: 7.99, categoryId: findCat("Subscriptions"), icon: "🦚", group: "subscription" },
       { id: uid(), type: "expense", desc: "YouTube Premium", amount: 13.99, categoryId: findCat("Subscriptions"), icon: "▶️", group: "subscription" },
+
+      // Subscriptions — software / tools
       { id: uid(), type: "expense", desc: "Apple iCloud", amount: 2.99, categoryId: findCat("Subscriptions"), icon: "☁️", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Google One", amount: 1.99, categoryId: findCat("Subscriptions"), icon: "🌥️", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Dropbox", amount: 11.99, categoryId: findCat("Subscriptions"), icon: "📂", group: "subscription" },
+      { id: uid(), type: "expense", desc: "ChatGPT Plus", amount: 20, categoryId: findCat("Subscriptions"), icon: "🤖", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Claude Pro", amount: 20, categoryId: findCat("Subscriptions"), icon: "🧠", group: "subscription" },
+      { id: uid(), type: "expense", desc: "GitHub Copilot", amount: 10, categoryId: findCat("Subscriptions"), icon: "🐙", group: "subscription" },
+
+      // Subscriptions — fitness / lifestyle
       { id: uid(), type: "expense", desc: "Gym", amount: 30, categoryId: findCat("Subscriptions"), icon: "💪", group: "subscription" },
+
+      // Subscriptions — bills & insurance
       { id: uid(), type: "expense", desc: "Phone bill", amount: 75, categoryId: findCat("Utilities"), icon: "📱", group: "subscription" },
       { id: uid(), type: "expense", desc: "Internet", amount: 60, categoryId: findCat("Utilities"), icon: "📡", group: "subscription" },
       { id: uid(), type: "expense", desc: "Electric bill", amount: 120, categoryId: findCat("Utilities"), icon: "💡", group: "subscription" },
       { id: uid(), type: "expense", desc: "Water bill", amount: 40, categoryId: findCat("Utilities"), icon: "💧", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Car insurance", amount: 150, categoryId: findCat("Healthcare"), icon: "🚗", group: "subscription" },
+      { id: uid(), type: "expense", desc: "Health insurance", amount: 250, categoryId: findCat("Healthcare"), icon: "🏥", group: "subscription" },
       { id: uid(), type: "expense", desc: "Rent", amount: 1500, categoryId: findCat("Rent"), icon: "🏠", group: "subscription" },
 
       // Income
       { id: uid(), type: "income", desc: "Paycheck", amount: 0, categoryId: null, icon: "💼", group: "income", favorite: true },
+      { id: uid(), type: "income", desc: "Bonus", amount: 0, categoryId: null, icon: "🎉", group: "income" },
       { id: uid(), type: "income", desc: "Side gig", amount: 0, categoryId: null, icon: "💻", group: "income" },
       { id: uid(), type: "income", desc: "Refund", amount: 0, categoryId: null, icon: "↩️", group: "income" },
+      { id: uid(), type: "income", desc: "Tax refund", amount: 0, categoryId: null, icon: "🧾", group: "income" },
+      { id: uid(), type: "income", desc: "Reimbursement", amount: 0, categoryId: null, icon: "💵", group: "income" },
+      { id: uid(), type: "income", desc: "Dividend", amount: 0, categoryId: null, icon: "📈", group: "income" },
+      { id: uid(), type: "income", desc: "Interest", amount: 0, categoryId: null, icon: "🏦", group: "income" },
+      { id: uid(), type: "income", desc: "Tips", amount: 0, categoryId: null, icon: "💰", group: "income" },
       { id: uid(), type: "income", desc: "Gift received", amount: 0, categoryId: null, icon: "🎁", group: "income" },
       { id: uid(), type: "income", desc: "Cashback", amount: 0, categoryId: null, icon: "💸", group: "income" },
     ];
@@ -5805,6 +5853,10 @@
         { name: "Transport", limit: 150 },
         { name: "Eating Out", limit: 200 },
         { name: "Subscriptions", limit: 100 },
+        { name: "Healthcare", limit: 150 },
+        { name: "Entertainment", limit: 100 },
+        { name: "Shopping", limit: 200 },
+        { name: "Personal Care", limit: 75 },
         { name: "Other", limit: 200 },
       ];
       const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
@@ -7910,10 +7962,14 @@
       { match: /starbucks|dunkin|coffee|cafe/, cat: "Eating Out" },
       { match: /uber|lyft|gas|shell|chevron|exxon|bp|fuel|parking/, cat: "Transport" },
       { match: /amazon|walmart|target|costco|grocery|trader|whole foods|kroger|safeway/, cat: "Groceries" },
-      { match: /netflix|spotify|hulu|disney|youtube|apple|prime/, cat: "Subscriptions" },
+      { match: /netflix|spotify|hulu|disney|youtube|apple|prime|hbo|paramount|peacock|chatgpt|claude|copilot|dropbox|google one/, cat: "Subscriptions" },
       { match: /electric|gas bill|water|sewer|comcast|xfinity|att|verizon|tmobile|internet/, cat: "Utilities" },
       { match: /rent|landlord|mortgage/, cat: "Rent" },
       { match: /restaurant|grubhub|doordash|ubereats|chipotle|mcdonald|burger|pizza/, cat: "Eating Out" },
+      { match: /pharmacy|cvs|walgreens|rite aid|copay|doctor|dentist|hospital|clinic|insurance/, cat: "Healthcare" },
+      { match: /movie|theater|cinema|concert|ticketmaster|stubhub|steam|playstation|xbox|nintendo/, cat: "Entertainment" },
+      { match: /haircut|salon|barber|spa|nails|skincare/, cat: "Personal Care" },
+      { match: /best buy|macy|nordstrom|gap|h&m|zara|nike|adidas/, cat: "Shopping" },
     ];
     for (const r of rules) {
       if (r.match.test(d)) return r.cat;
