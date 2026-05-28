@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=22" />
+  <link rel="stylesheet" href="styles.css?v=23" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -191,10 +191,28 @@
 
           <div class="card">
             <div class="card-title">Monthly Income</div>
-            <form id="incomeForm" class="row-form">
-              <input type="number" id="incomeAmount" placeholder="Monthly income" step="0.01" min="0" required />
-              <button type="submit" class="btn-primary">Save</button>
-            </form>
+            <p class="card-sub">Set a target income per month. Leave a month blank to use the default.</p>
+            <div class="form-row two-col" style="margin-top:0.75rem">
+              <div>
+                <label>Default monthly income</label>
+                <input type="number" id="incomeAmount" placeholder="0.00" step="0.01" min="0" />
+              </div>
+              <div>
+                <label>&nbsp;</label>
+                <button id="saveDefaultIncome" class="btn-primary block">Save Default</button>
+              </div>
+            </div>
+            <div style="margin-top:1rem">
+              <div class="card-sub">Set income for a specific month</div>
+              <form id="monthIncomeForm" class="row-form" style="margin-top:0.5rem">
+                <input type="month" id="incomeMonth" required />
+                <input type="number" id="incomeMonthAmount" placeholder="Amount" step="0.01" min="0" required />
+                <button type="submit" class="btn-primary">Set</button>
+              </form>
+            </div>
+            <ul id="monthIncomeList" class="list" style="margin-top:1rem">
+              <li class="empty">No monthly overrides yet.</li>
+            </ul>
           </div>
 
           <div class="card">
@@ -936,7 +954,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=22"></script>
+  <script src="app.js?v=23"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -21,7 +21,8 @@
     "32ea448e581deafe4684d8bffce21c999be2b68f67440c165496b47ca0eb8f1f";
 
   let state = {
-    income: 0,             // legacy "monthly income" target
+    income: 0,             // legacy default if no per-month value set
+    monthlyIncome: {},     // map: "YYYY-MM" -> amount (per-month target)
     categories: [],
     expenses: [],          // each: { id, type, desc, amount, date, categoryId, accountId, tags, receipt }
     goals: [],
@@ -31,8 +32,8 @@
     creditScores: [],      // each: { id, score, date, source, type, note }
     accounts: [],          // each: { id, name, type, balance, color }
     settings: {
-      rollover: false,     // when true, unused budget rolls over to next month
-      alertsShown: {},     // map "YYYY-MM:catId:level" -> true (already alerted)
+      rollover: false,
+      alertsShown: {},
     },
   };
 
@@ -243,6 +244,14 @@
     if (!Array.isArray(state.cards)) state.cards = [];
     if (!Array.isArray(state.creditScores)) state.creditScores = [];
     if (!Array.isArray(state.accounts)) state.accounts = [];
+    if (!state.monthlyIncome || typeof state.monthlyIncome !== "object") {
+      state.monthlyIncome = {};
+      // Migrate legacy income to current month
+      if (Number(state.income) > 0) {
+        state.monthlyIncome[currentMonth()] = Number(state.income);
+        migrated = true;
+      }
+    }
 
     // Seed default accounts on first launch
     if (!state.accounts.length) {
@@ -616,6 +625,45 @@
 
   function netWorth() {
     return state.accounts.reduce((s, a) => s + accountBalance(a.id), 0);
+  }
+
+  /* ---------- Per-month income helpers ---------- */
+  function incomeForMonth(monthKeyStr) {
+    const explicit = state.monthlyIncome ? state.monthlyIncome[monthKeyStr] : undefined;
+    if (typeof explicit === "number" && !isNaN(explicit)) return explicit;
+    return Number(state.income) || 0; // fallback default
+  }
+
+  function setIncomeForMonth(monthKeyStr, amount) {
+    if (!state.monthlyIncome) state.monthlyIncome = {};
+    state.monthlyIncome[monthKeyStr] = Number(amount) || 0;
+  }
+
+  function renderMonthIncomeList() {
+    const list = $("#monthIncomeList");
+    if (!list) return;
+    const entries = Object.entries(state.monthlyIncome || {})
+      .filter(([_, v]) => Number(v) > 0)
+      .sort(([a], [b]) => b.localeCompare(a)); // newest first
+    if (!entries.length) {
+      list.innerHTML = '<li class="empty">No monthly overrides yet. Default will be used.</li>';
+      return;
+    }
+    list.innerHTML = entries
+      .map(([m, amount]) => {
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${monthLabel(m)}</div>
+              <div class="list-item-sub">Target: ${fmt(amount)}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="edit-month-income" data-month="${m}" title="Edit">✏️</button>
+              <button data-action="del-month-income" data-month="${m}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      })
+      .join("");
   }
 
   function renderAccountList() {
@@ -1008,7 +1056,8 @@
     const monthIncomes = monthTxns.filter((e) => e.type === "income");
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const totalIncomeReal = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
-    const totalIncome = Math.max(Number(state.income) || 0, totalIncomeReal);
+    const targetIncome = incomeForMonth(month);
+    const totalIncome = Math.max(targetIncome, totalIncomeReal);
     const totalSaved = state.goals.reduce((s, g) => s + Number(g.saved || 0), 0);
     const remaining = totalIncome - totalSpent;
 
@@ -1093,6 +1142,7 @@
 
   function renderBalances() {
     $("#incomeAmount").value = state.income || "";
+    renderMonthIncomeList();
 
     const list = $("#categoryList");
     if (!state.categories.length) {
@@ -2751,14 +2801,30 @@
 
   /* ---------- Forms & actions ---------- */
   function initForms() {
-    // Income
-    $("#incomeForm").addEventListener("submit", (e) => {
-      e.preventDefault();
+    // Default income
+    $("#saveDefaultIncome").addEventListener("click", () => {
       state.income = parseFloat($("#incomeAmount").value) || 0;
       saveData();
       renderAll();
-      showToast("Income updated");
+      showToast("Default income saved");
     });
+
+    // Per-month income override
+    $("#monthIncomeForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const m = $("#incomeMonth").value;
+      const amount = parseFloat($("#incomeMonthAmount").value);
+      if (!m || isNaN(amount)) return;
+      setIncomeForMonth(m, amount);
+      saveData();
+      $("#incomeMonth").value = "";
+      $("#incomeMonthAmount").value = "";
+      renderAll();
+      showToast("Monthly income set");
+    });
+
+    // Default the month picker to current month
+    if ($("#incomeMonth")) $("#incomeMonth").value = currentMonth();
 
     // Categories
     $("#categoryForm").addEventListener("submit", (e) => {
@@ -3300,6 +3366,24 @@
         if (!isNaN(b)) acc.balance = b;
         saveData();
         renderAll();
+      } else if (action === "edit-month-income") {
+        const m = btn.dataset.month;
+        const cur = state.monthlyIncome[m];
+        const newVal = prompt(`Income for ${monthLabel(m)}:`, cur);
+        if (newVal === null) return;
+        const v = parseFloat(newVal);
+        if (isNaN(v)) return;
+        setIncomeForMonth(m, v);
+        saveData();
+        renderAll();
+        showToast("Updated");
+      } else if (action === "del-month-income") {
+        const m = btn.dataset.month;
+        if (confirm(`Remove income override for ${monthLabel(m)}? Default will be used instead.`)) {
+          delete state.monthlyIncome[m];
+          saveData();
+          renderAll();
+        }
       } else if (action === "del-acc") {
         if (confirm("Delete this account? Transactions assigned to it will keep their record.")) {
           state.accounts = state.accounts.filter((a) => a.id !== id);
@@ -3417,6 +3501,7 @@
           if (!confirm("This will replace all current data. Continue?")) return;
           state = {
             income: data.income || 0,
+            monthlyIncome: data.monthlyIncome || {},
             categories: data.categories || [],
             expenses: (data.expenses || []).map((e) => ({
               ...e,
@@ -3447,6 +3532,7 @@
       if (confirm("Delete ALL budget data? This cannot be undone.")) {
         state = {
           income: 0,
+          monthlyIncome: {},
           categories: [],
           expenses: [],
           goals: [],
