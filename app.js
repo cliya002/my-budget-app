@@ -388,6 +388,7 @@
     // Always update today's net-worth snapshot so the chart stays current
     try { snapshotNetWorth(); } catch (e) { /* netWorth uses functions defined later; ignore in early-init save */ }
     try { snapshotUtilization(); } catch (e) { /* same */ }
+    try { markDirty(); } catch (e) { /* before init */ }
     if (cryptoKey) {
       // Encrypt asynchronously and write to localStorage; remove plaintext on success
       encryptState(state).then((b64) => {
@@ -572,7 +573,44 @@
     renderAll();
     checkBudgetAlerts();
     startAutoLock();
+    startAutoSync();
+    updateSyncIndicator("synced");
+    // Auto-pull on unlock if enabled
+    if (localStorage.getItem("mb_auto_sync") === "true" && localStorage.getItem(KEYS.syncGistId)) {
+      // Don't replace data automatically — only if user has Gist set up
+      // We'll quietly do a "fetch + check timestamp" — if remote is newer, prompt
+      checkForRemoteUpdate();
+    }
     maybeStartTour();
+  }
+
+  async function checkForRemoteUpdate() {
+    const token = localStorage.getItem(KEYS.syncToken);
+    const gistId = localStorage.getItem(KEYS.syncGistId);
+    if (!token || !gistId) return;
+    try {
+      const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const file = data.files[SYNC_FILENAME];
+      if (!file) return;
+      const payload = JSON.parse(file.content);
+      const remoteTime = new Date(payload.updatedAt).getTime();
+      const localTime = lastSyncedAt || 0;
+      if (remoteTime > localTime + 60000) {
+        // Remote is significantly newer — show a banner
+        if (confirm(`Cloud has newer data (synced ${new Date(payload.updatedAt).toLocaleString()}). Pull now?`)) {
+          syncPull();
+        }
+      }
+    } catch (e) {
+      console.warn("Remote check failed", e);
+    }
   }
 
   function lockNow() {
@@ -659,6 +697,7 @@
     renderAccountList();
     renderDashAccounts();
     renderThemeButtons();
+    renderGoalsTab();
     populateExpenseCategorySelect();
     populateAccountSelect("#expAccount", true);
     populatePersonSelect();
@@ -667,6 +706,163 @@
     renderPersonFilterChips();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
+  }
+
+  function renderGoalsTab() {
+    const overview = $("#goalOverview");
+    const grid = $("#goalGrid");
+    const totalPill = $("#goalsTotalSaved");
+    if (!overview || !grid) return;
+
+    const totalSaved = state.goals.reduce((s, g) => s + (Number(g.saved) || 0), 0);
+    const totalTarget = state.goals.reduce((s, g) => s + (Number(g.target) || 0), 0);
+    if (totalPill) totalPill.textContent = `${fmt(totalSaved)} saved`;
+
+    if (!state.goals.length) {
+      overview.innerHTML = '<p class="empty">No goals yet.</p>';
+      grid.innerHTML = '<p class="empty">No savings goals yet. Tap + New Goal.</p>';
+      return;
+    }
+
+    const overallPct = totalTarget > 0 ? (totalSaved / totalTarget) * 100 : 0;
+    const completed = state.goals.filter((g) => Number(g.saved) >= Number(g.target)).length;
+    overview.innerHTML = `
+      <div class="goal-overview-stats">
+        <div class="goal-stat">
+          <div class="card-sub">Total saved</div>
+          <div class="ytd-value">${fmt(totalSaved)}</div>
+          <div class="card-sub">of ${fmt(totalTarget)} target (${overallPct.toFixed(0)}%)</div>
+        </div>
+        <div class="goal-stat">
+          <div class="card-sub">Goals completed</div>
+          <div class="ytd-value">${completed} / ${state.goals.length}</div>
+        </div>
+      </div>
+    `;
+
+    grid.innerHTML = state.goals.map((g) => {
+      const saved = Number(g.saved) || 0;
+      const target = Number(g.target) || 0;
+      const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+      const remaining = Math.max(0, target - saved);
+
+      // Calculate avg monthly contribution from txns
+      const contribs = state.expenses.filter(
+        (e) => e.goalId === g.id && e.type !== "income"
+      );
+      const monthsActive = contribs.length
+        ? new Set(contribs.map((e) => monthKey(e.date))).size
+        : 0;
+      const avgPerMonth = monthsActive > 0
+        ? contribs.reduce((s, e) => s + Number(e.amount), 0) / monthsActive
+        : 0;
+
+      // Projection
+      let projection = "";
+      if (remaining > 0 && avgPerMonth > 0) {
+        const monthsToGoal = Math.ceil(remaining / avgPerMonth);
+        const eta = new Date();
+        eta.setMonth(eta.getMonth() + monthsToGoal);
+        projection = `<div class="goal-projection">📅 At ${fmt(avgPerMonth)}/mo pace → ${eta.toLocaleDateString(undefined, { month: "short", year: "numeric" })} (${monthsToGoal} mo)</div>`;
+      } else if (g.date && remaining > 0) {
+        const target = new Date(g.date);
+        const monthsLeft = Math.max(1, Math.round((target - new Date()) / (30.44 * 24 * 60 * 60 * 1000)));
+        const needed = remaining / monthsLeft;
+        projection = `<div class="goal-projection">📅 Need <strong>${fmt(needed)}</strong>/mo to hit ${g.date}</div>`;
+      }
+
+      const dateStr = g.date ? `Target: ${g.date}` : "No deadline";
+      return `
+        <div class="goal-card">
+          <div class="goal-header">
+            <h3>${escapeHtml(g.name)}</h3>
+            <button class="icon-btn" data-action="del-goal" data-id="${g.id}" title="Delete">🗑️</button>
+          </div>
+          <div class="goal-amounts">
+            <div><strong>${fmt(saved)}</strong> of ${fmt(target)}</div>
+            <div class="card-sub">${dateStr}</div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill ${saved >= target ? "success" : ""}" style="width:${pct}%"></div></div>
+          <div class="card-sub" style="text-align:center;margin-top:0.4rem">${pct.toFixed(0)}% complete</div>
+          ${projection}
+          <div class="goal-actions" style="margin-top:0.6rem">
+            <input type="number" placeholder="Add amount" step="0.01" min="0" data-goal-input="${g.id}" />
+            <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
+          </div>
+        </div>`;
+    }).join("");
+
+    // Sync round-up settings on this tab too
+    const ru2 = $("#roundUpToggle2");
+    if (ru2) ru2.checked = !!state.settings.roundUpEnabled;
+    const ruRow2 = $("#roundUpGoalRow2");
+    if (ruRow2) ruRow2.style.display = state.settings.roundUpEnabled ? "block" : "none";
+    const ruSel2 = $("#roundUpGoalSelect2");
+    if (ruSel2) {
+      ruSel2.innerHTML = '<option value="">Select goal</option>' +
+        state.goals.map((g) => `<option value="${g.id}" ${g.id === state.settings.roundUpGoalId ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("");
+    }
+    // Re-use the same stats calc
+    if ($("#roundUpStats2") && state.settings.roundUpEnabled && state.settings.roundUpGoalId) {
+      const m = currentMonth();
+      let total = 0;
+      state.expenses.forEach((e) => {
+        if (e.type !== "expense") return;
+        if (monthKey(e.date) !== m) return;
+        const cents = Math.round(Number(e.amount) * 100) % 100;
+        total += cents === 0 ? 0 : (100 - cents) / 100;
+      });
+      const goal = state.goals.find((g) => g.id === state.settings.roundUpGoalId);
+      $("#roundUpStats2").innerHTML = `Round-up potential this month: <strong>${fmt(total)}</strong> → ${goal ? escapeHtml(goal.name) : ""}`;
+    } else if ($("#roundUpStats2")) {
+      $("#roundUpStats2").textContent = state.settings.roundUpEnabled ? "Pick a destination goal." : "";
+    }
+
+    renderGoalsTimelineChart();
+  }
+
+  function renderGoalsTimelineChart() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("goalsTimeline");
+    const ctx = $("#chartGoalsTimeline");
+    if (!ctx) return;
+    const goalsWithDates = state.goals.filter((g) => g.date && Number(g.target) > 0);
+    if (!goalsWithDates.length) {
+      $("#goalsTimelineEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#goalsTimelineEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    const sorted = [...goalsWithDates].sort((a, b) => a.date.localeCompare(b.date));
+    const labels = sorted.map((g) => g.name);
+    const targets = sorted.map((g) => Number(g.target));
+    const saved = sorted.map((g) => Number(g.saved) || 0);
+
+    charts.goalsTimeline = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Saved", data: saved, backgroundColor: "#22c55e", borderRadius: 6 },
+          { label: "Remaining", data: sorted.map((g, i) => Math.max(0, targets[i] - saved[i])), backgroundColor: "#e6e1d5", borderRadius: 6 },
+        ],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top" },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.x)}` } },
+        },
+        scales: {
+          x: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { stacked: true, grid: { display: false } },
+        },
+      },
+    });
   }
 
   function renderRecurringList() {
@@ -5550,7 +5746,48 @@
 
     // FAB and modal close
     $("#fab").addEventListener("click", () => {
+      // If menu is open, close it; otherwise open expense modal directly
+      const menu = $("#fabMenu");
+      if (!menu.hidden) {
+        menu.hidden = true;
+        return;
+      }
       openExpenseModal();
+    });
+
+    // Long-press FAB to open menu
+    let fabPressTimer;
+    const fab = $("#fab");
+    const startPress = (e) => {
+      fabPressTimer = setTimeout(() => {
+        $("#fabMenu").hidden = false;
+        if (navigator.vibrate) navigator.vibrate(10);
+      }, 500);
+    };
+    const cancelPress = () => clearTimeout(fabPressTimer);
+    fab.addEventListener("mousedown", startPress);
+    fab.addEventListener("touchstart", startPress, { passive: true });
+    fab.addEventListener("mouseup", cancelPress);
+    fab.addEventListener("mouseleave", cancelPress);
+    fab.addEventListener("touchend", cancelPress);
+
+    // FAB menu actions
+    $$(".fab-item").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const action = btn.dataset.fabAction;
+        $("#fabMenu").hidden = true;
+        if (action === "expense") openExpenseModal();
+        else if (action === "income") openExpenseModal({ type: "income" });
+        else if (action === "transfer") openTransferModal();
+        else if (action === "paycheck") openPaycheckModal();
+      });
+    });
+    // Close menu on outside click
+    document.addEventListener("click", (e) => {
+      const menu = $("#fabMenu");
+      if (!menu || menu.hidden) return;
+      if (e.target.closest(".fab-stack")) return;
+      menu.hidden = true;
     });
     $("#helpBtn")?.addEventListener("click", showShortcutsHelp);
     $("#replayTourBtn")?.addEventListener("click", () => {
@@ -5593,6 +5830,29 @@
     });
     $("#syncPushBtn")?.addEventListener("click", syncPush);
     $("#syncPullBtn")?.addEventListener("click", syncPull);
+
+    // CSV upload
+    $("#csvUploadBtn")?.addEventListener("click", () => $("#csvFile").click());
+    $("#csvFile")?.addEventListener("change", (e) => {
+      const f = e.target.files[0];
+      if (f) handleCsvUpload(f);
+    });
+
+    const autoSyncToggle = $("#autoSyncToggle");
+    if (autoSyncToggle) {
+      autoSyncToggle.checked = localStorage.getItem("mb_auto_sync") === "true";
+      autoSyncToggle.addEventListener("change", (e) => {
+        localStorage.setItem("mb_auto_sync", e.target.checked ? "true" : "false");
+        if (e.target.checked) {
+          startAutoSync();
+          showToast("Auto-sync enabled");
+        } else {
+          stopAutoSync();
+          showToast("Auto-sync disabled");
+        }
+        updateSyncIndicator("synced");
+      });
+    }
 
     // AI insights settings
     const aiProvSel = $("#aiProvider");
@@ -5712,6 +5972,7 @@
         $("#roundUpGoalRow").style.display = e.target.checked ? "block" : "none";
         saveData();
         renderRoundUpStats();
+        renderGoalsTab();
         showToast(e.target.checked ? "Round-up enabled" : "Round-up disabled");
       });
     }
@@ -5721,8 +5982,43 @@
         state.settings.roundUpGoalId = e.target.value || null;
         saveData();
         renderRoundUpStats();
+        renderGoalsTab();
       });
     }
+    // Mirror toggles on Goals tab
+    const ru2 = $("#roundUpToggle2");
+    if (ru2) {
+      ru2.addEventListener("change", (e) => {
+        state.settings.roundUpEnabled = e.target.checked;
+        saveData();
+        renderRoundUpStats();
+        renderGoalsTab();
+        if (roundToggle) roundToggle.checked = e.target.checked;
+      });
+    }
+    const ruSel2 = $("#roundUpGoalSelect2");
+    if (ruSel2) {
+      ruSel2.addEventListener("change", (e) => {
+        state.settings.roundUpGoalId = e.target.value || null;
+        saveData();
+        renderRoundUpStats();
+        renderGoalsTab();
+      });
+    }
+    // + New Goal on the Goals tab opens the form (auto-scroll to it)
+    $("#addGoal2Btn")?.addEventListener("click", () => {
+      const name = prompt("Goal name:");
+      if (!name) return;
+      const targetStr = prompt("Target amount:");
+      if (!targetStr) return;
+      const target = parseFloat(targetStr);
+      if (isNaN(target)) return;
+      const date = prompt("Target date (YYYY-MM-DD, optional):");
+      state.goals.push({ id: uid(), name: name.trim(), target, saved: 0, date: date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : "" });
+      saveData();
+      renderAll();
+      showToast("Goal added");
+    });
 
     // Recurring transactions form
     $("#recurringForm").addEventListener("submit", (e) => {
@@ -6579,7 +6875,192 @@
     });
   }
 
-  /* ---------- Keyboard shortcuts ---------- */
+  /* ---------- Global Search ---------- */
+  function initGlobalSearch() {
+    document.addEventListener("keydown", (e) => {
+      // Cmd/Ctrl + K opens search
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        openGlobalSearch();
+      }
+    });
+
+    $("#globalSearchClose")?.addEventListener("click", closeGlobalSearch);
+    $("#globalSearchOverlay")?.addEventListener("click", (e) => {
+      if (e.target.id === "globalSearchOverlay") closeGlobalSearch();
+    });
+
+    const input = $("#globalSearchInput");
+    if (input) {
+      input.addEventListener("input", (e) => renderGlobalSearchResults(e.target.value));
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeGlobalSearch();
+      });
+    }
+  }
+
+  function openGlobalSearch() {
+    if ($("#app").hidden) return;
+    $("#globalSearchOverlay").hidden = false;
+    $("#globalSearchInput").value = "";
+    renderGlobalSearchResults("");
+    setTimeout(() => $("#globalSearchInput").focus(), 50);
+  }
+
+  function closeGlobalSearch() {
+    $("#globalSearchOverlay").hidden = true;
+  }
+
+  function renderGlobalSearchResults(q) {
+    const el = $("#globalSearchResults");
+    if (!el) return;
+    const query = q.toLowerCase().trim();
+    if (!query) {
+      el.innerHTML = '<p class="empty">Type to search across the app.</p>';
+      return;
+    }
+
+    const matches = (str) => str && str.toLowerCase().includes(query);
+
+    const txnHits = state.expenses
+      .filter((e) => matches(e.desc) || (e.tags || []).some(matches))
+      .slice(0, 10)
+      .map((e) => {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        return {
+          icon: e.type === "income" ? "💰" : "💸",
+          title: e.desc,
+          sub: `${e.date} · ${cat ? cat.name : "Uncategorized"} · ${fmt(e.amount)}`,
+          action: () => { closeGlobalSearch(); openExpenseModal(e); },
+        };
+      });
+
+    const cardHits = state.cards.filter((c) => matches(c.name) || matches(c.issuer)).map((c) => ({
+      icon: "💳",
+      title: c.name,
+      sub: c.issuer ? `${c.issuer} · Balance ${fmt(c.balance || 0)}` : `Balance ${fmt(c.balance || 0)}`,
+      action: () => { closeGlobalSearch(); $('[data-tab="credit"]').click(); },
+    }));
+
+    const peopleHits = state.people.filter((p) => matches(p.name) || matches(p.relation)).map((p) => ({
+      icon: "👤",
+      title: p.name,
+      sub: p.relation || "",
+      action: () => { closeGlobalSearch(); $('[data-tab="family"]').click(); },
+    }));
+
+    const presetHits = state.presets.filter((p) => matches(p.desc)).slice(0, 5).map((p) => ({
+      icon: p.icon || "💸",
+      title: p.desc,
+      sub: `Preset · ${fmt(p.amount)}`,
+      action: () => { closeGlobalSearch(); openExpenseModal({ ...p, type: p.type, id: null }); },
+    }));
+
+    const accountHits = state.accounts.filter((a) => matches(a.name)).map((a) => ({
+      icon: "🏦",
+      title: a.name,
+      sub: `${a.type} · ${fmt(accountBalance(a.id))}`,
+      action: () => { closeGlobalSearch(); $('[data-tab="balances"]').click(); },
+    }));
+
+    const goalHits = state.goals.filter((g) => matches(g.name)).map((g) => ({
+      icon: "🎯",
+      title: g.name,
+      sub: `Goal · ${fmt(g.saved || 0)} of ${fmt(g.target)}`,
+      action: () => { closeGlobalSearch(); $('[data-tab="balances"]').click(); },
+    }));
+
+    const allGroups = [
+      { name: "Transactions", items: txnHits },
+      { name: "Cards", items: cardHits },
+      { name: "Family", items: peopleHits },
+      { name: "Accounts", items: accountHits },
+      { name: "Goals", items: goalHits },
+      { name: "Presets", items: presetHits },
+    ].filter((g) => g.items.length);
+
+    if (!allGroups.length) {
+      el.innerHTML = '<p class="empty">No matches.</p>';
+      return;
+    }
+
+    let html = "";
+    let idx = 0;
+    allGroups.forEach((g) => {
+      html += `<div class="search-group-label">${g.name}</div>`;
+      g.items.forEach((item) => {
+        html += `
+          <button class="search-result" data-idx="${idx}">
+            <span class="search-result-icon">${item.icon}</span>
+            <div class="search-result-text">
+              <div class="search-result-title">${escapeHtml(item.title)}</div>
+              <div class="search-result-sub">${escapeHtml(item.sub)}</div>
+            </div>
+          </button>`;
+        idx += 1;
+      });
+    });
+    el.innerHTML = html;
+
+    // Wire actions
+    const flat = allGroups.flatMap((g) => g.items);
+    el.querySelectorAll(".search-result").forEach((btn, i) => {
+      btn.addEventListener("click", () => {
+        if (flat[i]) flat[i].action();
+      });
+    });
+  }
+  function initSwipeGestures() {
+    let startX = 0, startY = 0, target = null;
+    document.addEventListener("touchstart", (e) => {
+      const row = e.target.closest(".txn-item");
+      if (!row) return;
+      target = row;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+    }, { passive: true });
+
+    document.addEventListener("touchmove", (e) => {
+      if (!target) return;
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      // Only swipe if more horizontal than vertical
+      if (Math.abs(dy) > Math.abs(dx)) { target = null; return; }
+      target.style.transform = `translateX(${dx}px)`;
+      target.style.transition = "none";
+      // Color hint
+      if (dx > 60) target.style.background = "rgba(91, 63, 184, 0.1)"; // edit
+      else if (dx < -60) target.style.background = "rgba(239, 68, 68, 0.1)"; // delete
+      else target.style.background = "";
+    }, { passive: true });
+
+    document.addEventListener("touchend", (e) => {
+      if (!target) return;
+      const finalDx = parseInt(target.style.transform.replace(/[^-\d]/g, ""), 10) || 0;
+      const id = target.dataset.txnRow;
+      target.style.transition = "transform 0.2s, background 0.2s";
+      target.style.transform = "";
+      target.style.background = "";
+
+      if (Math.abs(finalDx) > 100 && id) {
+        if (finalDx < 0) {
+          // Swipe left = delete
+          if (confirm("Delete this transaction?")) {
+            const txn = state.expenses.find((x) => x.id === id);
+            state.expenses = state.expenses.filter((x) => x.id !== id);
+            saveData();
+            renderAll();
+            if (txn) showUndoToast([txn]);
+          }
+        } else {
+          // Swipe right = edit
+          const exp = state.expenses.find((x) => x.id === id);
+          if (exp) openExpenseModal(exp);
+        }
+      }
+      target = null;
+    });
+  }
   function initKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
       // Don't fire if typing in input/textarea/contenteditable
@@ -6682,15 +7163,248 @@
       if (e.target === div) div.classList.remove("open");
     });
   }
+  /* ---------- Bank CSV Import ---------- */
+  let csvParsedRows = null;
+
+  function handleCsvUpload(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target.result;
+      try {
+        const rows = parseCsv(text);
+        if (!rows.length) {
+          showToast("CSV is empty");
+          return;
+        }
+        csvParsedRows = rows;
+        renderCsvPreview(rows);
+      } catch (err) {
+        showToast("Could not parse CSV: " + err.message);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function parseCsv(text) {
+    // Lightweight CSV parser handling quoted fields
+    const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
+    if (!lines.length) return [];
+    const splitLine = (line) => {
+      const out = [];
+      let cur = "";
+      let inQuote = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') {
+          if (inQuote && line[i + 1] === '"') { cur += '"'; i++; }
+          else inQuote = !inQuote;
+        } else if (c === "," && !inQuote) {
+          out.push(cur); cur = "";
+        } else {
+          cur += c;
+        }
+      }
+      out.push(cur);
+      return out.map((s) => s.trim());
+    };
+    const headers = splitLine(lines[0]).map((h) => h.toLowerCase());
+    const rows = lines.slice(1).map((l) => {
+      const cells = splitLine(l);
+      const obj = {};
+      headers.forEach((h, i) => { obj[h] = cells[i] || ""; });
+      return obj;
+    });
+    return rows;
+  }
+
+  function detectCsvFields(row) {
+    // Find which columns look like date / description / amount
+    const keys = Object.keys(row);
+    const dateKey = keys.find((k) => /date|posted/i.test(k));
+    const descKey = keys.find((k) => /desc|name|merchant|payee|memo|details/i.test(k));
+    const amountKey = keys.find((k) => /amount|debit|credit|value/i.test(k));
+    return { dateKey, descKey, amountKey };
+  }
+
+  function autoCategorizeRule(desc) {
+    const d = (desc || "").toLowerCase();
+    const rules = [
+      { match: /starbucks|dunkin|coffee|cafe/, cat: "Eating Out" },
+      { match: /uber|lyft|gas|shell|chevron|exxon|bp|fuel|parking/, cat: "Transport" },
+      { match: /amazon|walmart|target|costco|grocery|trader|whole foods|kroger|safeway/, cat: "Groceries" },
+      { match: /netflix|spotify|hulu|disney|youtube|apple|prime/, cat: "Other" },
+      { match: /electric|gas bill|water|sewer|comcast|xfinity|att|verizon|tmobile|internet/, cat: "Utilities" },
+      { match: /rent|landlord|mortgage/, cat: "Rent" },
+      { match: /restaurant|grubhub|doordash|ubereats|chipotle|mcdonald|burger|pizza/, cat: "Eating Out" },
+    ];
+    for (const r of rules) {
+      if (r.match.test(d)) return r.cat;
+    }
+    return null;
+  }
+
+  function renderCsvPreview(rows) {
+    const el = $("#csvPreview");
+    if (!el) return;
+    const fields = detectCsvFields(rows[0] || {});
+
+    if (!fields.dateKey || !fields.descKey || !fields.amountKey) {
+      el.hidden = false;
+      el.innerHTML = `<p class="card-sub" style="color:var(--warning)">⚠️ Couldn't detect date/description/amount columns. Headers found: <strong>${Object.keys(rows[0]).join(", ")}</strong>. Try a different export.</p>`;
+      return;
+    }
+
+    const sample = rows.slice(0, 5).map((r) => {
+      const cat = autoCategorizeRule(r[fields.descKey]);
+      const amt = parseFloat(String(r[fields.amountKey]).replace(/[^-\d.]/g, ""));
+      return `
+        <tr>
+          <td>${escapeHtml(r[fields.dateKey])}</td>
+          <td>${escapeHtml(r[fields.descKey])}</td>
+          <td class="right">${isNaN(amt) ? "?" : fmt(Math.abs(amt))}</td>
+          <td>${cat || "<i>Uncategorized</i>"}</td>
+        </tr>`;
+    }).join("");
+
+    el.hidden = false;
+    el.innerHTML = `
+      <p class="card-sub" style="margin-top:0.75rem">Found <strong>${rows.length}</strong> rows. Preview (first 5):</p>
+      <table class="csv-table">
+        <thead><tr><th>Date</th><th>Description</th><th class="right">Amount</th><th>Auto-category</th></tr></thead>
+        <tbody>${sample}</tbody>
+      </table>
+      <div class="form-row" style="margin-top:0.85rem">
+        <label>Default account</label>
+        <select id="csvAccountSelect">
+          ${state.accounts.map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("")}
+        </select>
+      </div>
+      <button id="csvImportBtn" class="btn-primary block" style="margin-top:0.5rem">Import ${rows.length} transactions</button>
+    `;
+
+    $("#csvImportBtn").addEventListener("click", () => importCsvRows(fields));
+  }
+
+  function importCsvRows(fields) {
+    if (!csvParsedRows) return;
+    const accountId = $("#csvAccountSelect").value || null;
+    let added = 0, skipped = 0;
+    csvParsedRows.forEach((r) => {
+      const dateRaw = r[fields.dateKey];
+      const desc = r[fields.descKey];
+      const amtRaw = r[fields.amountKey];
+      const amount = parseFloat(String(amtRaw).replace(/[^-\d.]/g, ""));
+      if (!desc || isNaN(amount)) { skipped += 1; return; }
+
+      // Date normalize
+      const d = new Date(dateRaw);
+      if (isNaN(d.getTime())) { skipped += 1; return; }
+      const date = d.toISOString().slice(0, 10);
+
+      // Type: negative = expense; positive = income (most US bank exports use this convention)
+      const type = amount < 0 ? "expense" : "income";
+      const absAmt = Math.abs(amount);
+
+      // Category from rule
+      let categoryId = null;
+      if (type === "expense") {
+        const catName = autoCategorizeRule(desc);
+        if (catName) categoryId = state.categories.find((c) => c.name === catName)?.id || null;
+      }
+
+      state.expenses.push({
+        id: uid(),
+        type,
+        desc,
+        amount: absAmt,
+        date,
+        categoryId,
+        accountId,
+        personId: null,
+        tags: ["csv-import"],
+        receipt: null,
+      });
+      added += 1;
+    });
+    saveData();
+    renderAll();
+    csvParsedRows = null;
+    $("#csvPreview").hidden = true;
+    $("#csvFile").value = "";
+    showToast(`Imported ${added}${skipped ? ` · ${skipped} skipped` : ""}`);
+  }
+
   /* ---------- Cloud Sync via GitHub Gist ---------- */
   const SYNC_FILENAME = "pocket-budget-encrypted.json";
+  let autoSyncTimer = null;
+  let dirtyForSync = false;
+  let lastSyncedAt = null;
 
-  async function syncPush() {
+  function startAutoSync() {
+    stopAutoSync();
+    if (localStorage.getItem("mb_auto_sync") !== "true") return;
+    if (!localStorage.getItem(KEYS.syncToken)) return;
+    autoSyncTimer = setInterval(() => {
+      if (dirtyForSync) {
+        syncPush({ silent: true });
+      }
+    }, 5 * 60 * 1000);
+  }
+
+  function stopAutoSync() {
+    if (autoSyncTimer) clearInterval(autoSyncTimer);
+    autoSyncTimer = null;
+  }
+
+  function markDirty() {
+    dirtyForSync = true;
+    updateSyncIndicator("dirty");
+  }
+
+  function updateSyncIndicator(status) {
+    // status: 'synced' | 'dirty' | 'syncing' | 'error' | 'off'
+    const ind = $("#syncIndicator");
+    const indDesk = $("#syncIndicatorDesktop");
+    if (!ind && !indDesk) return;
+
+    const enabled = localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId);
+    if (!enabled) {
+      if (ind) ind.hidden = true;
+      if (indDesk) indDesk.hidden = true;
+      return;
+    }
+    if (ind) ind.hidden = false;
+    if (indDesk) indDesk.hidden = false;
+
+    const pretty = {
+      synced: { icon: "🟢", text: "Synced", title: lastSyncedAt ? "Last synced " + new Date(lastSyncedAt).toLocaleTimeString() : "Synced" },
+      dirty: { icon: "🟡", text: "Pending", title: "Local changes pending sync" },
+      syncing: { icon: "🔄", text: "Syncing…", title: "Sync in progress" },
+      error: { icon: "🔴", text: "Sync error", title: "Last sync failed" },
+      off: { icon: "⚪", text: "Off", title: "Sync disabled" },
+    };
+    const p = pretty[status] || pretty.synced;
+    [ind, indDesk].forEach((el) => {
+      if (!el) return;
+      el.textContent = el === indDesk ? `${p.icon} ${p.text}` : p.icon;
+      el.title = p.title;
+    });
+  }
+
+  async function syncPush(opts = {}) {
+    const silent = !!opts.silent;
     const token = localStorage.getItem(KEYS.syncToken);
-    if (!token) { showSyncStatus("Add a GitHub token first.", "warn"); return; }
-    if (!cryptoKey) { showSyncStatus("Unlock the app first.", "warn"); return; }
+    if (!token) {
+      if (!silent) showSyncStatus("Add a GitHub token first.", "warn");
+      return;
+    }
+    if (!cryptoKey) {
+      if (!silent) showSyncStatus("Unlock the app first.", "warn");
+      return;
+    }
 
-    showSyncStatus("⬆️ Encrypting and uploading…", "loading");
+    if (!silent) showSyncStatus("⬆️ Encrypting and uploading…", "loading");
+    updateSyncIndicator("syncing");
     try {
       const encBlob = await encryptState(state);
       if (!encBlob) throw new Error("Encryption failed");
@@ -6739,9 +7453,13 @@
         $("#syncGistId").value = data.id;
       }
       showSyncStatus(`✓ Pushed ${(payload.length / 1024).toFixed(1)} KB · ${new Date().toLocaleTimeString()}`, "success");
+      lastSyncedAt = Date.now();
+      dirtyForSync = false;
+      updateSyncIndicator("synced");
     } catch (e) {
       console.error(e);
-      showSyncStatus(`❌ ${e.message || "Push failed"}`, "warn");
+      if (!silent) showSyncStatus(`❌ ${e.message || "Push failed"}`, "warn");
+      updateSyncIndicator("error");
     }
   }
 
@@ -6786,9 +7504,13 @@
       saveData();
       renderAll();
       showSyncStatus(`✓ Pulled · synced from ${new Date(payload.updatedAt).toLocaleString()}`, "success");
+      lastSyncedAt = Date.now();
+      dirtyForSync = false;
+      updateSyncIndicator("synced");
     } catch (e) {
       console.error(e);
       showSyncStatus(`❌ ${e.message || "Pull failed"}`, "warn");
+      updateSyncIndicator("error");
     }
   }
 
@@ -7142,5 +7864,7 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     initNav();
     initForms();
     initKeyboardShortcuts();
+    initSwipeGestures();
+    initGlobalSearch();
   });
 })();

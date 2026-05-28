@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=35" />
+  <link rel="stylesheet" href="styles.css?v=36" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -54,6 +54,7 @@
         </svg>
         <span>Pocket Budget</span>
       </div>
+      <span id="syncIndicator" class="sync-indicator" title="Sync status" hidden></span>
       <button id="lockNowBtn" class="icon-btn" aria-label="Lock">🔒</button>
     </div>
 
@@ -78,6 +79,9 @@
           <button class="nav-item" data-tab="balances">
             <span class="nav-icon">💳</span> Balances
           </button>
+          <button class="nav-item" data-tab="goals">
+            <span class="nav-icon">🎯</span> Goals
+          </button>
           <button class="nav-item" data-tab="transactions">
             <span class="nav-icon">≡</span> Transactions
           </button>
@@ -95,6 +99,7 @@
           </button>
         </nav>
         <div class="sidebar-footer">
+          <span id="syncIndicatorDesktop" class="sync-indicator-desktop" hidden></span>
           <button id="lockNowBtnDesktop" class="lock-btn">🔒 Lock</button>
         </div>
       </aside>
@@ -382,6 +387,51 @@
               </div>
               <div class="card-sub" id="roundUpStats" style="margin-top:0.5rem"></div>
             </div>
+          </div>
+        </div>
+
+        <!-- Goals -->
+        <div class="page" id="goals">
+          <div class="page-header">
+            <h1>Goals</h1>
+            <div class="page-actions">
+              <span id="goalsTotalSaved" class="month-pill">$0 saved</span>
+              <button id="addGoal2Btn" class="btn-primary">+ New Goal</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Overview</div>
+            <div class="goal-overview" id="goalOverview">
+              <p class="empty">No goals yet.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">All Goals</div>
+            <div id="goalGrid" class="goal-grid">
+              <p class="empty">No savings goals yet. Tap + New Goal.</p>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Timeline</div>
+            <div class="chart-wrap"><canvas id="chartGoalsTimeline"></canvas></div>
+            <div id="goalsTimelineEmpty" class="empty" hidden>Add goals with target dates to see the timeline.</div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">Round-Up Settings</div>
+            <p class="card-sub">Auto-save the change from each expense to a goal.</p>
+            <label class="toggle-row" style="margin-top:0.6rem">
+              <span><strong>🪙 Round-up enabled</strong></span>
+              <input type="checkbox" id="roundUpToggle2" />
+            </label>
+            <div class="form-row" id="roundUpGoalRow2" style="display:none">
+              <label>Destination goal</label>
+              <select id="roundUpGoalSelect2"></select>
+            </div>
+            <div class="card-sub" id="roundUpStats2" style="margin-top:0.5rem"></div>
           </div>
         </div>
 
@@ -1007,6 +1057,14 @@
           </div>
 
           <div class="card">
+            <div class="card-title">📥 Bank CSV Import</div>
+            <p class="card-sub">Upload a CSV from your bank or credit card. Columns auto-detected; review and confirm before import.</p>
+            <button id="csvUploadBtn" class="btn-secondary block" style="margin-top:0.5rem">Choose CSV file</button>
+            <input type="file" id="csvFile" accept=".csv,text/csv" hidden />
+            <div id="csvPreview" class="csv-preview" hidden></div>
+          </div>
+
+          <div class="card">
             <div class="card-title">Data</div>
             <button id="exportBtn" class="btn-secondary block">Export Backup (JSON)</button>
             <button id="exportCsvBtn" class="btn-secondary block" style="margin-top:0.5rem">Export Transactions (CSV)</button>
@@ -1034,6 +1092,14 @@
               <button id="syncPushBtn" class="btn-primary">⬆️ Push to Cloud</button>
               <button id="syncPullBtn" class="btn-secondary">⬇️ Pull from Cloud</button>
             </div>
+            <label class="toggle-row" style="margin-top:0.85rem">
+              <span>
+                <strong>Auto-sync</strong>
+                <br />
+                <span class="card-sub">Push every 5 minutes when data changes; pull on app load.</span>
+              </span>
+              <input type="checkbox" id="autoSyncToggle" />
+            </label>
             <div id="syncStatus" class="sync-status" hidden></div>
             <p class="footer-note" style="margin-top:0.5rem; text-align:left">
               💡 To set up a second device: install the app there, sign in with the same password, paste the same token + Gist ID, then tap Pull.
@@ -1076,7 +1142,15 @@
     </div>
 
     <!-- Floating Action Button -->
-    <button id="fab" class="fab" aria-label="Add expense">+</button>
+    <div class="fab-stack">
+      <div id="fabMenu" class="fab-menu" hidden>
+        <button class="fab-item" data-fab-action="expense">💸 Expense</button>
+        <button class="fab-item" data-fab-action="income">💰 Income</button>
+        <button class="fab-item" data-fab-action="transfer">↔️ Transfer</button>
+        <button class="fab-item" data-fab-action="paycheck">💼 Paycheck</button>
+      </div>
+      <button id="fab" class="fab" aria-label="Add expense">+</button>
+    </div>
     <button id="helpBtn" class="help-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   </main>
 
@@ -1640,6 +1714,20 @@
     </div>
   </div>
 
+  <!-- Global Search -->
+  <div id="globalSearchOverlay" class="search-overlay" hidden>
+    <div class="search-modal">
+      <div class="search-header">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="globalSearchInput" placeholder="Search transactions, cards, people, presets..." autocomplete="off" />
+        <button id="globalSearchClose" class="modal-close">×</button>
+      </div>
+      <div id="globalSearchResults" class="search-results">
+        <p class="empty">Type to search across the app.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast" hidden></div>
 
@@ -1651,7 +1739,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=35"></script>
+  <script src="app.js?v=36"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
