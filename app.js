@@ -723,6 +723,297 @@
       .join("");
   }
 
+  /* ---------- YTD income, Expected income, Tax estimator ---------- */
+  function ytdIncomeTotal() {
+    const year = currentMonth().slice(0, 4);
+    return state.expenses
+      .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
+      .reduce((s, e) => s + Number(e.amount), 0);
+  }
+
+  function ytdIncomeBySource() {
+    const year = currentMonth().slice(0, 4);
+    const out = {};
+    state.expenses
+      .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
+      .forEach((e) => {
+        const key = e.source || "(unspecified)";
+        out[key] = (out[key] || 0) + Number(e.amount);
+      });
+    return out;
+  }
+
+  function ytdIncomeByType() {
+    const year = currentMonth().slice(0, 4);
+    const out = {};
+    state.expenses
+      .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
+      .forEach((e) => {
+        const key = e.incomeType || "other";
+        out[key] = (out[key] || 0) + Number(e.amount);
+      });
+    return out;
+  }
+
+  function renderYtdIncome() {
+    const el = $("#ytdIncomeBreakdown");
+    if (!el) return;
+    const total = ytdIncomeTotal();
+    if (total === 0) {
+      el.innerHTML = '<p class="empty">No income transactions yet this year.</p>';
+      return;
+    }
+    const bySource = ytdIncomeBySource();
+    const byType = ytdIncomeByType();
+
+    const typeNames = {
+      salary: "💼 Salary", freelance: "💻 Freelance", bonus: "🎉 Bonus",
+      investment: "📈 Investment", refund: "↩️ Refund", gift: "🎁 Gift", other: "Other",
+    };
+
+    let html = `
+      <div class="ytd-total">
+        <div class="ytd-label">Total ${currentMonth().slice(0, 4)}</div>
+        <div class="ytd-value">${fmt(total)}</div>
+      </div>
+      <div class="ytd-section-label">By type</div>
+      <div class="ytd-rows">
+    `;
+    Object.entries(byType)
+      .sort((a, b) => b[1] - a[1])
+      .forEach(([key, amount]) => {
+        const name = typeNames[key] || key;
+        const pct = (amount / total) * 100;
+        html += `
+          <div class="ytd-row">
+            <span>${name}</span>
+            <span><strong>${fmt(amount)}</strong> · ${pct.toFixed(0)}%</span>
+          </div>`;
+      });
+    html += `</div>`;
+
+    if (Object.keys(bySource).length > 0 && !(Object.keys(bySource).length === 1 && bySource["(unspecified)"])) {
+      html += `<div class="ytd-section-label">By source</div><div class="ytd-rows">`;
+      Object.entries(bySource)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .forEach(([key, amount]) => {
+          const pct = (amount / total) * 100;
+          html += `
+            <div class="ytd-row">
+              <span>${escapeHtml(key)}</span>
+              <span><strong>${fmt(amount)}</strong> · ${pct.toFixed(0)}%</span>
+            </div>`;
+        });
+      html += `</div>`;
+    }
+
+    el.innerHTML = html;
+  }
+
+  function renderExpectedIncome() {
+    const list = $("#expectedIncomeList");
+    if (!list) return;
+    const incomes = state.recurring.filter((r) => r.type === "income" && r.active);
+    if (!incomes.length) {
+      list.innerHTML = '<li class="empty">No recurring incomes set up yet. Add a paycheck in Recurring Transactions to track expected income.</li>';
+      return;
+    }
+    const today = new Date();
+    const month = currentMonth();
+    let totalExpected = 0;
+    let totalReceived = 0;
+
+    const items = incomes.map((r) => {
+      const day = Math.min(28, r.dayOfMonth || 1);
+      const dateStr = `${month}-${String(day).padStart(2, "0")}`;
+      const expectedDate = new Date(dateStr);
+      const isPast = expectedDate <= today;
+      const received = state.expenses.some(
+        (e) =>
+          e.type === "income" &&
+          monthKey(e.date) === month &&
+          e.recurringId === r.id
+      );
+      totalExpected += Number(r.amount);
+      if (received) totalReceived += Number(r.amount);
+      return { r, dateStr, isPast, received };
+    });
+
+    let html = `
+      <div class="expected-summary">
+        <div><strong>${fmt(totalReceived)}</strong> received of <strong>${fmt(totalExpected)}</strong> expected</div>
+        <div class="card-sub">${fmt(totalExpected - totalReceived)} still incoming</div>
+      </div>
+    `;
+    items.sort((a, b) => a.dateStr.localeCompare(b.dateStr));
+    items.forEach(({ r, dateStr, isPast, received }) => {
+      let status = "";
+      if (received) status = '<span class="expected-status received">✓ Received</span>';
+      else if (isPast) status = '<span class="expected-status overdue">⚠ Overdue</span>';
+      else status = '<span class="expected-status pending">⏳ Pending</span>';
+      html += `
+        <li class="list-item">
+          <div class="list-item-main">
+            <div class="list-item-title">💰 ${escapeHtml(r.desc)}</div>
+            <div class="list-item-sub">Day ${r.dayOfMonth} · ${dateStr}</div>
+          </div>
+          <div class="list-item-amount">${fmt(r.amount)}</div>
+          <div>${status}</div>
+        </li>`;
+    });
+    list.innerHTML = html;
+  }
+
+  function renderIncomeOverview() {
+    const el = $("#incomeOverview");
+    if (!el) return;
+    const m = currentMonth();
+    const monthIncomes = state.expenses.filter(
+      (e) => e.type === "income" && monthKey(e.date) === m
+    );
+    if (!monthIncomes.length) {
+      el.innerHTML = '<p class="empty">No income recorded yet this month.</p>';
+      return;
+    }
+    const totalThisMonth = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const ytd = ytdIncomeTotal();
+    const target = incomeForMonth(m);
+    const pctOfTarget = target > 0 ? (totalThisMonth / target) * 100 : 0;
+
+    // Latest 3 income entries
+    const latest = [...monthIncomes]
+      .sort((a, b) => b.date.localeCompare(a.date))
+      .slice(0, 3);
+
+    let html = `
+      <div class="income-overview-stats">
+        <div class="income-stat">
+          <div class="card-sub">This month</div>
+          <div class="ytd-value">${fmt(totalThisMonth)}</div>
+          ${target > 0 ? `<div class="card-sub">${pctOfTarget.toFixed(0)}% of ${fmt(target)} target</div>` : ""}
+        </div>
+        <div class="income-stat">
+          <div class="card-sub">Year to date</div>
+          <div class="ytd-value">${fmt(ytd)}</div>
+        </div>
+      </div>
+    `;
+    html += `<div class="ytd-section-label">Recent income</div>`;
+    latest.forEach((e) => {
+      const source = e.source ? ` · ${escapeHtml(e.source)}` : "";
+      const tax = e.preTax ? " · pre-tax" : "";
+      html += `
+        <div class="ytd-row">
+          <span>${escapeHtml(e.desc)}${source}${tax}</span>
+          <strong>${fmt(e.amount)}</strong>
+        </div>`;
+    });
+    el.innerHTML = html;
+  }
+
+  function renderTaxEstimate() {
+    const el = $("#taxEstimate");
+    if (!el) return;
+    const status = $("#taxFilingStatus").value || "single";
+    const stateRate = parseFloat($("#taxStateRate").value) || 0;
+    const ytd = ytdIncomeTotal();
+
+    if (ytd === 0) {
+      el.innerHTML = `<p class="empty">Add income to see tax estimate.</p>`;
+      return;
+    }
+
+    // 2024 federal brackets (simplified)
+    const brackets = {
+      single: [
+        [0, 0.10], [11600, 0.12], [47150, 0.22], [100525, 0.24],
+        [191950, 0.32], [243725, 0.35], [609350, 0.37],
+      ],
+      married_joint: [
+        [0, 0.10], [23200, 0.12], [94300, 0.22], [201050, 0.24],
+        [383900, 0.32], [487450, 0.35], [731200, 0.37],
+      ],
+      married_separate: [
+        [0, 0.10], [11600, 0.12], [47150, 0.22], [100525, 0.24],
+        [191950, 0.32], [243725, 0.35], [365600, 0.37],
+      ],
+      head: [
+        [0, 0.10], [16550, 0.12], [63100, 0.22], [100500, 0.24],
+        [191950, 0.32], [243700, 0.35], [609350, 0.37],
+      ],
+    };
+    const standardDeduction = {
+      single: 14600,
+      married_joint: 29200,
+      married_separate: 14600,
+      head: 21900,
+    };
+
+    // Project annualized income
+    const today = new Date();
+    const startOfYear = new Date(today.getFullYear(), 0, 1);
+    const daysElapsed = Math.max(1, Math.floor((today - startOfYear) / (24 * 60 * 60 * 1000)));
+    const daysInYear = 365;
+    const annualizedIncome = (ytd / daysElapsed) * daysInYear;
+
+    const taxableIncome = Math.max(0, annualizedIncome - standardDeduction[status]);
+    const ratesArr = brackets[status];
+    let federalTax = 0;
+    for (let i = 0; i < ratesArr.length; i++) {
+      const [floor, rate] = ratesArr[i];
+      const ceiling = i + 1 < ratesArr.length ? ratesArr[i + 1][0] : Infinity;
+      if (taxableIncome > floor) {
+        federalTax += (Math.min(taxableIncome, ceiling) - floor) * rate;
+      }
+    }
+
+    // FICA (Social Security 6.2% up to $168,600 + Medicare 1.45%)
+    const ssBase = Math.min(annualizedIncome, 168600);
+    const fica = ssBase * 0.062 + annualizedIncome * 0.0145;
+
+    // State tax
+    const stateTax = annualizedIncome * (stateRate / 100);
+
+    const totalTax = federalTax + fica + stateTax;
+    const effectiveRate = annualizedIncome > 0 ? (totalTax / annualizedIncome) * 100 : 0;
+    const quarterlyEstimate = totalTax / 4;
+    const ytdTaxOwed = (totalTax / daysInYear) * daysElapsed;
+
+    el.innerHTML = `
+      <div class="tax-grid">
+        <div class="tax-stat">
+          <div class="tax-label">Projected annual income</div>
+          <div class="tax-value">${fmt(annualizedIncome)}</div>
+          <div class="card-sub">Based on YTD pace</div>
+        </div>
+        <div class="tax-stat">
+          <div class="tax-label">Federal tax</div>
+          <div class="tax-value">${fmt(federalTax)}</div>
+        </div>
+        <div class="tax-stat">
+          <div class="tax-label">FICA</div>
+          <div class="tax-value">${fmt(fica)}</div>
+        </div>
+        <div class="tax-stat">
+          <div class="tax-label">State tax</div>
+          <div class="tax-value">${fmt(stateTax)}</div>
+        </div>
+        <div class="tax-stat tax-stat-total">
+          <div class="tax-label">Total estimated tax</div>
+          <div class="tax-value">${fmt(totalTax)}</div>
+          <div class="card-sub">${effectiveRate.toFixed(1)}% effective rate</div>
+        </div>
+        <div class="tax-stat">
+          <div class="tax-label">Quarterly estimated</div>
+          <div class="tax-value">${fmt(quarterlyEstimate)}</div>
+          <div class="card-sub">For self-employed planning</div>
+        </div>
+      </div>
+      <p class="tax-disclaimer">⚠️ Estimates only. Real taxes depend on deductions, credits, and other factors. Consult a tax professional.</p>
+    `;
+  }
+
   function renderAccountList() {
     const list = $("#accountList");
     if (!list) return;
@@ -1226,11 +1517,17 @@
         })
         .join("");
     }
+
+    // Income Overview card on dashboard
+    renderIncomeOverview();
   }
 
   function renderBalances() {
     $("#incomeAmount").value = state.income || "";
     renderMonthIncomeList();
+    renderYtdIncome();
+    renderExpectedIncome();
+    renderTaxEstimate();
 
     const list = $("#categoryList");
     if (!state.categories.length) {
@@ -3436,6 +3733,12 @@
 
     // Default the month picker to current month
     if ($("#incomeMonth")) $("#incomeMonth").value = currentMonth();
+
+    // Tax estimator inputs
+    if ($("#taxFilingStatus")) {
+      $("#taxFilingStatus").addEventListener("change", renderTaxEstimate);
+      $("#taxStateRate").addEventListener("input", renderTaxEstimate);
+    }
 
     // Categories
     $("#categoryForm").addEventListener("submit", (e) => {

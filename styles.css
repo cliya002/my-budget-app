@@ -1719,3 +1719,119 @@ input[type="color"] {
   flex-shrink: 0;
   margin-right: 0.25rem;
 }
+
+/* ================ Income overview & YTD & Tax ================ */
+.income-overview-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.income-stat {
+  background: var(--card-soft);
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.ytd-total {
+  background: linear-gradient(135deg, var(--primary-soft) 0%, #e0d4ff 100%);
+  padding: 1rem;
+  border-radius: var(--radius-sm);
+  text-align: center;
+  margin-bottom: 1rem;
+}
+.ytd-label {
+  font-size: 0.8rem;
+  color: var(--primary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.ytd-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--primary);
+}
+.ytd-section-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0.85rem 0 0.4rem;
+}
+.ytd-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.ytd-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--card-soft);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  border: 1px solid var(--border);
+}
+
+.expected-summary {
+  background: var(--primary-soft);
+  color: var(--primary);
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.75rem;
+  font-size: 0.9rem;
+}
+.expected-status {
+  font-size: 0.75rem;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+}
+.expected-status.received { background: rgba(34, 197, 94, 0.15); color: var(--success); }
+.expected-status.overdue { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+.expected-status.pending { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+
+.tax-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.tax-stat {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+}
+.tax-stat-total {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  grid-column: 1 / -1;
+}
+.tax-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.tax-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin-top: 0.2rem;
+}
+.tax-stat-total .tax-value { color: var(--primary); font-size: 1.5rem; }
+.tax-disclaimer {
+  margin-top: 0.85rem;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+@media (max-width: 480px) {
+  .tax-grid { grid-template-columns: 1fr; }
+  .income-overview-stats { grid-template-columns: 1fr; }
+}
