@@ -8,14 +8,21 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=11" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%91%9B%3C/text%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="styles.css?v=12" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
   <!-- Lock Screen -->
   <section id="lockScreen" class="lock-screen open">
     <div class="lock-card">
-      <div class="lock-logo">👛</div>
+      <div class="lock-logo">
+        <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+          <rect x="6" y="14" width="52" height="36" rx="4" fill="#5b3fb8"/>
+          <rect x="6" y="14" width="52" height="10" fill="#4a32a0"/>
+          <circle cx="46" cy="32" r="4" fill="#f5f1ea"/>
+          <path d="M6 18 L58 18" stroke="#3a2580" stroke-width="0.5" opacity="0.6"/>
+        </svg>
+      </div>
       <h1 id="lockTitle">Pocket Budget</h1>
       <p id="lockSubtitle" class="lock-sub">Enter your password to continue</p>
       <form id="lockForm" autocomplete="off">
@@ -33,7 +40,14 @@
     <!-- Top bar (mobile) -->
     <div class="topbar">
       <button id="menuToggle" class="icon-btn" aria-label="Menu">☰</button>
-      <div class="brand">👛 Pocket Budget</div>
+      <div class="brand">
+        <svg class="brand-icon" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="6" y="14" width="52" height="36" rx="4" fill="#5b3fb8"/>
+          <rect x="6" y="14" width="52" height="10" fill="#4a32a0"/>
+          <circle cx="46" cy="32" r="4" fill="#fff"/>
+        </svg>
+        <span>Pocket Budget</span>
+      </div>
       <button id="lockNowBtn" class="icon-btn" aria-label="Lock">🔒</button>
     </div>
 
@@ -41,7 +55,14 @@
       <!-- Sidebar -->
       <aside id="sidebar" class="sidebar">
         <div class="sidebar-header">
-          <div class="brand">👛 Pocket Budget</div>
+          <div class="brand">
+            <svg class="brand-icon" viewBox="0 0 64 64" aria-hidden="true">
+              <rect x="6" y="14" width="52" height="36" rx="4" fill="#fff"/>
+              <rect x="6" y="14" width="52" height="10" fill="#e6e1f5"/>
+              <circle cx="46" cy="32" r="4" fill="#5b3fb8"/>
+            </svg>
+            <span>Pocket Budget</span>
+          </div>
         </div>
         <nav class="nav">
           <button class="nav-item active" data-tab="dashboard">
@@ -314,7 +335,21 @@
         </div>
         <div class="form-row">
           <label>Receipt (optional)</label>
-          <input type="file" id="expReceipt" accept="image/*" capture="environment" />
+          <div class="receipt-buttons">
+            <button type="button" class="btn-secondary receipt-btn" id="btnTakePhoto">
+              📷 Take Photo
+            </button>
+            <button type="button" class="btn-secondary receipt-btn" id="btnChooseImage">
+              🖼️ Choose from Gallery
+            </button>
+            <button type="button" class="btn-secondary receipt-btn" id="btnUploadFile">
+              📁 Upload File
+            </button>
+          </div>
+          <!-- Hidden inputs: one per source for best mobile compatibility -->
+          <input type="file" id="expReceiptCamera" accept="image/*" capture="environment" hidden />
+          <input type="file" id="expReceiptGallery" accept="image/*" hidden />
+          <input type="file" id="expReceiptFile" accept="image/*,.pdf" hidden />
           <div id="receiptPreview" class="receipt-preview" hidden></div>
         </div>
         <button type="submit" class="btn-primary block">Add Transaction</button>
@@ -334,6 +369,6 @@
   <div id="toast" class="toast" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="app.js?v=11"></script>
+  <script src="app.js?v=12"></script>
 </body>
 </html>

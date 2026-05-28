@@ -380,9 +380,14 @@
     const cat = state.categories.find((c) => c.id === exp.categoryId);
     const catName = cat ? cat.name : "Uncategorized";
     const d = formatDateShort(exp.date);
-    const receiptHtml = exp.receipt
-      ? `<img src="${exp.receipt}" class="txn-receipt" data-receipt="${exp.id}" alt="Receipt" />`
-      : `<div class="txn-receipt-placeholder">🧾</div>`;
+    let receiptHtml;
+    if (exp.receipt && exp.receipt.startsWith("data:application/pdf")) {
+      receiptHtml = `<div class="txn-receipt-placeholder" data-receipt-pdf="${exp.id}" title="Open PDF">📄</div>`;
+    } else if (exp.receipt) {
+      receiptHtml = `<img src="${exp.receipt}" class="txn-receipt" data-receipt="${exp.id}" alt="Receipt" />`;
+    } else {
+      receiptHtml = `<div class="txn-receipt-placeholder">🧾</div>`;
+    }
     return `
       <li class="txn-item">
         ${receiptHtml}
@@ -721,6 +726,20 @@
         $("#modal").classList.add("open");
       });
     });
+    container.querySelectorAll("[data-receipt-pdf]").forEach((el) => {
+      el.addEventListener("click", () => {
+        const id = el.dataset.receiptPdf;
+        const exp = state.expenses.find((x) => x.id === id);
+        if (!exp || !exp.receipt) return;
+        // Open the PDF data URL in a new tab
+        const w = window.open();
+        if (w) {
+          w.document.write(
+            `<iframe src="${exp.receipt}" style="width:100%;height:100vh;border:0"></iframe>`
+          );
+        }
+      });
+    });
   }
   function attachTxnDelete() { /* handled by global delegated click */ }
 
@@ -763,8 +782,8 @@
       showToast("Category added");
     });
 
-    // Receipt preview
-    $("#expReceipt").addEventListener("change", (e) => {
+    // Receipt preview — three input sources
+    function handleReceiptInput(e) {
       const file = e.target.files[0];
       const preview = $("#receiptPreview");
       if (!file) {
@@ -772,12 +791,38 @@
         preview.innerHTML = "";
         return;
       }
-      compressImage(file).then((dataUrl) => {
-        preview.innerHTML = `<img src="${dataUrl}" alt="Receipt preview" />`;
-        preview.hidden = false;
-        preview.dataset.dataUrl = dataUrl;
-      });
-    });
+      // PDFs: store the data URL but show a placeholder
+      if (file.type === "application/pdf") {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          preview.innerHTML = `<div class="receipt-pdf">📄 ${escapeHtml(file.name)}</div>`;
+          preview.hidden = false;
+          preview.dataset.dataUrl = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+      compressImage(file)
+        .then((dataUrl) => {
+          preview.innerHTML = `<img src="${dataUrl}" alt="Receipt preview" />`;
+          preview.hidden = false;
+          preview.dataset.dataUrl = dataUrl;
+        })
+        .catch((err) => {
+          console.error(err);
+          showToast("Could not read this file");
+        });
+      // Reset input value so selecting the same file again still triggers change
+      e.target.value = "";
+    }
+
+    $("#expReceiptCamera").addEventListener("change", handleReceiptInput);
+    $("#expReceiptGallery").addEventListener("change", handleReceiptInput);
+    $("#expReceiptFile").addEventListener("change", handleReceiptInput);
+
+    $("#btnTakePhoto").addEventListener("click", () => $("#expReceiptCamera").click());
+    $("#btnChooseImage").addEventListener("click", () => $("#expReceiptGallery").click());
+    $("#btnUploadFile").addEventListener("click", () => $("#expReceiptFile").click());
 
     // Expense form
     $("#expenseForm").addEventListener("submit", (e) => {
