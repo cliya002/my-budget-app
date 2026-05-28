@@ -52,6 +52,7 @@
     start: "",
     end: "",
     categories: new Set(),  // empty = all
+    people: new Set(),       // empty = all (only people-marked txns when non-empty)
     search: "",
     sort: "date-desc",      // 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'
     groupByDay: true,
@@ -583,6 +584,7 @@
     populatePersonSelect();
     populateRecurringCategorySelect();
     renderFilterChips();
+    renderPersonFilterChips();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
   }
@@ -892,16 +894,18 @@
       showToast("No transactions to export");
       return;
     }
-    const headers = ["Date", "Type", "Description", "Category", "Amount", "Currency"];
+    const headers = ["Date", "Type", "Description", "Category", "Person", "Amount", "Currency"];
     const rows = [...state.expenses]
       .sort((a, b) => a.date.localeCompare(b.date))
       .map((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
+        const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
         return [
           e.date,
           e.type === "income" ? "Income" : "Expense",
           e.desc,
           cat ? cat.name : "",
+          person ? person.name : "",
           (e.type === "income" ? "" : "-") + Number(e.amount).toFixed(2),
           currency,
         ];
@@ -1057,6 +1061,18 @@
     return best ? best[0] : null;
   }
 
+  function suggestPerson(desc) {
+    const q = String(desc || "").toLowerCase().trim();
+    if (q.length < 2) return null;
+    const matches = state.expenses
+      .filter((e) => e.personId && e.desc && e.desc.toLowerCase().includes(q));
+    if (!matches.length) return null;
+    const counts = {};
+    matches.forEach((m) => { counts[m.personId] = (counts[m.personId] || 0) + 1; });
+    const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+    return best ? best[0] : null;
+  }
+
   function renderDashboard() {
     const month = currentMonth();
     const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
@@ -1075,6 +1091,12 @@
     $("#statSpent").textContent = fmt(totalSpent);
     $("#statRemaining").textContent = fmt(remaining);
     $("#statSaved").textContent = fmt(totalSaved);
+
+    // Family — money sent to people this month
+    const totalFamily = monthExpenses
+      .filter((e) => e.personId)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    $("#statFamily").textContent = fmt(totalFamily);
 
     // Hide first-use hint once any transactions exist
     const hint = $("#firstUseHint");
@@ -1267,16 +1289,22 @@
     if (filters.categories.size > 0) {
       items = items.filter((e) => filters.categories.has(e.categoryId));
     }
+    if (filters.people.size > 0) {
+      items = items.filter((e) => e.personId && filters.people.has(e.personId));
+    }
     if (filters.search) {
       const q = filters.search.toLowerCase();
       items = items.filter((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
         const catName = cat ? cat.name.toLowerCase() : "";
         const tagsStr = (e.tags || []).join(" ").toLowerCase();
+        const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
+        const personName = person ? person.name.toLowerCase() : "";
         return (
           e.desc.toLowerCase().includes(q) ||
           catName.includes(q) ||
           tagsStr.includes(q) ||
+          personName.includes(q) ||
           String(e.amount).includes(q)
         );
       });
@@ -1371,6 +1399,26 @@
         return `<button class="chip ${on ? "" : "off"}" data-chip="${cat.id}">${
           on ? "✓ " : ""
         }${escapeHtml(cat.name)}</button>`;
+      })
+      .join("");
+  }
+
+  function renderPersonFilterChips() {
+    const chips = $("#filterPeopleChips");
+    if (!chips) return;
+    if (!state.people.length) {
+      chips.innerHTML = '<span class="empty-chip">Add people in Family tab</span>';
+      return;
+    }
+    chips.innerHTML = state.people
+      .map((p) => {
+        const on = filters.people.has(p.id);
+        const bgStyle = on
+          ? `background:${p.color || "var(--primary)"}`
+          : "";
+        return `<button class="chip ${on ? "" : "off"}" style="${bgStyle}" data-person-chip="${p.id}">${
+          on ? "✓ " : ""
+        }${escapeHtml(p.name)}</button>`;
       })
       .join("");
   }
@@ -3487,11 +3535,13 @@
       filters.start = "";
       filters.end = "";
       filters.categories.clear();
+      filters.people.clear();
       filters.search = "";
       $("#filterStart").value = "";
       $("#filterEnd").value = "";
       $("#txnSearch").value = "";
       renderFilterChips();
+      renderPersonFilterChips();
       renderTransactions();
     });
 
@@ -3527,6 +3577,11 @@
       const cat = suggestCategory(e.target.value);
       const sel = $("#expCategory");
       if (cat && sel.value === "") sel.value = cat;
+
+      // Also suggest person
+      const personId = suggestPerson(e.target.value);
+      const personSel = $("#expPerson");
+      if (personId && personSel.value === "") personSel.value = personId;
     });
 
     // Insights period selector
@@ -3548,6 +3603,15 @@
         if (filters.categories.has(id)) filters.categories.delete(id);
         else filters.categories.add(id);
         renderFilterChips();
+        renderTransactions();
+        return;
+      }
+      const pchip = e.target.closest("[data-person-chip]");
+      if (pchip) {
+        const id = pchip.dataset.personChip;
+        if (filters.people.has(id)) filters.people.delete(id);
+        else filters.people.add(id);
+        renderPersonFilterChips();
         renderTransactions();
         return;
       }

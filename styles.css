@@ -1659,3 +1659,9 @@ input[type="color"] {
   padding: 0.2rem;
   cursor: pointer;
 }
+
+.stat-family { border-left-color: #ec4899; }
+.stat-grid { grid-template-columns: repeat(5, 1fr); }
+@media (max-width: 980px) {
+  .stat-grid { grid-template-columns: repeat(2, 1fr); }
+}
