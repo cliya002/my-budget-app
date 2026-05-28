@@ -6072,6 +6072,9 @@
     // Re-link presets to categories (manual fix for the "—" category issue).
     // Also auto-creates any missing default categories so the link can succeed.
     $("#relinkPresetsBtn")?.addEventListener("click", () => {
+      // Step 1: snapshot before state for diagnosis
+      const beforeCatIds = state.presets.map((p) => `${p.desc}: ${p.categoryId || "null"}`).slice(0, 5);
+
       const categoryDefaults = [
         { name: "Groceries", limit: 400 },
         { name: "Rent", limit: 1500 },
@@ -6085,7 +6088,6 @@
         { name: "Personal Care", limit: 75 },
         { name: "Other", limit: 200 },
       ];
-      // Figure out which categories the relink wants but don't exist yet
       const wantedNames = new Set(Object.values(PRESET_CATEGORY_MAP));
       const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
       let addedCats = 0;
@@ -6098,16 +6100,33 @@
       });
 
       const updated = relinkPresetsToCategories();
-      if (updated > 0 || addedCats > 0) {
-        saveData();
-        renderAll();
-        const parts = [];
-        if (addedCats > 0) parts.push(`added ${addedCats} categor${addedCats === 1 ? "y" : "ies"}`);
-        if (updated > 0) parts.push(`re-linked ${updated} preset${updated === 1 ? "" : "s"}`);
-        showToast(parts.join(", "));
-      } else {
-        showToast("Nothing to re-link — all presets are already categorized");
-      }
+
+      // Step 2: snapshot after for diagnosis
+      const catByIdMap = new Map(state.categories.map((c) => [c.id, c.name]));
+      const afterSamples = state.presets.slice(0, 5).map((p) => {
+        const cat = catByIdMap.get(p.categoryId);
+        return `${p.desc} → ${cat || "MISSING(" + (p.categoryId || "null") + ")"}`;
+      });
+
+      saveData();
+      renderAll();
+
+      // Always show the diagnostic so we can see what's happening
+      const lines = [
+        `Categories on device: ${state.categories.length}`,
+        `Categories added by button: ${addedCats}`,
+        `Presets re-linked: ${updated}`,
+        ``,
+        `--- First 5 presets BEFORE ---`,
+        ...beforeCatIds,
+        ``,
+        `--- First 5 presets AFTER ---`,
+        ...afterSamples,
+        ``,
+        `--- All categories on this device ---`,
+        ...state.categories.map((c) => `${c.name} (${c.id.slice(0, 8)}...)`),
+      ];
+      alert(lines.join("\n"));
     });
 
     // Delete all presets
