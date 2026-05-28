@@ -1489,6 +1489,9 @@
     renderBalanceChart(expenses);
     renderWeekdayChart(expenses);
     renderTrendChart();
+    renderCashFlowChart();
+    renderIncomeSourcesChart();
+    renderIncomeTypeChart();
   }
 
   function filterExpensesForInsights() {
@@ -2984,6 +2987,206 @@
   function randomPersonColor() {
     const colors = ["#5b3fb8", "#22c55e", "#3b82f6", "#ec4899", "#f59e0b", "#14b8a6", "#06b6d4", "#8b5cf6"];
     return colors[state.people.length % colors.length];
+  }
+
+  /* ---------- Income charts ---------- */
+  function renderCashFlowChart() {
+    destroyChart("cashFlow");
+    const ctx = $("#chartCashFlow");
+    if (!ctx) return;
+
+    const m = currentMonth();
+    let monthsBack = 6;
+    if (insightsPeriod === "12mo") monthsBack = 12;
+    else if (insightsPeriod === "all") monthsBack = 12;
+
+    const months = [];
+    for (let i = monthsBack - 1; i >= 0; i--) months.push(monthOffset(m, -i));
+
+    const incomes = months.map((mk) =>
+      state.expenses
+        .filter((e) => monthKey(e.date) === mk && e.type === "income")
+        .reduce((s, e) => s + Number(e.amount), 0)
+    );
+    const spent = months.map((mk) =>
+      state.expenses
+        .filter((e) => monthKey(e.date) === mk && e.type !== "income"
+          && e.type !== "transfer-in" && e.type !== "transfer-out")
+        .reduce((s, e) => s + Number(e.amount), 0)
+    );
+    const net = incomes.map((inc, i) => inc - spent[i]);
+
+    if (incomes.every((v) => v === 0) && spent.every((v) => v === 0)) {
+      $("#cashFlowEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#cashFlowEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    const labels = months.map((mk) => {
+      const [y, mm] = mk.split("-");
+      const d = new Date(Number(y), Number(mm) - 1, 1);
+      return d.toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+    });
+
+    charts.cashFlow = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Income",
+            data: incomes,
+            borderColor: "#22c55e",
+            backgroundColor: "rgba(34, 197, 94, 0.1)",
+            tension: 0.3,
+            fill: false,
+            pointRadius: 3,
+          },
+          {
+            label: "Expenses",
+            data: spent,
+            borderColor: "#ec4899",
+            backgroundColor: "rgba(236, 72, 153, 0.1)",
+            tension: 0.3,
+            fill: false,
+            pointRadius: 3,
+          },
+          {
+            label: "Net",
+            data: net,
+            borderColor: "#5b3fb8",
+            backgroundColor: "rgba(91, 63, 184, 0.1)",
+            tension: 0.3,
+            fill: true,
+            pointRadius: 4,
+            borderWidth: 3,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "top", labels: { boxWidth: 12 } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.y)}` } },
+        },
+        scales: {
+          x: { grid: { display: false } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+        },
+      },
+    });
+  }
+
+  function renderIncomeSourcesChart() {
+    destroyChart("incomeSources");
+    const ctx = $("#chartIncomeSources");
+    if (!ctx) return;
+
+    let incomes = state.expenses.filter((e) => e.type === "income" && e.source);
+    const m = currentMonth();
+    if (insightsPeriod === "monthly") incomes = incomes.filter((e) => monthKey(e.date) === m);
+    else if (insightsPeriod === "6mo") incomes = incomes.filter((e) => monthKey(e.date) >= monthOffset(m, -5));
+    else if (insightsPeriod === "12mo") incomes = incomes.filter((e) => monthKey(e.date) >= monthOffset(m, -11));
+
+    const totals = {};
+    incomes.forEach((e) => {
+      totals[e.source] = (totals[e.source] || 0) + Number(e.amount);
+    });
+    const labels = Object.keys(totals);
+    const data = Object.values(totals);
+
+    if (!labels.length) {
+      $("#incomeSourcesEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#incomeSourcesEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    charts.incomeSources = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: labels.map((_, i) => palette[i % palette.length]),
+          borderWidth: 2,
+          borderColor: "#fff",
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "right", labels: { boxWidth: 12, font: { size: 11 } } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmt(ctx.parsed)}` } },
+        },
+      },
+    });
+  }
+
+  function renderIncomeTypeChart() {
+    destroyChart("incomeType");
+    const ctx = $("#chartIncomeType");
+    if (!ctx) return;
+
+    let incomes = state.expenses.filter((e) => e.type === "income");
+    const m = currentMonth();
+    if (insightsPeriod === "monthly") incomes = incomes.filter((e) => monthKey(e.date) === m);
+    else if (insightsPeriod === "6mo") incomes = incomes.filter((e) => monthKey(e.date) >= monthOffset(m, -5));
+    else if (insightsPeriod === "12mo") incomes = incomes.filter((e) => monthKey(e.date) >= monthOffset(m, -11));
+
+    const labels = [];
+    const totals = [];
+    const typeNames = {
+      salary: "💼 Salary", freelance: "💻 Freelance", bonus: "🎉 Bonus",
+      investment: "📈 Investment", refund: "↩️ Refund", gift: "🎁 Gift", other: "Other",
+    };
+    Object.keys(typeNames).forEach((key) => {
+      const sum = incomes
+        .filter((e) => (e.incomeType || "other") === key)
+        .reduce((s, e) => s + Number(e.amount), 0);
+      if (sum > 0) {
+        labels.push(typeNames[key]);
+        totals.push(sum);
+      }
+    });
+
+    if (!labels.length) {
+      $("#incomeTypeEmpty").hidden = false;
+      ctx.style.display = "none";
+      return;
+    }
+    $("#incomeTypeEmpty").hidden = true;
+    ctx.style.display = "block";
+
+    charts.incomeType = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          data: totals,
+          backgroundColor: ["#22c55e", "#3b82f6", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#94a3b8"],
+          borderRadius: 6,
+        }],
+      },
+      options: {
+        indexAxis: "y",
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.x) } },
+        },
+        scales: {
+          x: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { grid: { display: false } },
+        },
+      },
+    });
   }
 
   function populateExpenseCategorySelect() {
