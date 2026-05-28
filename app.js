@@ -397,46 +397,8 @@
 
     // Re-link subscription-style presets to the Subscriptions category if they
     // were created before the category existed (categoryId null/empty/missing).
-    const subsCat = state.categories.find((c) => c.name === "Subscriptions");
-    const utilCat = state.categories.find((c) => c.name === "Utilities");
-    const rentCat = state.categories.find((c) => c.name === "Rent");
-    const healthCat = state.categories.find((c) => c.name === "Healthcare");
-    const entCat = state.categories.find((c) => c.name === "Entertainment");
-    const careCat = state.categories.find((c) => c.name === "Personal Care");
-    const shopCat = state.categories.find((c) => c.name === "Shopping");
-    const transportCat = state.categories.find((c) => c.name === "Transport");
-    const subscriptionDescs = new Set([
-      "netflix", "spotify", "amazon prime", "disney+", "hbo max", "apple tv+",
-      "paramount+", "peacock", "youtube premium", "apple icloud", "google one",
-      "dropbox", "chatgpt plus", "claude pro", "github copilot", "gym",
-    ]);
-    const utilityDescs = new Set([
-      "phone bill", "internet", "electric bill", "water bill",
-    ]);
-    const rentDescs = new Set(["rent"]);
-    const healthDescs = new Set(["pharmacy", "car insurance", "health insurance"]);
-    const entDescs = new Set(["movie"]);
-    const careDescs = new Set(["haircut"]);
-    const shopDescs = new Set(["clothing"]);
-    const transportDescs = new Set(["parking"]);
-    state.presets = state.presets.map((p) => {
-      if (p.categoryId) return p; // already categorized
-      const key = String(p.desc || "").toLowerCase().trim();
-      let newCatId = null;
-      if (subsCat && subscriptionDescs.has(key)) newCatId = subsCat.id;
-      else if (utilCat && utilityDescs.has(key)) newCatId = utilCat.id;
-      else if (rentCat && rentDescs.has(key)) newCatId = rentCat.id;
-      else if (healthCat && healthDescs.has(key)) newCatId = healthCat.id;
-      else if (entCat && entDescs.has(key)) newCatId = entCat.id;
-      else if (careCat && careDescs.has(key)) newCatId = careCat.id;
-      else if (shopCat && shopDescs.has(key)) newCatId = shopCat.id;
-      else if (transportCat && transportDescs.has(key)) newCatId = transportCat.id;
-      if (newCatId) {
-        migrated = true;
-        return { ...p, categoryId: newCatId, updatedAt: Date.now() };
-      }
-      return p;
-    });
+    const relinkResult = relinkPresetsToCategories();
+    if (relinkResult > 0) migrated = true;
 
     if (migrated) saveData();
   }
@@ -6107,6 +6069,18 @@
       showToast(added > 0 ? `Added ${added} default preset${added === 1 ? "" : "s"}` : "All defaults already present");
     });
 
+    // Re-link presets to categories (manual fix for the "—" category issue)
+    $("#relinkPresetsBtn")?.addEventListener("click", () => {
+      const updated = relinkPresetsToCategories();
+      if (updated > 0) {
+        saveData();
+        renderAll();
+        showToast(`Re-linked ${updated} preset${updated === 1 ? "" : "s"}`);
+      } else {
+        showToast("Nothing to re-link — presets are already categorized");
+      }
+    });
+
     // Delete all presets
     $("#deleteAllPresetsBtn")?.addEventListener("click", () => {
       if (!state.presets.length) {
@@ -8263,6 +8237,64 @@
     if (!state.deletions) state.deletions = {};
     if (!state.deletions[collection]) state.deletions[collection] = {};
     state.deletions[collection][id] = Date.now();
+  }
+
+  // Map preset descriptions (lowercase) to the category name they should belong to.
+  // Used both during load-time migration and the manual "Re-link presets" button.
+  const PRESET_CATEGORY_MAP = {
+    // Eating Out
+    "coffee": "Eating Out", "lunch": "Eating Out", "dinner out": "Eating Out", "snacks": "Eating Out",
+    // Groceries
+    "groceries": "Groceries",
+    // Transport
+    "gas": "Transport", "uber/lyft": "Transport", "public transit": "Transport", "parking": "Transport",
+    // Healthcare
+    "pharmacy": "Healthcare", "car insurance": "Healthcare", "health insurance": "Healthcare",
+    // Personal Care
+    "haircut": "Personal Care",
+    // Entertainment
+    "movie": "Entertainment",
+    // Shopping
+    "clothing": "Shopping",
+    // Subscriptions
+    "netflix": "Subscriptions", "spotify": "Subscriptions", "amazon prime": "Subscriptions",
+    "disney+": "Subscriptions", "hbo max": "Subscriptions", "apple tv+": "Subscriptions",
+    "paramount+": "Subscriptions", "peacock": "Subscriptions", "youtube premium": "Subscriptions",
+    "apple icloud": "Subscriptions", "google one": "Subscriptions", "dropbox": "Subscriptions",
+    "chatgpt plus": "Subscriptions", "claude pro": "Subscriptions", "github copilot": "Subscriptions",
+    "gym": "Subscriptions",
+    // Utilities
+    "phone bill": "Utilities", "internet": "Utilities", "electric bill": "Utilities", "water bill": "Utilities",
+    // Rent
+    "rent": "Rent",
+  };
+
+  // Walk through state.presets and link each one to its proper category (by name)
+  // when its desc matches a known default. Always overwrites null/missing
+  // categoryId; respects existing categoryId when it's already set.
+  // Returns the number of presets that were updated.
+  function relinkPresetsToCategories() {
+    if (!Array.isArray(state.presets) || !state.presets.length) return 0;
+    const catByName = new Map();
+    state.categories.forEach((c) => catByName.set((c.name || "").toLowerCase(), c.id));
+    let updated = 0;
+    state.presets = state.presets.map((p) => {
+      if (p.type === "income") return p; // Income presets don't have a category
+      if (p.categoryId) {
+        // Verify the existing categoryId still resolves to a real category;
+        // if not (orphaned reference), try to re-link.
+        const stillExists = state.categories.some((c) => c.id === p.categoryId);
+        if (stillExists) return p;
+      }
+      const key = String(p.desc || "").toLowerCase().trim();
+      const wantedCatName = PRESET_CATEGORY_MAP[key];
+      if (!wantedCatName) return p;
+      const newCatId = catByName.get(wantedCatName.toLowerCase());
+      if (!newCatId) return p;
+      updated += 1;
+      return { ...p, categoryId: newCatId, updatedAt: Date.now() };
+    });
+    return updated;
   }
 
   // Tombstone a key inside a map-style collection (e.g. monthlyIncome[YYYY-MM])
