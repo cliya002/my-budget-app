@@ -22,6 +22,7 @@
     syncGistId: "mb_sync_gist_id",
     syncEnabled: "mb_sync_enabled",
     syncSkipReceiptsCellular: "mb_sync_skip_receipts_cellular",
+    seeded: "mb_seeded_v1",       // one-time flag — defaults seeded for this install
   };
 
   const DEFAULT_PWD_HASH =
@@ -301,8 +302,17 @@
       }
     }
 
+    // First-run seeding: only run once per install, AND only when there's no
+    // existing data on this device. Prevents respawning defaults after a user
+    // intentionally cleared everything (or after sync wipes them).
+    const alreadySeeded = localStorage.getItem(KEYS.seeded) === "true";
+    const hasAnyData = state.expenses.length > 0 ||
+                       state.accounts.length > 0 ||
+                       state.categories.length > 0 ||
+                       state.presets.length > 0;
+
     // Seed default accounts on first launch
-    if (!state.accounts.length) {
+    if (!alreadySeeded && !hasAnyData && !state.accounts.length) {
       state.accounts = [
         { id: uid(), name: "Cash", type: "cash", balance: 0, color: "#22c55e" },
         { id: uid(), name: "Checking", type: "checking", balance: 0, color: "#3b82f6" },
@@ -324,7 +334,7 @@
     if (typeof state.settings.roundUpGoalId === "undefined") state.settings.roundUpGoalId = null;
 
     // Seed default categories on first launch
-    if (!state.categories.length) {
+    if (!alreadySeeded && !hasAnyData && !state.categories.length) {
       state.categories = [
         { id: uid(), name: "Groceries", limit: 400 },
         { id: uid(), name: "Rent", limit: 1500 },
@@ -337,9 +347,14 @@
     }
 
     // Seed quick-add presets on first launch with built-in library
-    if (!state.presets.length) {
+    if (!alreadySeeded && !hasAnyData && !state.presets.length) {
       state.presets = buildDefaultPresets();
       migrated = true;
+    }
+
+    // Mark this install as seeded so we don't respawn defaults later
+    if (!alreadySeeded) {
+      localStorage.setItem(KEYS.seeded, "true");
     }
 
     // Migrate older presets to have group/icon/favorite fields
@@ -626,17 +641,32 @@
     }
     await loadData();
     purgeOldTombstones();
-    processRecurring();
     renderAll();
     checkBudgetAlerts();
     startAutoLock();
     startAutoSync();
     updateSyncIndicator("synced");
-    // If sync is set up, automatically merge cloud data on open
+    // If sync is set up, automatically merge cloud data BEFORE running recurring
+    // so we don't add duplicate recurring transactions across devices.
     if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId)) {
-      // Wait for initial render to finish, then silently merge cloud data
-      // (longer delay prevents flicker / duplicate-render race)
-      setTimeout(() => syncPull({ skipConfirm: true, silent: true }), 2000);
+      // Run pull first; processRecurring runs after merge so it sees the freshest
+      // r.lastRunMonth from any device. If the pull fails, we still run recurring
+      // so the user isn't blocked.
+      setTimeout(async () => {
+        try {
+          await syncPull({ skipConfirm: true, silent: true });
+        } catch (e) {
+          console.warn("Initial sync pull failed", e);
+        }
+        try {
+          processRecurring();
+          renderAll();
+        } catch (e) { console.warn("Recurring run failed after pull", e); }
+      }, 2000);
+    } else {
+      // No sync configured — run immediately
+      processRecurring();
+      renderAll();
     }
     maybeStartTour();
   }
@@ -7750,7 +7780,9 @@
       merged[key] = result;
     });
 
-    // Merge date-keyed time series
+    // Merge date-keyed time series — for same date, prefer larger magnitude
+    // (snapshots can fluctuate intra-day; the larger value is usually closer to
+    // the truth because it was taken after more transactions were recorded).
     DATE_SERIES_COLLECTIONS.forEach((key) => {
       const localArr = Array.isArray(local[key]) ? local[key] : [];
       const remoteArr = Array.isArray(remote[key]) ? remote[key] : [];
@@ -7758,8 +7790,15 @@
       localArr.forEach((r) => byDate.set(r.date, r));
       remoteArr.forEach((r) => {
         const existing = byDate.get(r.date);
-        if (!existing) byDate.set(r.date, r);
-        // For same date, prefer the higher-magnitude value (often more accurate snapshot)
+        if (!existing) {
+          byDate.set(r.date, r);
+        } else {
+          // Pick whichever has the larger numeric value (`value` for net worth, `util` for utilization)
+          const valKey = "value" in r ? "value" : "util";
+          const a = Math.abs(Number(existing[valKey]) || 0);
+          const b = Math.abs(Number(r[valKey]) || 0);
+          if (b > a) byDate.set(r.date, r);
+        }
       });
       merged[key] = Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
     });
