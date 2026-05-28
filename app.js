@@ -4322,6 +4322,8 @@
       type: null,
       reportDate: null,
       cards: [],
+      inquiries: [],
+      negatives: [],
     };
 
     // Detect source
@@ -4333,87 +4335,206 @@
     else if (lower.includes("fico")) result.source = "FICO";
     else result.source = "Other";
 
-    // Detect bureau (CK reports are usually TransUnion + Equifax via VantageScore 3.0)
+    // Detect bureau
     if (lower.includes("transunion")) result.bureau = "TransUnion";
     else if (lower.includes("equifax")) result.bureau = "Equifax";
     else if (lower.includes("experian")) result.bureau = "Experian";
 
-    // Detect type
+    // Detect score type
     if (lower.includes("vantagescore")) result.type = "VantageScore";
     else if (lower.includes("fico")) result.type = "FICO";
-    else result.type = "VantageScore"; // CK default
+    else result.type = "VantageScore";
 
     // Find score: 3-digit number 300-850 near "score" keyword
-    const scoreMatches = [];
     const scoreRegex = /\b(\d{3})\b/g;
     let m;
     while ((m = scoreRegex.exec(text)) !== null) {
       const n = Number(m[1]);
       if (n >= 300 && n <= 850) {
-        const context = text.slice(Math.max(0, m.index - 60), m.index + 60).toLowerCase();
-        if (/score|rating|fico|vantage/.test(context)) {
-          scoreMatches.push({ score: n, idx: m.index });
+        const context = text.slice(Math.max(0, m.index - 80), m.index + 80).toLowerCase();
+        if (/score|rating|fico|vantage|calculated/.test(context)) {
+          if (!result.score) result.score = n;
         }
       }
     }
-    if (scoreMatches.length) {
-      // Most likely score is the largest one near "credit score"
-      result.score = scoreMatches[0].score;
-    }
 
-    // Find report date — look for a Month YYYY pattern
+    // Find report date
     const dateMatch = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,]?\s+(\d{4})\b/i);
     if (dateMatch) {
       const d = new Date(dateMatch[0]);
-      if (!isNaN(d)) {
-        result.reportDate = d.toISOString().slice(0, 10);
+      if (!isNaN(d)) result.reportDate = d.toISOString().slice(0, 10);
+    }
+
+    // Friendly name lookup for known creditor codes
+    const friendlyNames = {
+      "CB INDIGO": "Indigo Mastercard",
+      "CB/INDIGO": "Indigo Mastercard",
+      "BBY/CBNA": "Best Buy / Citi",
+      "JPMCB CARD": "Chase",
+      "DISCOVERCARD": "Discover",
+      "FB&T/MERCURY": "Mercury Mastercard",
+      "WFBNA CARD": "Wells Fargo",
+      "CREDITONEBNK": "Credit One Bank",
+    };
+
+    // Helper: parse a "Mon. DD, YYYY" or "Mon DD, YYYY" date string into ISO format
+    const parseFlexDate = (str) => {
+      if (!str) return null;
+      const cleaned = str.replace(/\./g, "").trim();
+      const d = new Date(cleaned);
+      return isNaN(d) ? null : d.toISOString().slice(0, 10);
+    };
+
+    // Card section parser. CK reports have a repeating block per card with this structure:
+    //   <CARD NAME>
+    //   Reported: <date>
+    //   ...
+    //   Balance $XXX
+    //   Credit limit $XXX (or "No Info")
+    //   Monthly payment $XXX (or "No Info")
+    //   Opened <date> (X yrs, Y mos)
+    //   Last payment <date>
+    //   Account status Open|Closed|Paid
+    //   Times 30/60/90+ days late N/N/N
+    //
+    // Strategy: split text on "Reported:" anchors and parse each block.
+    const blocks = text.split(/\bReported:\s+/);
+    blocks.shift(); // First chunk is the preamble before the first "Reported:"
+
+    blocks.forEach((blockBody) => {
+      // The card name is the line(s) immediately preceding "Reported:" in the
+      // original text. Extract from the *previous* block's tail by looking
+      // backward — but since we already split, we need to look at the raw text.
+      // Easier: look at the start of this block — the first date plus surrounding
+      // context tells us we're in a card. Then we walk back in the original text
+      // to find the uppercase card name.
+      // Implementation: rebuild approximate card name from prior text
+      // (handled below by reading the original text via a different scan)
+      void blockBody;
+    });
+
+    // A more reliable scan: look for "Reported: <date>" matches in the original
+    // text and walk backward to find the preceding ALL-CAPS line (card name) and
+    // forward to find the structured fields.
+    const reportedRegex = /Reported:\s*([A-Z][a-z]{2}\.?\s+\d{1,2},?\s+\d{4})/g;
+    const reportedMatches = [];
+    let rm;
+    while ((rm = reportedRegex.exec(text)) !== null) {
+      reportedMatches.push({ idx: rm.index, reportedDate: rm[1] });
+    }
+
+    const seenNames = new Set();
+
+    reportedMatches.forEach((rep, i) => {
+      // Block extends from this "Reported:" to the next one (or end of text)
+      const blockStart = rep.idx;
+      const blockEnd = i + 1 < reportedMatches.length ? reportedMatches[i + 1].idx : Math.min(text.length, rep.idx + 4000);
+      const block = text.slice(blockStart, blockEnd);
+
+      // Card name: walk backward from blockStart to find the most recent
+      // ALL-CAPS line (creditor name like "CB INDIGO", "BBY/CBNA", "CAPITAL ONE")
+      const before = text.slice(Math.max(0, blockStart - 600), blockStart);
+      const beforeLines = before.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
+      let rawName = null;
+      for (let j = beforeLines.length - 1; j >= 0; j--) {
+        const ln = beforeLines[j];
+        // Skip page numbers, footer text, etc.
+        if (/^\d+\/\d+$/.test(ln)) continue;
+        if (/credit karma|today|cards|loans|money|http|www\./i.test(ln)) continue;
+        if (/^Hard Inquiries$|^Collections$|^Public Records$/.test(ln)) continue;
+        // ALL-CAPS line, 2-40 chars
+        if (/^[A-Z][A-Z0-9&./\s\-]{1,40}$/.test(ln) && /[A-Z]{2,}/.test(ln)) {
+          rawName = ln.trim();
+          break;
+        }
+      }
+      if (!rawName) return;
+
+      // Extract structured fields from the block
+      const balance = (block.match(/Balance\s*\$?([\d,]+(?:\.\d{2})?)/i) || [])[1];
+      const limitMatch = block.match(/Credit limit\s*\$?([\d,]+(?:\.\d{2})?)/i);
+      const limit = limitMatch ? limitMatch[1] : null;
+      const noLimit = /Credit limit\s*No Info/i.test(block);
+      const monthlyMatch = block.match(/Monthly payment\s*\$?([\d,]+(?:\.\d{2})?)/i);
+      const monthly = monthlyMatch ? monthlyMatch[1] : null;
+      const openedMatch = block.match(/Opened\s+([A-Z][a-z]{2}\.?\s+\d{1,2},?\s+\d{4})/i);
+      const opened = openedMatch ? openedMatch[1] : null;
+      const lastPayMatch = block.match(/Last payment\s+([A-Z][a-z]{2}\.?\s+\d{1,2},?\s+\d{4})/i);
+      const lastPay = lastPayMatch ? lastPayMatch[1] : null;
+      const utilMatch = block.match(/using\s+(\d+)%/i);
+      const utilization = utilMatch ? Number(utilMatch[1]) : null;
+      const accountStatusMatch = block.match(/Account status\s+(Open|Closed|Paid)/i);
+      const accountStatus = accountStatusMatch ? accountStatusMatch[1] : null;
+      const lateMatch = block.match(/Times 30\/60\/90\+\s+days late\s+(\d+)\/(\d+)\/(\d+)/i);
+      const lates = lateMatch ? { d30: Number(lateMatch[1]), d60: Number(lateMatch[2]), d90: Number(lateMatch[3]) } : null;
+      const typeMatch = block.match(/Type\s+(Credit Card|Charge Account|Flexible Spending Credit Card|Secured Credit Card)/i);
+      const cardType = typeMatch ? typeMatch[1] : "Credit Card";
+      const closedMatch = block.match(/Closed\s+([A-Z][a-z]{2}\.?\s+\d{1,2},?\s+\d{4})/i);
+      const closedDate = closedMatch ? closedMatch[1] : null;
+      const overLimit = balance && limit && Number(balance.replace(/,/g, "")) > Number(limit.replace(/,/g, ""));
+
+      // Skip duplicate same-issuer entries (CK lists the same card multiple times in different sections)
+      const dedupeKey = `${rawName}|${opened || "?"}|${limit || "?"}`;
+      if (seenNames.has(dedupeKey)) return;
+      seenNames.add(dedupeKey);
+
+      const friendlyName = friendlyNames[rawName] || rawName;
+      const isClosed = accountStatus && accountStatus.toLowerCase() !== "open";
+
+      const cardTypeKey = cardType.toLowerCase().includes("charge") ? "charge"
+        : cardType.toLowerCase().includes("secured") ? "credit"
+        : "credit";
+
+      result.cards.push({
+        name: friendlyName,
+        issuer: rawName,
+        balance: balance ? Number(balance.replace(/,/g, "")) : 0,
+        limit: limit ? Number(limit.replace(/,/g, "")) : 0,
+        monthlyPayment: monthly ? Number(monthly.replace(/,/g, "")) : null,
+        opened: parseFlexDate(opened),
+        lastPayment: parseFlexDate(lastPay),
+        utilization,
+        accountStatus,
+        lates,
+        cardType: cardTypeKey,
+        closedDate: parseFlexDate(closedDate),
+        isClosed,
+        reportedDate: parseFlexDate(rep.reportedDate),
+        overLimit,
+        noLimitInfo: noLimit,
+        detected: true,
+      });
+    });
+
+    // Parse hard inquiries
+    const inquirySection = text.match(/Hard Inquiries[\s\S]*?(?=Collections|Public Records|Suggested|$)/i);
+    if (inquirySection) {
+      const inqText = inquirySection[0];
+      const inqRegex = /^([A-Z][A-Z0-9&./\s\-]{1,40})\s*\n\s*Inquiry:\s*([A-Z][a-z]{2}\.?\s+\d{1,2},?\s+\d{4})/gm;
+      let im;
+      while ((im = inqRegex.exec(inqText)) !== null) {
+        const reasonName = im[1].trim();
+        const date = parseFlexDate(im[2]);
+        if (!date) continue;
+        result.inquiries.push({
+          date,
+          reason: friendlyNames[reasonName] || reasonName,
+          bureau: result.bureau || null,
+        });
       }
     }
 
-    // Parse cards / accounts. CK lists accounts with names + balance + credit limit
-    // Heuristic: find lines with "$XXX" patterns near common issuer keywords
-    const issuers = [
-      "American Express", "AMEX", "Capital One", "Chase", "Citi", "Discover",
-      "Bank of America", "Wells Fargo", "U.S. Bank", "USAA", "Barclays",
-      "Synchrony", "Apple", "Goldman Sachs", "Navy Federal", "PNC", "TD Bank",
-      "Fifth Third", "Truist", "HSBC", "Best Buy", "Target", "Macy's", "Nordstrom",
-    ];
-
-    // Split text into chunks and look for issuer + dollar amounts
-    const lines = text.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
-    const seenNames = new Set();
-
-    issuers.forEach((issuer) => {
-      const re = new RegExp(`\\b${issuer.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\b`, "i");
-      lines.forEach((line, idx) => {
-        if (!re.test(line)) return;
-        // Look for dollar amounts in this and nearby lines
-        const window = lines.slice(Math.max(0, idx - 2), Math.min(lines.length, idx + 5)).join(" ");
-        const amounts = [...window.matchAll(/\$\s*([\d,]+(?:\.\d{2})?)/g)]
-          .map((m) => Number(m[1].replace(/,/g, "")))
-          .filter((n) => n >= 0 && n <= 1000000);
-
-        if (amounts.length === 0) return;
-
-        // Largest amount is likely credit limit, smaller is balance
-        amounts.sort((a, b) => b - a);
-        const limit = amounts[0];
-        const balance = amounts.length > 1 ? amounts[1] : 0;
-
-        // Don't dupe by issuer name (rough)
-        const key = `${issuer}-${limit}-${balance}`;
-        if (seenNames.has(key)) return;
-        seenNames.add(key);
-
-        result.cards.push({
-          name: issuer,
-          issuer,
-          limit,
-          balance,
-          // Mark as detected — user can edit before saving
-          detected: true,
+    // Detect derogatory remarks (late payment patterns from cards that have lates)
+    result.cards.forEach((c) => {
+      if (c.lates && (c.lates.d60 > 0 || c.lates.d90 > 0)) {
+        const worstStr = c.lates.d90 > 0 ? "90+ days late" : "60+ days late";
+        result.negatives.push({
+          type: "late_payment",
+          creditor: c.name,
+          note: `${c.lates.d30}/${c.lates.d60}/${c.lates.d90} (30/60/90+ days late) — worst: ${worstStr}`,
+          date: c.lastPayment || c.reportedDate || todayStr(),
         });
-      });
+      }
     });
 
     parsedReport = result;
@@ -4436,17 +4557,37 @@
     }
 
     if (result.cards.length) {
-      html += `<div class="detected-cards-title">${result.cards.length} card${result.cards.length === 1 ? "" : "s"} detected</div>`;
+      const openCards = result.cards.filter((c) => !c.isClosed).length;
+      const closedCards = result.cards.filter((c) => c.isClosed).length;
+      html += `<div class="detected-cards-title">${result.cards.length} card${result.cards.length === 1 ? "" : "s"} detected (${openCards} open · ${closedCards} closed)</div>`;
       html += '<div class="detected-cards">';
       result.cards.forEach((c, i) => {
+        const utilStr = c.utilization != null ? `${c.utilization}%` : (c.limit > 0 ? `${Math.round((c.balance / c.limit) * 100)}%` : "—");
+        const statusBadge = c.isClosed
+          ? '<span class="dc-badge closed">Closed</span>'
+          : (c.overLimit || (c.utilization && c.utilization >= 100))
+            ? '<span class="dc-badge over">Over limit</span>'
+            : (c.utilization && c.utilization >= 80)
+              ? '<span class="dc-badge warn">High util</span>'
+              : '<span class="dc-badge ok">OK</span>';
+        const lateStr = c.lates && (c.lates.d30 + c.lates.d60 + c.lates.d90) > 0
+          ? ` · Lates ${c.lates.d30}/${c.lates.d60}/${c.lates.d90}`
+          : "";
+        const openedStr = c.opened ? ` · Opened ${c.opened}` : "";
+        // Default check: open and not yet present in state.cards
+        const alreadyPresent = state.cards.some((sc) => sc.name.toLowerCase() === c.name.toLowerCase());
+        const checkedAttr = (!c.isClosed && !alreadyPresent) ? "checked" : "";
         html += `
           <div class="detected-card">
-            <div>
-              <strong>${escapeHtml(c.name)}</strong>
-              <div class="detected-mini">Balance: ${fmt(c.balance)} · Limit: ${fmt(c.limit)}</div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;gap:0.4rem;flex-wrap:wrap">
+                <strong>${escapeHtml(c.name)}</strong>
+                ${statusBadge}
+              </div>
+              <div class="detected-mini">Bal ${fmt(c.balance)} / Limit ${c.noLimitInfo ? "—" : fmt(c.limit)} · Util ${utilStr}${lateStr}${openedStr}</div>
             </div>
             <label class="detected-toggle">
-              <input type="checkbox" data-card-idx="${i}" checked />
+              <input type="checkbox" data-card-idx="${i}" ${checkedAttr} />
               Import
             </label>
           </div>`;
@@ -4454,6 +4595,47 @@
       html += '</div>';
     } else {
       html += `<div class="detected-row warn"><span>No cards detected — you can still save the score, then add cards manually.</span></div>`;
+    }
+
+    if (result.inquiries.length) {
+      html += `<div class="detected-cards-title">${result.inquiries.length} hard inquir${result.inquiries.length === 1 ? "y" : "ies"} detected</div>`;
+      html += '<div class="detected-cards">';
+      result.inquiries.forEach((inq, i) => {
+        const alreadyPresent = state.creditInquiries.some((existing) =>
+          existing.date === inq.date && existing.reason.toLowerCase() === inq.reason.toLowerCase()
+        );
+        html += `
+          <div class="detected-card">
+            <div style="flex:1">
+              <strong>${escapeHtml(inq.reason)}</strong>
+              <div class="detected-mini">${inq.date}${inq.bureau ? " · " + inq.bureau : ""}</div>
+            </div>
+            <label class="detected-toggle">
+              <input type="checkbox" data-inq-idx="${i}" ${alreadyPresent ? "" : "checked"} />
+              Import
+            </label>
+          </div>`;
+      });
+      html += '</div>';
+    }
+
+    if (result.negatives.length) {
+      html += `<div class="detected-cards-title">${result.negatives.length} late-payment record${result.negatives.length === 1 ? "" : "s"} detected</div>`;
+      html += '<div class="detected-cards">';
+      result.negatives.forEach((neg, i) => {
+        html += `
+          <div class="detected-card">
+            <div style="flex:1">
+              <strong>${escapeHtml(neg.creditor)}</strong>
+              <div class="detected-mini">${escapeHtml(neg.note)}</div>
+            </div>
+            <label class="detected-toggle">
+              <input type="checkbox" data-neg-idx="${i}" />
+              Import
+            </label>
+          </div>`;
+      });
+      html += '</div>';
     }
 
     detected.innerHTML = html;
@@ -4467,7 +4649,7 @@
 
     // Save score
     if (parsedReport.score) {
-      state.creditScores.push({
+      state.creditScores.push(touchRecord({
         id: uid(),
         score: parsedReport.score,
         date: parsedReport.reportDate || todayStr(),
@@ -4475,13 +4657,13 @@
         source: parsedReport.source || "Imported",
         type: parsedReport.type || "VantageScore",
         note: "Imported from credit report",
-      });
+      }));
       saved += 1;
     }
 
     // Save selected cards
-    const checked = $$('#importDetected input[type="checkbox"]:checked');
-    checked.forEach((cb) => {
+    const checkedCards = $$('#importDetected input[data-card-idx]:checked');
+    checkedCards.forEach((cb) => {
       const idx = Number(cb.dataset.cardIdx);
       const c = parsedReport.cards[idx];
       if (!c) return;
@@ -4493,20 +4675,75 @@
       );
       if (exists) return;
 
-      state.cards.push({
+      state.cards.push(touchRecord({
         id: uid(),
         name: c.name,
         issuer: c.issuer,
         last4: "",
         limit: c.limit,
         balance: c.balance,
-        statement: null,
+        statement: c.monthlyPayment || null,
         apr: null,
         dueDay: null,
-        opened: null,
-        cardType: "credit",
+        opened: c.opened || null,
+        cardType: c.cardType || "credit",
         autopay: false,
-      });
+        annualFee: 0,
+        cashbackRate: 0,
+        signupBonus: 0,
+        // Imported metadata for richer credit views
+        accountStatus: c.accountStatus || null,
+        lastPayment: c.lastPayment || null,
+        lates: c.lates || null,
+        utilization: c.utilization || null,
+        closedDate: c.closedDate || null,
+        importedAt: Date.now(),
+        importedFrom: parsedReport.source || "Imported",
+      }));
+      saved += 1;
+    });
+
+    // Save selected inquiries
+    const checkedInquiries = $$('#importDetected input[data-inq-idx]:checked');
+    checkedInquiries.forEach((cb) => {
+      const idx = Number(cb.dataset.inqIdx);
+      const inq = parsedReport.inquiries[idx];
+      if (!inq) return;
+      // Dedupe: same date+reason
+      const exists = state.creditInquiries.find(
+        (existing) => existing.date === inq.date &&
+                       existing.reason.toLowerCase() === inq.reason.toLowerCase()
+      );
+      if (exists) return;
+      state.creditInquiries.push(touchRecord({
+        id: uid(),
+        date: inq.date,
+        reason: inq.reason,
+        bureau: inq.bureau,
+        type: "hard",
+      }));
+      saved += 1;
+    });
+
+    // Save selected late-payment records as negative items
+    const checkedNeg = $$('#importDetected input[data-neg-idx]:checked');
+    checkedNeg.forEach((cb) => {
+      const idx = Number(cb.dataset.negIdx);
+      const neg = parsedReport.negatives[idx];
+      if (!neg) return;
+      // Dedupe by creditor+date
+      const exists = state.negativeItems.find(
+        (existing) => existing.creditor === neg.creditor && existing.date === neg.date
+      );
+      if (exists) return;
+      state.negativeItems.push(touchRecord({
+        id: uid(),
+        type: neg.type,
+        date: neg.date,
+        creditor: neg.creditor,
+        amount: 0,
+        note: neg.note,
+      }));
       saved += 1;
     });
 
