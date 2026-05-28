@@ -3044,6 +3044,17 @@
       $("#expPerson").value = prefill.personId;
     }
 
+    // Income-specific prefill
+    if (prefill && prefill.type === "income") {
+      $("#incomeType").value = prefill.incomeType || "salary";
+      $("#incomeSource").value = prefill.source || "";
+      $("#incomePreTax").checked = !!prefill.preTax;
+    } else {
+      $("#incomeType").value = "salary";
+      $("#incomeSource").value = "";
+      $("#incomePreTax").checked = false;
+    }
+
     // Receipt prefill (only when editing)
     const preview = $("#receiptPreview");
     preview.innerHTML = "";
@@ -3083,19 +3094,65 @@
     delete preview.dataset.dataUrl;
   }
 
+  function offerRecurringFromIncome(desc, amount, source, date) {
+    const exists = state.recurring.some(
+      (r) => r.type === "income" && r.desc.toLowerCase() === desc.toLowerCase()
+    );
+    if (exists) {
+      showToast("Income added");
+      return;
+    }
+    showToast("Income added");
+    setTimeout(() => {
+      const make = confirm(`Make "${desc}" a monthly recurring income?`);
+      if (!make) return;
+      const day = parseInt(date.slice(8, 10), 10) || 1;
+      state.recurring.push({
+        id: uid(),
+        type: "income",
+        desc,
+        amount,
+        categoryId: null,
+        dayOfMonth: Math.min(28, day),
+        active: true,
+        lastRunMonth: monthKey(date),
+      });
+      saveData();
+      renderRecurringList();
+      showToast(`"${desc}" set to recur monthly`);
+    }, 400);
+  }
+
   function setModalType(type) {
     currentModalType = type;
     $$(".type-btn").forEach((b) => b.classList.toggle("active", b.dataset.type === type));
     const catSel = $("#expCategory");
     const catRow = $("#categoryRow");
+    const incomeFields = $("#incomeOnlyFields");
     if (type === "income") {
-      // Category optional for income — keep visible but not required
       catSel.required = false;
       catRow.querySelector("label").textContent = "Category (optional)";
+      if (incomeFields) {
+        incomeFields.style.display = "block";
+        populateIncomeSourceList();
+      }
     } else {
       catSel.required = true;
       catRow.querySelector("label").textContent = "Category";
+      if (incomeFields) incomeFields.style.display = "none";
     }
+  }
+
+  function populateIncomeSourceList() {
+    const list = $("#incomeSourceList");
+    if (!list) return;
+    const sources = new Set();
+    state.expenses
+      .filter((e) => e.type === "income" && e.source)
+      .forEach((e) => sources.add(e.source));
+    list.innerHTML = [...sources]
+      .map((s) => `<option value="${escapeHtml(s)}"></option>`)
+      .join("");
   }
 
   function renderPresets() {
@@ -3250,6 +3307,11 @@
       const editId = $("#expEditId").value;
       const type = currentModalType;
 
+      // Income-specific fields
+      const incomeType = type === "income" ? $("#incomeType").value : null;
+      const source = type === "income" ? $("#incomeSource").value.trim() || null : null;
+      const preTax = type === "income" ? $("#incomePreTax").checked : false;
+
       if (!desc || isNaN(amount) || !date) return;
       if (type === "expense" && !categoryId) return;
 
@@ -3264,6 +3326,9 @@
             personId: personId || null,
             tags,
             receipt,
+            incomeType,
+            source,
+            preTax,
           };
         }
       } else {
@@ -3274,13 +3339,22 @@
           personId: personId || null,
           tags,
           receipt,
+          incomeType,
+          source,
+          preTax,
         });
       }
       saveData();
       closeExpenseModal();
       renderAll();
       checkBudgetAlerts();
-      showToast(editId ? "Transaction updated" : (type === "income" ? "Income added" : "Transaction added"));
+
+      // Suggest making this recurring if it's a paycheck-style income
+      if (!editId && type === "income" && amount >= 100 && incomeType === "salary") {
+        offerRecurringFromIncome(desc, amount, source, date);
+      } else {
+        showToast(editId ? "Transaction updated" : (type === "income" ? "Income added" : "Transaction added"));
+      }
     });
 
     // Type toggle (expense/income)
@@ -3377,6 +3451,9 @@
     });
     $("#addTxnBtn").addEventListener("click", () => {
       openExpenseModal();
+    });
+    $("#addIncomeBtn").addEventListener("click", () => {
+      openExpenseModal({ type: "income" });
     });
     $("#expenseModalClose").addEventListener("click", closeExpenseModal);
     $("#expenseModal").addEventListener("click", (e) => {
