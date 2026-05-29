@@ -1267,7 +1267,7 @@
 
   // Compute spend on an event by summing expense txns tagged to it
   function eventSpentTotal(eventId, lineItemId) {
-    return state.expenses.reduce((s, e) => {
+    return (state.expenses || []).reduce((s, e) => {
       if (e.eventId !== eventId) return s;
       if (e.type !== "expense") return s;
       if (lineItemId && e.eventLineItemId !== lineItemId) return s;
@@ -1558,7 +1558,7 @@
     if (!sel) return;
     const today = todayStr();
     // Prefer active/upcoming events at top
-    const sorted = [...state.events].sort((a, b) => {
+    const sorted = [...(state.events || [])].sort((a, b) => {
       const ax = (a.endDate || "9999") < today ? 1 : 0;
       const bx = (b.endDate || "9999") < today ? 1 : 0;
       if (ax !== bx) return ax - bx;
@@ -1578,7 +1578,7 @@
     if (!sel) return;
     const cur = filters.eventId || "";
     const today = todayStr();
-    const sorted = [...state.events].sort((a, b) => {
+    const sorted = [...(state.events || [])].sort((a, b) => {
       const ax = (a.endDate || "9999") < today ? 1 : 0;
       const bx = (b.endDate || "9999") < today ? 1 : 0;
       if (ax !== bx) return ax - bx;
@@ -1599,7 +1599,7 @@
     if (!sel) return;
     const cur = insightsEventFilterId || "";
     const today = todayStr();
-    const sorted = [...state.events].sort((a, b) => {
+    const sorted = [...(state.events || [])].sort((a, b) => {
       const ax = (a.endDate || "9999") < today ? 1 : 0;
       const bx = (b.endDate || "9999") < today ? 1 : 0;
       if (ax !== bx) return ax - bx;
@@ -2829,7 +2829,7 @@
     state.expenses.forEach((e) => {
       if (e.type === "income") return;
       if (e.recurringId) return; // already linked to a recurring
-      const key = e.desc.toLowerCase().trim();
+      const key = String(e.desc || "").toLowerCase().trim();
       if (!key) return;
       if (dismissedSubs.has(key)) return;
       if (!byDesc.has(key)) byDesc.set(key, []);
@@ -2864,7 +2864,7 @@
     return suggestions.filter((s) => {
       return !state.recurring.some(
         (r) =>
-          r.desc.toLowerCase() === s.desc.toLowerCase() &&
+          String(r.desc || "").toLowerCase() === String(s.desc || "").toLowerCase() &&
           Math.abs(Number(r.amount) - Number(s.amount)) < 0.01
       );
     });
@@ -3342,9 +3342,13 @@
     const matches = state.expenses
       .filter((e) => e.categoryId && e.desc && e.desc.toLowerCase().includes(q));
     if (!matches.length) return null;
-    // Pick the most-used category among matches
+    // Pick the most-used category among matches that still exists
+    const validIds = new Set(state.categories.map((c) => c.id));
     const counts = {};
-    matches.forEach((m) => { counts[m.categoryId] = (counts[m.categoryId] || 0) + 1; });
+    matches.forEach((m) => {
+      if (!validIds.has(m.categoryId)) return;
+      counts[m.categoryId] = (counts[m.categoryId] || 0) + 1;
+    });
     const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
     return best ? best[0] : null;
   }
@@ -3355,8 +3359,12 @@
     const matches = state.expenses
       .filter((e) => e.personId && e.desc && e.desc.toLowerCase().includes(q));
     if (!matches.length) return null;
+    const validIds = new Set((state.people || []).map((p) => p.id));
     const counts = {};
-    matches.forEach((m) => { counts[m.personId] = (counts[m.personId] || 0) + 1; });
+    matches.forEach((m) => {
+      if (!validIds.has(m.personId)) return;
+      counts[m.personId] = (counts[m.personId] || 0) + 1;
+    });
     const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
     return best ? best[0] : null;
   }
@@ -12433,7 +12441,15 @@
   function importCsvRows(fields) {
     if (!csvParsedRows) return;
     const accountId = $("#csvAccountSelect").value || null;
-    let added = 0, skipped = 0;
+    let added = 0, skipped = 0, duplicates = 0;
+
+    // Build a quick set of existing keys to prevent duplicate imports of the same file
+    const existingKeys = new Set();
+    state.expenses.forEach((e) => {
+      if (!e.date || !e.desc) return;
+      existingKeys.add(`${e.date}|${(e.desc || "").toLowerCase()}|${Number(e.amount).toFixed(2)}`);
+    });
+
     csvParsedRows.forEach((r) => {
       const dateRaw = r[fields.dateKey];
       const desc = r[fields.descKey];
@@ -12450,11 +12466,20 @@
       const type = amount < 0 ? "expense" : "income";
       const absAmt = Math.abs(amount);
 
+      // Skip duplicates already in state
+      const key = `${date}|${String(desc).toLowerCase()}|${absAmt.toFixed(2)}`;
+      if (existingKeys.has(key)) { duplicates += 1; return; }
+      existingKeys.add(key);
+
       // Category from rule
       let categoryId = null;
       if (type === "expense") {
         const catName = autoCategorizeRule(desc);
-        if (catName) categoryId = state.categories.find((c) => c.name === catName)?.id || null;
+        if (catName) {
+          categoryId = state.categories.find(
+            (c) => (c.name || "").toLowerCase() === catName.toLowerCase()
+          )?.id || null;
+        }
       }
 
       state.expenses.push(touchRecord({
@@ -12476,7 +12501,10 @@
     csvParsedRows = null;
     $("#csvPreview").hidden = true;
     $("#csvFile").value = "";
-    showToast(`Imported ${added}${skipped ? ` · ${skipped} skipped` : ""}`);
+    const parts = [`Imported ${added}`];
+    if (duplicates) parts.push(`${duplicates} duplicates skipped`);
+    if (skipped) parts.push(`${skipped} invalid rows`);
+    showToast(parts.join(" · "));
   }
 
   /* ---------- Merge engine for cross-device sync ---------- */
@@ -13900,6 +13928,7 @@
     const provider = localStorage.getItem(KEYS.aiProvider);
     const key = localStorage.getItem(KEYS.aiKey);
     const responseEl = $("#aiResponse");
+    if (!responseEl) return;
     if (!provider || !key) {
       responseEl.hidden = false;
       responseEl.className = "ai-response warn";
@@ -13932,7 +13961,7 @@
       .map((e) => `${e.desc}: ${currencySymbols[currency] || "$"}${Number(e.amount).toFixed(2)}`);
 
     const cardSummary = state.cards.map((c) =>
-      `${c.name}: balance ${currencySymbols[currency] || "$"}${(c.balance || 0).toFixed(0)} of ${(c.limit || 0).toFixed(0)} limit`
+      `${c.name}: balance ${currencySymbols[currency] || "$"}${cardCurrentBalance(c).toFixed(0)} of ${(c.limit || 0).toFixed(0)} limit`
     );
 
     const latestSc = state.creditScores.length
@@ -13976,7 +14005,8 @@ Format your response as a numbered list of short, specific recommendations. No f
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "OpenAI error");
-        response = data.choices[0].message.content;
+        response = data?.choices?.[0]?.message?.content;
+        if (!response) throw new Error("OpenAI returned no content");
       } else if (provider === "anthropic") {
         const res = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
@@ -13994,7 +14024,8 @@ Format your response as a numbered list of short, specific recommendations. No f
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error?.message || "Anthropic error");
-        response = data.content[0].text;
+        response = data?.content?.[0]?.text;
+        if (!response) throw new Error("Anthropic returned no content");
       } else {
         throw new Error("Unknown provider");
       }
