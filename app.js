@@ -2456,10 +2456,14 @@
       });
       if (inSoon.length === 1) {
         const c = inSoon[0];
+        const day = clampDayToMonth(Number(c.dueDay), todayMonth);
+        const due = new Date(today.getFullYear(), today.getMonth(), day);
+        const diffDays = Math.max(0, Math.round((due - today) / 86400000));
+        const whenLabel = diffDays === 0 ? "today" : `in ${diffDays}d`;
         insights.push({
           icon: "⏰",
           tone: "warn",
-          text: `<strong>${escapeHtml(c.name)}</strong> payment due ${c.dueDay > today.getDate() ? `in ${c.dueDay - today.getDate()}d` : "today"} (${fmt(cardCurrentBalance(c))} balance).`,
+          text: `<strong>${escapeHtml(c.name)}</strong> payment due ${whenLabel} (${fmt(cardCurrentBalance(c))} balance).`,
         });
       } else if (inSoon.length > 1) {
         insights.push({
@@ -2484,10 +2488,14 @@
           const bal = cardCurrentBalance(c);
           const util = lim > 0 ? (bal / lim) * 100 : 0;
           if (util >= 10) {
+            const day = clampDayToMonth(Number(c.closeDay), todayMonth);
+            const close = new Date(today.getFullYear(), today.getMonth(), day);
+            const diffDays = Math.max(0, Math.round((close - today) / 86400000));
+            const whenLabel = diffDays === 0 ? "today" : `in ${diffDays}d`;
             insights.push({
               icon: "📅",
               tone: util >= 30 ? "warn" : "",
-              text: `<strong>${escapeHtml(c.name)}</strong> statement closes in ${c.closeDay - today.getDate()}d at ${util.toFixed(0)}% util. Pay before close to report lower utilization.`,
+              text: `<strong>${escapeHtml(c.name)}</strong> statement closes ${whenLabel} at ${util.toFixed(0)}% util. Pay before close to report lower utilization.`,
             });
           }
         } else if (closingSoon.length > 1) {
@@ -8771,7 +8779,10 @@
       e.preventDefault();
       const m = $("#incomeMonth").value;
       const amount = parseFloat($("#incomeMonthAmount").value);
-      if (!m || isNaN(amount)) return;
+      if (!m || isNaN(amount)) {
+        showToast("Pick a month and enter an amount");
+        return;
+      }
       setIncomeForMonth(m, amount);
       saveData();
       $("#incomeMonth").value = "";
@@ -8794,7 +8805,10 @@
       e.preventDefault();
       const name = $("#catName").value.trim();
       const limit = parseFloat($("#catLimit").value);
-      if (!name || isNaN(limit)) return;
+      if (!name || isNaN(limit)) {
+        showToast("Add a name and a numeric limit");
+        return;
+      }
       // Prevent duplicates (case-insensitive)
       const dup = state.categories.find((c) => (c.name || "").toLowerCase() === name.toLowerCase());
       if (dup) {
@@ -9031,8 +9045,14 @@
       const source = type === "income" ? $("#incomeSource").value.trim() || null : null;
       const preTax = type === "income" ? $("#incomePreTax").checked : false;
 
-      if (!desc || isNaN(amount) || !date) return;
-      if (type === "expense" && !categoryId) return;
+      if (!desc || isNaN(amount) || !date) {
+        showToast("Fill description, amount, and date");
+        return;
+      }
+      if (type === "expense" && !categoryId) {
+        showToast("Pick a category");
+        return;
+      }
 
       // If a person is tagged on an expense and no category is set (or "Other" was picked),
       // auto-route to the Family category. Lets the family money flow stay separate from
@@ -9819,7 +9839,10 @@
       const name = $("#goalName").value.trim();
       const target = parseFloat($("#goalTarget").value);
       const date = $("#goalDate").value;
-      if (!name || isNaN(target)) return;
+      if (!name || isNaN(target)) {
+        showToast("Add a name and target amount");
+        return;
+      }
       state.goals.push(touchRecord({ id: uid(), name, target, saved: 0, date }));
       saveData();
       e.target.reset();
@@ -9894,7 +9917,10 @@
       const type = $("#recType").value;
       const categoryId = $("#recCategory").value || null;
       const goalId = $("#recGoal").value || null;
-      if (!desc || isNaN(amount) || isNaN(dayOfMonth)) return;
+      if (!desc || isNaN(amount) || isNaN(dayOfMonth)) {
+        showToast("Fill description, amount, and day of month");
+        return;
+      }
       if (dayOfMonth < 1 || dayOfMonth > 31) {
         showToast("Day must be between 1 and 31");
         return;
@@ -10002,7 +10028,10 @@
       const after = parseFloat($("#billNegAfter").value);
       const date = $("#billNegDate").value || todayStr();
       const note = $("#billNegNote").value.trim();
-      if (!vendor || isNaN(before) || isNaN(after)) return;
+      if (!vendor || isNaN(before) || isNaN(after)) {
+        showToast("Fill vendor, before, and after");
+        return;
+      }
       const savedMonthly = before - after;
       state.billNegotiations.push(touchRecord({
         id: uid(),
@@ -10030,7 +10059,10 @@
       const type = $("#incSrcType").value || "salary";
       const defaultAmount = parseFloat($("#incSrcAmount").value) || 0;
       const note = $("#incSrcNote").value.trim();
-      if (!name) return;
+      if (!name) {
+        showToast("Add a name for the income source");
+        return;
+      }
       // De-duplicate by name (case-insensitive)
       const existing = state.incomeSources.find((s) => (s.name || "").toLowerCase() === name.toLowerCase());
       if (existing) {
@@ -10094,7 +10126,10 @@
       const name = $("#accName").value.trim();
       const type = $("#accType").value;
       const balance = parseFloat($("#accBalance").value) || 0;
-      if (!name) return;
+      if (!name) {
+        showToast("Add an account name");
+        return;
+      }
       // Prevent duplicates (case-insensitive)
       const dup = state.accounts.find((a) => (a.name || "").toLowerCase() === name.toLowerCase());
       if (dup) {
@@ -10127,9 +10162,16 @@
         showToast("Pick two different accounts");
         return;
       }
-      if (isNaN(amount) || amount <= 0 || !date) return;
+      if (isNaN(amount) || amount <= 0 || !date) {
+        showToast("Enter a valid amount and date");
+        return;
+      }
       const fromAcc = state.accounts.find((a) => a.id === fromId);
       const toAcc = state.accounts.find((a) => a.id === toId);
+      if (!fromAcc || !toAcc) {
+        showToast("Pick valid accounts");
+        return;
+      }
       const desc = note || `Transfer: ${fromAcc.name} → ${toAcc.name}`;
       // Two linked transactions
       const transferGroupId = uid();
@@ -10294,7 +10336,10 @@
         // Existing checklist preserved when editing
         checklist: editId ? (state.events.find((x) => x.id === editId)?.checklist || []) : [],
       };
-      if (!ev.name) return;
+      if (!ev.name) {
+        showToast("Add an event name");
+        return;
+      }
       // Validate: if endDate set without startDate, swap
       if (ev.endDate && !ev.startDate) {
         ev.startDate = ev.endDate;
@@ -10326,7 +10371,10 @@
         color: $("#personColor").value,
         notes: $("#personNotes").value.trim(),
       };
-      if (!person.name) return;
+      if (!person.name) {
+        showToast("Add a name");
+        return;
+      }
       if (editId) {
         const idx = state.people.findIndex((p) => p.id === editId);
         if (idx >= 0) state.people[idx] = touchRecord(person);
@@ -10380,7 +10428,10 @@
         // Preserve existing accountId link if editing
         accountId: oldCard?.accountId || null,
       };
-      if (!card.name) return;
+      if (!card.name) {
+        showToast("Add a card name");
+        return;
+      }
 
       // Auto-log a limit-increase entry if user raised the limit
       if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
@@ -10451,7 +10502,10 @@
       e.preventDefault();
       const score = parseInt($("#scoreValue").value, 10);
       const date = $("#scoreDate").value;
-      if (!score || score < 300 || score > 850 || !date) return;
+      if (!score || score < 300 || score > 850 || !date) {
+        showToast("Score must be 300-850 with a date");
+        return;
+      }
       state.creditScores.push(touchRecord({
         id: uid(),
         score,
@@ -10484,7 +10538,10 @@
       const date = $("#inquiryDate").value;
       const reason = $("#inquiryReason").value.trim();
       const bureau = $("#inquiryBureau").value || null;
-      if (!date || !reason) return;
+      if (!date || !reason) {
+        showToast("Add a date and reason");
+        return;
+      }
       state.creditInquiries.push(touchRecord({
         id: uid(), date, reason, bureau, type: "hard",
       }));
@@ -10540,7 +10597,10 @@
       const targetScore = parseInt($("#goalScore").value, 10);
       const targetDate = $("#goalDate2").value;
       const note = $("#goalNote").value.trim();
-      if (!targetScore || !targetDate) return;
+      if (!targetScore || !targetDate) {
+        showToast("Set a target score and date");
+        return;
+      }
       state.creditGoals.push(touchRecord({
         id: uid(), targetScore, targetDate, note,
       }));
@@ -11021,11 +11081,14 @@
         renderAll();
       } else if (action === "edit-month-income") {
         const m = btn.dataset.month;
-        const cur = state.monthlyIncome[m];
+        const cur = (state.monthlyIncome && state.monthlyIncome[m]) || "";
         const newVal = prompt(`Income for ${monthLabel(m)}:`, cur);
         if (newVal === null) return;
         const v = parseFloat(newVal);
-        if (isNaN(v)) return;
+        if (isNaN(v)) {
+          showToast("Enter a valid amount");
+          return;
+        }
         setIncomeForMonth(m, v);
         saveData();
         renderAll();
