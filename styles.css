@@ -3061,3 +3061,55 @@ input[type="color"] {
   }
   .pcr-amount { width: 90px; }
 }
+
+
+/* ---------- Cross-tab payment touchpoints ---------- */
+.bill-pay-btn {
+  background: var(--accent, #5b3fb8);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  margin-left: 0.4rem;
+  white-space: nowrap;
+}
+.bill-pay-btn:hover { filter: brightness(1.08); }
+.bill-pay-btn:active { transform: scale(0.97); }
+
+.today-due-alerts {
+  margin-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.55rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.today-due-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+.today-due-row .today-due-when {
+  color: var(--warning, #b45309);
+  font-weight: 600;
+}
+
+.stat-credit-paid { border-left-color: #06b6d4; }
+
+
+.account-section-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0.6rem 0 0.4rem;
+}
+.account-section-label .negative { font-weight: 700; }
+.account-section-label .positive { font-weight: 700; }
+.credit-pill {
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.05), rgba(139, 92, 246, 0.05));
+}

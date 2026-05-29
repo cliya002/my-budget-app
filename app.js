@@ -1415,15 +1415,21 @@
       if (!c.dueDay) return;
       const day = clampDayToMonth(c.dueDay, m);
       const dateStr = `${m}-${String(day).padStart(2, "0")}`;
+      // Card is "paid" if any credit-payment was logged this month for this card
+      const paidThisMonth = state.expenses.some(
+        (e) => e.kind === "credit-payment" && e.cardId === c.id &&
+               e.type === "transfer-out" && monthKey(e.date) === m
+      );
       bills.push({
         type: "card",
         date: dateStr,
         day,
         name: `${c.name} payment`,
         amount: c.statement || c.balance || 0,
-        paid: false, // we don't have a separate "paid" field for card
+        paid: paidThisMonth,
         autopay: c.autopay,
         icon: "💳",
+        cardId: c.id,
       });
     });
 
@@ -1474,6 +1480,7 @@
             <div class="bill-status ${statusClass}">${status}</div>
           </div>
           <div class="bill-amount">${fmt(b.amount)}</div>
+          ${b.type === "card" && !b.paid && !b.autopay ? `<button class="bill-pay-btn" data-action="quick-pay-card" data-id="${b.cardId}" title="Pay this card">Pay</button>` : ""}
         </div>`;
     });
 
@@ -1728,6 +1735,66 @@
       }
     });
 
+    // 9) Credit cards: high utilization or upcoming due dates
+    if (state.cards.length) {
+      const totalDebt = totalCardBalance();
+      const totalLim = totalCardLimit();
+      const utilTotal = totalLim > 0 ? (totalDebt / totalLim) * 100 : 0;
+
+      const paidThisMonth = state.expenses
+        .filter((e) => e.type === "transfer-out" && e.kind === "credit-payment" && monthKey(e.date) === m)
+        .reduce((s, e) => s + Number(e.amount || 0), 0);
+
+      if (utilTotal >= 50 && paidThisMonth === 0 && totalDebt > 0) {
+        insights.push({
+          icon: "💳",
+          tone: "danger",
+          text: `Credit utilization is <strong>${utilTotal.toFixed(0)}%</strong> with ${fmt(totalDebt)} owed. Pay before statement closes to lower reported util.`,
+        });
+      } else if (totalDebt > 0 && paidThisMonth === 0) {
+        // Soft nudge if nothing paid yet this month
+        const liquid = liquidTotal();
+        if (liquid > totalDebt * 0.5) {
+          insights.push({
+            icon: "💸",
+            tone: "",
+            text: `You have ${fmt(liquid)} liquid and ${fmt(totalDebt)} card debt. Tap <strong>Pay Cards</strong> on the Credit tab to plan payments.`,
+          });
+        }
+      } else if (paidThisMonth > 0) {
+        insights.push({
+          icon: "✅",
+          tone: "positive",
+          text: `Paid <strong>${fmt(paidThisMonth)}</strong> to credit cards this month. ${totalDebt > 0 ? `${fmt(totalDebt)} remaining.` : "All cards paid off!"}`,
+        });
+      }
+
+      // Upcoming due dates within 7 days
+      const today = new Date();
+      const todayMonth = currentMonth();
+      const inSoon = state.cards.filter((c) => {
+        if (!c.dueDay || !(Number(c.balance) > 0)) return false;
+        const day = clampDayToMonth(Number(c.dueDay), todayMonth);
+        const due = new Date(today.getFullYear(), today.getMonth(), day);
+        const diffDays = Math.round((due - today) / 86400000);
+        return diffDays >= 0 && diffDays <= 7;
+      });
+      if (inSoon.length === 1) {
+        const c = inSoon[0];
+        insights.push({
+          icon: "⏰",
+          tone: "warn",
+          text: `<strong>${escapeHtml(c.name)}</strong> payment due ${c.dueDay > today.getDate() ? `in ${c.dueDay - today.getDate()}d` : "today"} (${fmt(c.balance)} balance).`,
+        });
+      } else if (inSoon.length > 1) {
+        insights.push({
+          icon: "⏰",
+          tone: "warn",
+          text: `<strong>${inSoon.length} card payments</strong> due in the next 7 days. Plan now in the Credit tab.`,
+        });
+      }
+    }
+
     // Cap to 6 most relevant
     return insights.slice(0, 6);
   }
@@ -1918,14 +1985,21 @@
       .map((a) => {
         const bal = accountBalance(a.id);
         const balClass = bal < 0 ? "negative" : "";
+        const isCredit = (a.type || "").toLowerCase() === "credit" || !!a.cardId;
+        const icon = isCredit ? "💳 " : "";
+        const linkedCard = a.cardId ? state.cards.find((c) => c.id === a.cardId) : null;
+        const subText = isCredit
+          ? `Credit card${linkedCard ? ` · linked to ${escapeHtml(linkedCard.name)}` : ""}`
+          : escapeHtml(a.type);
         return `
           <li class="list-item account-item" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
             <div class="list-item-main">
-              <div class="list-item-title">${escapeHtml(a.name)}</div>
-              <div class="list-item-sub">${escapeHtml(a.type)}</div>
+              <div class="list-item-title">${icon}${escapeHtml(a.name)}</div>
+              <div class="list-item-sub">${subText}</div>
             </div>
             <div class="list-item-amount ${balClass}">${fmt(bal)}</div>
             <div class="list-item-actions">
+              ${isCredit && linkedCard && Number(linkedCard.balance) > 0 ? `<button data-action="quick-pay-card" data-id="${linkedCard.id}" title="Pay this card">Pay</button>` : ""}
               <button data-action="edit-acc" data-id="${a.id}" title="Edit">✏️</button>
               <button data-action="del-acc" data-id="${a.id}" title="Delete">🗑️</button>
             </div>
@@ -1942,22 +2016,47 @@
       return;
     }
     const total = netWorth();
+    // Split: liquid (cash-like) vs credit cards (debt)
+    const isCredit = (a) => (a.type || "").toLowerCase() === "credit" || !!a.cardId;
+    const liquid = state.accounts.filter((a) => !isCredit(a));
+    const credit = state.accounts.filter(isCredit);
+    const liquidSum = liquid.reduce((s, a) => s + accountBalance(a.id), 0);
+    const creditSum = credit.reduce((s, a) => s + accountBalance(a.id), 0); // negative = debt
+
     let html = `
       <div class="account-net">
         <span class="account-net-label">Net Worth</span>
         <span class="account-net-value ${total < 0 ? "negative" : ""}">${fmt(total)}</span>
       </div>
-      <div class="account-grid">
     `;
-    state.accounts.forEach((a) => {
-      const bal = accountBalance(a.id);
-      html += `
-        <div class="account-pill" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
-          <div class="account-pill-name">${escapeHtml(a.name)}</div>
-          <div class="account-pill-bal ${bal < 0 ? "negative" : ""}">${fmt(bal)}</div>
-        </div>`;
-    });
-    html += "</div>";
+
+    if (liquid.length) {
+      html += `<div class="account-section-label">💵 Cash & Bank · ${fmt(liquidSum)}</div><div class="account-grid">`;
+      liquid.forEach((a) => {
+        const bal = accountBalance(a.id);
+        html += `
+          <div class="account-pill" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
+            <div class="account-pill-name">${escapeHtml(a.name)}</div>
+            <div class="account-pill-bal ${bal < 0 ? "negative" : ""}">${fmt(bal)}</div>
+          </div>`;
+      });
+      html += "</div>";
+    }
+
+    if (credit.length) {
+      html += `<div class="account-section-label">💳 Credit Cards · <span class="${creditSum < 0 ? "negative" : ""}">${fmt(creditSum)}</span></div><div class="account-grid">`;
+      credit.forEach((a) => {
+        const bal = accountBalance(a.id);
+        const debt = bal < 0 ? Math.abs(bal) : 0;
+        html += `
+          <div class="account-pill credit-pill" style="border-left: 4px solid ${a.color || "#ec4899"}">
+            <div class="account-pill-name">💳 ${escapeHtml(a.name)}</div>
+            <div class="account-pill-bal ${bal < 0 ? "negative" : "positive"}">${bal < 0 ? `-${fmt(debt)}` : fmt(bal)}</div>
+          </div>`;
+      });
+      html += "</div>";
+    }
+
     el.innerHTML = html;
   }
 
@@ -2365,7 +2464,7 @@
   function checkBudgetAlerts() {
     const month = currentMonth();
     const monthExpenses = state.expenses.filter(
-      (e) => monthKey(e.date) === month && e.type !== "income"
+      (e) => monthKey(e.date) === month && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
     );
     const alertsShown = state.settings.alertsShown;
     let changed = false;
@@ -2687,8 +2786,27 @@
     const totalSpent = todayExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const totalIncome = todayIncome.reduce((s, e) => s + Number(e.amount), 0);
 
+    // Upcoming card payments due in the next 5 days
+    const todayDate = new Date();
+    const dueAlerts = [];
+    state.cards.forEach((c) => {
+      if (!c.dueDay || !(Number(c.balance) > 0)) return;
+      const day = clampDayToMonth(Number(c.dueDay), currentMonth());
+      const due = new Date(todayDate.getFullYear(), todayDate.getMonth(), day);
+      const diffDays = Math.round((due - todayDate) / 86400000);
+      if (diffDays >= 0 && diffDays <= 5) {
+        dueAlerts.push({ card: c, diffDays });
+      }
+    });
+    const dueHtml = dueAlerts.length
+      ? `<div class="today-due-alerts">${dueAlerts.slice(0, 3).map((a) => {
+          const when = a.diffDays === 0 ? "due today" : a.diffDays === 1 ? "due tomorrow" : `due in ${a.diffDays}d`;
+          return `<div class="today-due-row"><span>💳 ${escapeHtml(a.card.name)}</span><span class="today-due-when">${when} · ${fmt(a.card.balance)}</span></div>`;
+        }).join("")}</div>`
+      : "";
+
     if (!todayTxns.length) {
-      el.innerHTML = `<p class="empty" style="margin:0">No transactions today. Tap <strong>+</strong> or <strong>🔁 Repeat last</strong> to add one.</p>`;
+      el.innerHTML = `<p class="empty" style="margin:0">No transactions today. Tap <strong>+</strong> or <strong>🔁 Repeat last</strong> to add one.</p>${dueHtml}`;
       return;
     }
 
@@ -2712,6 +2830,7 @@
         <span class="today-stat-sub">${todayTxns.length} txn${todayTxns.length === 1 ? "" : "s"}</span>
       </div>
       <ul class="today-list">${recentList}</ul>
+      ${dueHtml}
     `;
   }
 
@@ -2789,8 +2908,11 @@
     const isIncome = exp.type === "income";
     const isTransferIn = exp.type === "transfer-in";
     const isTransferOut = exp.type === "transfer-out";
+    const isCreditPay = exp.kind === "credit-payment";
     let sign, amountClass, tag;
     if (isIncome) { sign = "+"; amountClass = "positive"; tag = "Received"; }
+    else if (isCreditPay && isTransferIn) { sign = "+"; amountClass = "positive"; tag = "💳 Card paid"; }
+    else if (isCreditPay && isTransferOut) { sign = "-"; amountClass = "negative"; tag = "💳 Card payment"; }
     else if (isTransferIn) { sign = "+"; amountClass = "positive"; tag = "Transfer in"; }
     else if (isTransferOut) { sign = "-"; amountClass = "negative"; tag = "Transfer out"; }
     else { sign = "-"; amountClass = "negative"; tag = "Spent"; }
@@ -3506,7 +3628,7 @@
 
     const totals = months.map((mk) =>
       state.expenses
-        .filter((e) => monthKey(e.date) === mk && e.type !== "income")
+        .filter((e) => monthKey(e.date) === mk && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
         .reduce((s, e) => s + Number(e.amount), 0)
     );
 
@@ -3821,9 +3943,11 @@
             date: next.toISOString().slice(0, 10),
             days,
             cardName: c.name,
+            cardId: c.id,
             label: spec.label,
             icon: spec.icon,
             priority: spec.priority,
+            isDue: spec.priority === 2,
           });
         }
       });
@@ -3846,6 +3970,7 @@
             <div class="payby-card">${escapeHtml(e.cardName)}</div>
           </div>
           <div class="payby-date">${e.date}</div>
+          ${e.isDue ? `<button class="bill-pay-btn" data-action="quick-pay-card" data-id="${e.cardId}" title="Pay this card">Pay</button>` : ""}
         </div>`;
     }).join("");
   }
@@ -4648,6 +4773,7 @@
             <div class="card-item-head">
               <div class="card-item-title">${escapeHtml(c.name)}${last4} ${autopay}</div>
               <div class="list-item-actions">
+                ${Number(c.balance) > 0 ? `<button data-action="quick-pay-card" data-id="${c.id}" title="Pay this card">💸 Pay</button>` : ""}
                 <button data-action="edit-card" data-id="${c.id}" title="Edit">✏️</button>
                 <button data-action="del-card" data-id="${c.id}" title="Delete">🗑️</button>
               </div>
@@ -8897,6 +9023,12 @@
           renderAll();
         }
       } else if (action === "del-acc") {
+        const acc = state.accounts.find((a) => a.id === id);
+        // Block deleting credit-card-linked accounts (migration will recreate them anyway)
+        if (acc?.cardId) {
+          showToast("Linked to a credit card — delete the card instead");
+          return;
+        }
         if (confirm("Delete this account? Transactions assigned to it will keep their record.")) {
           tombstoneRecord("accounts", id);
           state.accounts = state.accounts.filter((a) => a.id !== id);
