@@ -2137,6 +2137,45 @@ input[type="color"] {
   flex-wrap: wrap;
 }
 
+/* Today card on dashboard */
+.today-card {
+  background: linear-gradient(135deg, rgba(91, 63, 184, 0.08), rgba(91, 63, 184, 0.02));
+  border-left: 4px solid var(--primary);
+}
+.today-stats {
+  display: flex;
+  gap: 0.85rem;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin-bottom: 0.65rem;
+  font-size: 1rem;
+}
+.today-stat { font-weight: 700; }
+.today-stat.positive { color: var(--success); }
+.today-stat-sub { color: var(--text-dim); font-size: 0.85rem; font-weight: 500; }
+.today-list { list-style: none; padding: 0; margin: 0; }
+.today-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  border-top: 1px solid var(--border);
+  font-size: 0.9rem;
+  align-items: center;
+}
+.today-row:first-child { border-top: none; }
+.today-row-desc { font-weight: 500; }
+.today-row-cat { color: var(--text-dim); font-size: 0.8rem; }
+.today-row-amt { font-weight: 600; }
+.today-row-amt.positive { color: var(--success); }
+
+/* Keyboard nav focus indicator on transaction rows */
+.txn-item.kbd-focused {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+  background: var(--primary-soft);
+}
+
 /* ================ Smart insights ================ */
 .insights-card {
   background: linear-gradient(135deg, var(--primary-soft) 0%, #f0e7fa 100%);

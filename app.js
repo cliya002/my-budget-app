@@ -638,6 +638,14 @@
     theme = t;
     document.documentElement.setAttribute("data-theme", t);
     localStorage.setItem(KEYS.theme, t);
+    // Apply Chart.js defaults so axis labels/gridlines match the theme
+    if (typeof Chart !== "undefined") {
+      const isDark = t === "dark";
+      Chart.defaults.color = isDark ? "rgba(226, 232, 240, 0.85)" : "rgba(30, 41, 59, 0.85)";
+      Chart.defaults.borderColor = isDark ? "rgba(148, 163, 184, 0.18)" : "rgba(148, 163, 184, 0.25)";
+      // Re-render charts that are already on screen
+      try { renderInsights(); } catch (e) { /* charts not ready yet */ }
+    }
   }
 
   function escapeHtml(s) {
@@ -2605,6 +2613,46 @@
     renderBillsCalendar();
     renderSmartInsights();
     renderDashSyncCard();
+    renderToday();
+  }
+
+  // Today card: quick summary of just today's spending and recent activity
+  function renderToday() {
+    const el = $("#todaySummary");
+    if (!el) return;
+    const today = todayStr();
+    const todayTxns = state.expenses.filter((e) => e.date === today);
+    const todayExpenses = todayTxns.filter((e) => e.type === "expense");
+    const todayIncome = todayTxns.filter((e) => e.type === "income");
+    const totalSpent = todayExpenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = todayIncome.reduce((s, e) => s + Number(e.amount), 0);
+
+    if (!todayTxns.length) {
+      el.innerHTML = `<p class="empty" style="margin:0">No transactions today. Tap <strong>+</strong> or <strong>🔁 Repeat last</strong> to add one.</p>`;
+      return;
+    }
+
+    const recent = [...todayTxns].sort((a, b) => b.id.localeCompare(a.id)).slice(0, 3);
+    const recentList = recent.map((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const catName = cat ? cat.name : (e.type === "income" ? "Income" : "Uncategorized");
+      const sign = e.type === "income" ? "+" : "−";
+      const cls = e.type === "income" ? "positive" : "";
+      return `<li class="today-row">
+        <span class="today-row-desc">${escapeHtml(e.desc || "(no description)")}</span>
+        <span class="today-row-cat">${escapeHtml(catName)}</span>
+        <span class="today-row-amt ${cls}">${sign}${fmt(e.amount)}</span>
+      </li>`;
+    }).join("");
+
+    el.innerHTML = `
+      <div class="today-stats">
+        ${totalIncome > 0 ? `<span class="today-stat positive">+${fmt(totalIncome)} income</span>` : ""}
+        <span class="today-stat">${fmt(totalSpent)} spent</span>
+        <span class="today-stat-sub">${todayTxns.length} txn${todayTxns.length === 1 ? "" : "s"}</span>
+      </div>
+      <ul class="today-list">${recentList}</ul>
+    `;
   }
 
   function renderBalances() {
@@ -7660,6 +7708,33 @@
       renderCardList();
     });
 
+    // Dashboard card visibility toggles. Selectors can be element IDs or classes.
+    function applyDashCardVisibility() {
+      let prefs = {};
+      try { prefs = JSON.parse(localStorage.getItem("mb_dash_cards") || "{}"); } catch (e) { /* ignore */ }
+      document.querySelectorAll("[data-dash-card]").forEach((cb) => {
+        const sel = cb.dataset.dashCard;
+        const visible = prefs[sel] !== false; // default = visible
+        cb.checked = visible;
+        // Find the target element — try as ID first, then as class
+        const target = document.getElementById(sel) || document.querySelector("." + sel);
+        if (target) {
+          target.style.display = visible ? "" : "none";
+        }
+      });
+    }
+    document.querySelectorAll("[data-dash-card]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        const sel = cb.dataset.dashCard;
+        let prefs = {};
+        try { prefs = JSON.parse(localStorage.getItem("mb_dash_cards") || "{}"); } catch (e) { /* ignore */ }
+        prefs[sel] = cb.checked;
+        localStorage.setItem("mb_dash_cards", JSON.stringify(prefs));
+        applyDashCardVisibility();
+      });
+    });
+    applyDashCardVisibility();
+
     // Bill negotiation tracker
     if ($("#billNegDate")) $("#billNegDate").value = todayStr();
     $("#billNegForm")?.addEventListener("submit", (e) => {
@@ -8855,6 +8930,56 @@
     });
   }
   function initSwipeGestures() {
+    // Pull-to-refresh: tug down at the top of the dashboard to trigger sync pull
+    let pullStartY = 0;
+    let pulling = false;
+    let pullIndicator = null;
+
+    const ensurePullIndicator = () => {
+      if (pullIndicator) return pullIndicator;
+      pullIndicator = document.createElement("div");
+      pullIndicator.id = "pullToRefresh";
+      pullIndicator.style.cssText = "position:fixed;top:0;left:50%;transform:translateX(-50%) translateY(-100%);background:var(--primary);color:#fff;padding:0.5rem 1rem;border-radius:0 0 var(--radius-sm) var(--radius-sm);font-size:0.85rem;font-weight:600;z-index:1000;transition:transform 0.2s;pointer-events:none;";
+      pullIndicator.textContent = "↓ Pull to sync";
+      document.body.appendChild(pullIndicator);
+      return pullIndicator;
+    };
+
+    document.addEventListener("touchstart", (e) => {
+      // Only trigger when scrolled to top of page
+      if (window.scrollY > 5) return;
+      const dashboard = document.getElementById("dashboard");
+      if (!dashboard || !dashboard.classList.contains("active")) return;
+      pullStartY = e.touches[0].clientY;
+      pulling = true;
+    }, { passive: true });
+
+    document.addEventListener("touchmove", (e) => {
+      if (!pulling) return;
+      const dy = e.touches[0].clientY - pullStartY;
+      if (dy <= 0) return;
+      const ind = ensurePullIndicator();
+      const offset = Math.min(60, dy * 0.5);
+      ind.style.transform = `translateX(-50%) translateY(${offset - 60}px)`;
+      ind.textContent = dy > 100 ? "↓ Release to sync" : "↓ Pull to sync";
+    }, { passive: true });
+
+    document.addEventListener("touchend", (e) => {
+      if (!pulling) return;
+      pulling = false;
+      const dy = (e.changedTouches[0].clientY) - pullStartY;
+      if (pullIndicator) {
+        pullIndicator.style.transform = "translateX(-50%) translateY(-100%)";
+      }
+      if (dy > 100) {
+        // Trigger sync
+        if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId) && cryptoKey) {
+          showToast("Syncing…");
+          syncPull({ skipConfirm: true, silent: true }).catch(() => {});
+        }
+      }
+    }, { passive: true });
+
     let startX = 0, startY = 0, target = null;
     document.addEventListener("touchstart", (e) => {
       const row = e.target.closest(".txn-item");
@@ -8927,6 +9052,45 @@
       if ($("#app").hidden) return;
 
       const key = e.key.toLowerCase();
+
+      // Transaction list arrow-key navigation when on Transactions page
+      const txnsActive = $('#transactions')?.classList.contains("active");
+      if (txnsActive && (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === "Delete" || e.key === "Backspace")) {
+        const rows = Array.from(document.querySelectorAll("#expenseList .txn-item[data-txn-row]"));
+        if (!rows.length) return;
+        const currentIdx = rows.findIndex((r) => r.classList.contains("kbd-focused"));
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          rows.forEach((r) => r.classList.remove("kbd-focused"));
+          const next = rows[Math.min(rows.length - 1, currentIdx + 1)] || rows[0];
+          next.classList.add("kbd-focused");
+          next.scrollIntoView({ block: "nearest" });
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          rows.forEach((r) => r.classList.remove("kbd-focused"));
+          const prev = rows[Math.max(0, currentIdx - 1)] || rows[0];
+          prev.classList.add("kbd-focused");
+          prev.scrollIntoView({ block: "nearest" });
+        } else if (e.key === "Enter" && currentIdx >= 0) {
+          e.preventDefault();
+          const id = rows[currentIdx].dataset.txnRow;
+          const exp = state.expenses.find((x) => x.id === id);
+          if (exp) openExpenseModal(exp);
+        } else if ((e.key === "Delete" || e.key === "Backspace") && currentIdx >= 0) {
+          e.preventDefault();
+          const id = rows[currentIdx].dataset.txnRow;
+          const txn = state.expenses.find((x) => x.id === id);
+          if (txn && confirm("Delete this transaction?")) {
+            tombstoneRecord("expenses", id);
+            state.expenses = state.expenses.filter((x) => x.id !== id);
+            saveData();
+            renderAll();
+            showUndoToast([txn]);
+          }
+        }
+        return;
+      }
+
       switch (key) {
         case "n":
           e.preventDefault();
