@@ -11138,6 +11138,20 @@
           if (state.settings.roundUpGoalId === id) {
             setSetting("roundUpGoalId", null);
           }
+          // Clear linkedGoalId references on events
+          state.events.forEach((ev) => {
+            if (ev.linkedGoalId === id) {
+              ev.linkedGoalId = null;
+              touchRecord(ev);
+            }
+          });
+          // Clear goalId on recurring rules
+          state.recurring.forEach((r) => {
+            if (r.goalId === id) {
+              r.goalId = null;
+              touchRecord(r);
+            }
+          });
           saveData();
           renderAll();
         }
