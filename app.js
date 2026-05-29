@@ -48,6 +48,7 @@
     creditFreezes: {},     // map: bureau -> { frozen: bool, date: 'YYYY-MM-DD' }
     annualReports: {},     // map: bureau -> { lastPulled: 'YYYY-MM-DD' }
     utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
+    billNegotiations: [],  // each: { id, vendor, before, after, savedMonthly, date, note }
     deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
     mapTimestamps: {},     // map: collectionName -> { key: lastUpdatedAt } for map-style collections
     settings: {
@@ -75,6 +76,7 @@
     end: "",
     categories: new Set(),  // empty = all
     people: new Set(),       // empty = all (only people-marked txns when non-empty)
+    tags: new Set(),         // empty = all (matches when txn has any selected tag)
     search: "",
     sort: "date-desc",      // 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'
     groupByDay: true,
@@ -293,6 +295,7 @@
     if (!Array.isArray(state.limitIncreases)) state.limitIncreases = [];
     if (!Array.isArray(state.creditGoals)) state.creditGoals = [];
     if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
+    if (!Array.isArray(state.billNegotiations)) state.billNegotiations = [];
     if (typeof state.creditFreezes !== "object" || !state.creditFreezes) state.creditFreezes = {};
     if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
     if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
@@ -567,6 +570,7 @@
           amount: r.amount,
           date: dateStr,
           categoryId: r.categoryId || null,
+          goalId: r.goalId || null,
           receipt: null,
           recurringId: r.id,
         }));
@@ -883,6 +887,8 @@
     populateRecurringCategorySelect();
     renderFilterChips();
     renderPersonFilterChips();
+    renderTagFilterChips();
+    renderBillNegotiations();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
   }
@@ -1056,11 +1062,13 @@
           const catName = cat ? cat.name : (r.type === "income" ? "Income" : "—");
           const typeLabel = r.type === "income" ? "💰" : "💸";
           const status = r.active ? "Active" : "Paused";
+          const goal = r.goalId ? state.goals.find((g) => g.id === r.goalId) : null;
+          const goalLabel = goal ? ` · 🎯 ${escapeHtml(goal.name)}` : "";
           return `
             <li class="list-item">
               <div class="list-item-main">
                 <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)}</div>
-                <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)} · ${status}</div>
+                <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)}${goalLabel} · ${status}</div>
               </div>
               <div class="list-item-actions">
                 <button data-action="edit-rec" data-id="${r.id}" title="Edit">✏️</button>
@@ -2035,6 +2043,54 @@
       state.categories
         .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
         .join("");
+    // Also populate the goal select for recurring goal contributions
+    const goalSel = $("#recGoal");
+    if (goalSel) {
+      goalSel.innerHTML =
+        '<option value="">— No goal —</option>' +
+        state.goals
+          .map((g) => `<option value="${g.id}">${escapeHtml(g.name)}</option>`)
+          .join("");
+    }
+  }
+
+  // Bill negotiations list + summary card on Settings
+  function renderBillNegotiations() {
+    const list = $("#billNegList");
+    const summary = $("#billNegSummary");
+    if (!list || !summary) return;
+    const items = state.billNegotiations || [];
+    if (!items.length) {
+      list.innerHTML = '<li class="empty">No negotiations recorded yet.</li>';
+      summary.innerHTML = "";
+      return;
+    }
+    const totalMonthly = items.reduce((s, n) => s + (Number(n.savedMonthly) || 0), 0);
+    const totalAnnual = totalMonthly * 12;
+    summary.innerHTML = `
+      <div class="bill-neg-pill">
+        <strong>${fmt(totalMonthly)}/mo</strong> saved
+        <span class="card-sub">(${fmt(totalAnnual)}/yr · ${items.length} negotiation${items.length === 1 ? "" : "s"})</span>
+      </div>
+    `;
+    list.innerHTML = [...items]
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""))
+      .map((n) => {
+        const saved = Number(n.savedMonthly) || 0;
+        const cls = saved > 0 ? "positive" : saved < 0 ? "negative" : "";
+        const noteLine = n.note ? `<div class="list-item-sub">${escapeHtml(n.note)}</div>` : "";
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${escapeHtml(n.vendor)}</div>
+              <div class="list-item-sub">${n.date} · ${fmt(n.before)} → ${fmt(n.after)} <span class="${cls}">(${saved > 0 ? "−" : "+"}${fmt(Math.abs(saved))}/mo)</span></div>
+              ${noteLine}
+            </div>
+            <div class="list-item-actions">
+              <button data-action="del-billneg" data-id="${n.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      }).join("");
   }
 
   function renderPresetsManage() {
@@ -2676,6 +2732,13 @@
     if (filters.people.size > 0) {
       items = items.filter((e) => e.personId && filters.people.has(e.personId));
     }
+    if (filters.tags.size > 0) {
+      items = items.filter((e) => {
+        if (!Array.isArray(e.tags) || !e.tags.length) return false;
+        // Match if txn has at least one of the selected tags (lowercase compare)
+        return e.tags.some((t) => filters.tags.has(String(t).trim().toLowerCase()));
+      });
+    }
     if (filters.search) {
       const q = filters.search.toLowerCase();
       items = items.filter((e) => {
@@ -2804,6 +2867,34 @@
         return `<button class="chip ${on ? "" : "off"}" style="${bgStyle}" data-person-chip="${p.id}">${
           on ? "✓ " : ""
         }${escapeHtml(p.name)}</button>`;
+      })
+      .join("");
+  }
+
+  // Render tag filter chips. Aggregates all unique tags across transactions
+  // and renders one chip per tag, sorted by frequency.
+  function renderTagFilterChips() {
+    const chips = $("#filterTagChips");
+    if (!chips) return;
+    const tagCounts = {};
+    state.expenses.forEach((e) => {
+      (e.tags || []).forEach((t) => {
+        const key = String(t).trim().toLowerCase();
+        if (!key) return;
+        tagCounts[key] = (tagCounts[key] || 0) + 1;
+      });
+    });
+    const tagList = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
+    if (!tagList.length) {
+      chips.innerHTML = '<span class="empty-chip">Tag transactions to filter</span>';
+      return;
+    }
+    chips.innerHTML = tagList
+      .map(([tag, count]) => {
+        const on = filters.tags.has(tag);
+        return `<button class="chip ${on ? "" : "off"}" data-tag-chip="${escapeHtml(tag)}">${
+          on ? "✓ " : ""
+        }${escapeHtml(tag)} <span class="chip-count">${count}</span></button>`;
       })
       .join("");
   }
@@ -7522,6 +7613,7 @@
       const dayOfMonth = parseInt($("#recDay").value, 10);
       const type = $("#recType").value;
       const categoryId = $("#recCategory").value || null;
+      const goalId = $("#recGoal").value || null;
       if (!desc || isNaN(amount) || isNaN(dayOfMonth)) return;
       if (dayOfMonth < 1 || dayOfMonth > 31) {
         showToast("Day must be between 1 and 31");
@@ -7533,6 +7625,7 @@
         desc,
         amount,
         categoryId,
+        goalId,
         dayOfMonth,
         active: true,
         lastRunMonth: null,
@@ -7565,6 +7658,36 @@
     $("#cardFilter")?.addEventListener("change", (e) => {
       cardListFilters.filter = e.target.value;
       renderCardList();
+    });
+
+    // Bill negotiation tracker
+    if ($("#billNegDate")) $("#billNegDate").value = todayStr();
+    $("#billNegForm")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const vendor = $("#billNegVendor").value.trim();
+      const before = parseFloat($("#billNegBefore").value);
+      const after = parseFloat($("#billNegAfter").value);
+      const date = $("#billNegDate").value || todayStr();
+      const note = $("#billNegNote").value.trim();
+      if (!vendor || isNaN(before) || isNaN(after)) return;
+      const savedMonthly = before - after;
+      state.billNegotiations.push(touchRecord({
+        id: uid(),
+        vendor,
+        before,
+        after,
+        savedMonthly,
+        date,
+        note,
+      }));
+      saveData();
+      e.target.reset();
+      $("#billNegDate").value = todayStr();
+      renderBillNegotiations();
+      const annual = (savedMonthly * 12).toFixed(0);
+      showToast(savedMonthly > 0
+        ? `Saved ${fmt(savedMonthly)}/mo (${fmt(annual)}/yr)`
+        : `Recorded ${vendor}`);
     });
     $("#cardModalClose").addEventListener("click", closeCardModal);
     $("#cardModal").addEventListener("click", (e) => {
@@ -7896,12 +8019,14 @@
       filters.end = "";
       filters.categories.clear();
       filters.people.clear();
+      filters.tags.clear();
       filters.search = "";
       $("#filterStart").value = "";
       $("#filterEnd").value = "";
       $("#txnSearch").value = "";
       renderFilterChips();
       renderPersonFilterChips();
+      renderTagFilterChips();
       renderTransactions();
     });
 
@@ -8007,6 +8132,15 @@
         renderTransactions();
         return;
       }
+      const tchip = e.target.closest("[data-tag-chip]");
+      if (tchip) {
+        const tag = tchip.dataset.tagChip;
+        if (filters.tags.has(tag)) filters.tags.delete(tag);
+        else filters.tags.add(tag);
+        renderTagFilterChips();
+        renderTransactions();
+        return;
+      }
 
       const btn = e.target.closest("[data-action]");
       if (!btn) return;
@@ -8107,6 +8241,13 @@
           state.presets = state.presets.filter((p) => p.id !== id);
           saveData();
           renderPresetsManage();
+        }
+      } else if (action === "del-billneg") {
+        if (confirm("Delete this negotiation record?")) {
+          tombstoneRecord("billNegotiations", id);
+          state.billNegotiations = state.billNegotiations.filter((n) => n.id !== id);
+          saveData();
+          renderBillNegotiations();
         }
       } else if (action === "preset-fav") {
         const p = state.presets.find((x) => x.id === id);
@@ -9071,6 +9212,7 @@
     "categories", "expenses", "goals", "presets", "recurring",
     "cards", "creditScores", "accounts", "people",
     "creditInquiries", "negativeItems", "limitIncreases", "creditGoals",
+    "billNegotiations",
   ];
   // Date-keyed time series — keep newest value per date
   const DATE_SERIES_COLLECTIONS = ["netWorthHistory", "utilHistory"];

@@ -538,6 +538,11 @@ label {
 }
 .chip.off { background: var(--card-soft); color: var(--text-dim); border: 1px solid var(--border); }
 .chip:hover { opacity: 0.85; }
+.chip-count {
+  font-size: 0.7rem;
+  opacity: 0.7;
+  margin-left: 0.25rem;
+}
 .empty-chip { color: var(--text-dim); font-size: 0.85rem; font-style: italic; }
 
 .txn-main { background: var(--card); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow-sm); }
@@ -2117,6 +2122,20 @@ input[type="color"] {
   color: var(--text-dim);
 }
 .flow-vendor-more { color: var(--text-dim); font-style: italic; }
+
+/* Bill negotiation summary pill */
+.bill-neg-summary { margin-top: 0.85rem; }
+.bill-neg-pill {
+  background: rgba(34, 197, 94, 0.15);
+  color: var(--success);
+  padding: 0.6rem 0.85rem;
+  border-radius: var(--radius-sm);
+  font-size: 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
 
 /* ================ Smart insights ================ */
 .insights-card {
