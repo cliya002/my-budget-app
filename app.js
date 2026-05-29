@@ -1093,6 +1093,22 @@
         projection = `<div class="goal-projection">📅 Need <strong>${fmt(needed)}</strong>/mo to hit ${g.date}</div>`;
       }
 
+      // Suggested next contribution: if there's a date, use date-based; otherwise avg
+      let suggestedAmt = 0;
+      if (g.date && remaining > 0) {
+        const targetDate = new Date(g.date);
+        const monthsLeft = Math.max(1, Math.round((targetDate - new Date()) / (30.44 * 24 * 60 * 60 * 1000)));
+        suggestedAmt = remaining / monthsLeft;
+      } else if (avgPerMonth > 0) {
+        suggestedAmt = avgPerMonth;
+      } else if (remaining > 0) {
+        // Default: round to nearest $25
+        suggestedAmt = Math.max(25, Math.round(remaining / 24 / 25) * 25);
+      }
+      const suggestedHtml = suggestedAmt > 0
+        ? `<button class="btn-secondary goal-suggest" data-action="suggest-goal-amount" data-id="${g.id}" data-amt="${suggestedAmt.toFixed(2)}" title="Use suggested amount">💡 ${fmt(suggestedAmt)}</button>`
+        : "";
+
       const dateStr = g.date ? `Target: ${g.date}` : "No deadline";
       return `
         <div class="goal-card">
@@ -1110,6 +1126,7 @@
           <div class="goal-actions" style="margin-top:0.6rem">
             <input type="number" placeholder="Add amount" step="0.01" min="0" data-goal-input="${g.id}" />
             <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
+            ${suggestedHtml}
           </div>
         </div>`;
     }).join("");
@@ -1193,19 +1210,50 @@
     if (!state.recurring.length) {
       list.innerHTML = '<li class="empty">No recurring transactions yet.</li>';
     } else {
-      list.innerHTML = state.recurring
+      // Sort: active first, then paused; alphabetical inside each group
+      const sorted = [...state.recurring].sort((a, b) => {
+        if (!!a.active !== !!b.active) return a.active ? -1 : 1;
+        return (a.desc || "").localeCompare(b.desc || "");
+      });
+      const m = currentMonth();
+      const totalActive = sorted.filter((r) => r.active).length;
+      const totalActiveAmount = sorted
+        .filter((r) => r.active && r.type === "expense")
+        .reduce((s, r) => s + Number(r.amount), 0);
+      const totalActiveIncome = sorted
+        .filter((r) => r.active && r.type === "income")
+        .reduce((s, r) => s + Number(r.amount), 0);
+
+      const summary = `
+        <li class="cat-summary-row">
+          <span><strong>${totalActive}</strong> active${totalActiveAmount > 0 ? ` · ${fmt(totalActiveAmount)}/mo expenses` : ""}${totalActiveIncome > 0 ? ` · ${fmt(totalActiveIncome)}/mo income` : ""}</span>
+          ${state.recurring.length - totalActive > 0 ? `<span class="card-sub">${state.recurring.length - totalActive} paused</span>` : ""}
+        </li>`;
+
+      const rowsHtml = sorted
         .map((r) => {
           const cat = state.categories.find((c) => c.id === r.categoryId);
           const catName = cat ? cat.name : (r.type === "income" ? "Income" : "—");
           const typeLabel = r.type === "income" ? "💰" : "💸";
-          const status = r.active ? "Active" : "Paused";
           const goal = r.goalId ? state.goals.find((g) => g.id === r.goalId) : null;
           const goalLabel = goal ? ` · 🎯 ${escapeHtml(goal.name)}` : "";
+          const pausedCls = r.active ? "" : "rec-paused";
+          const lastRun = r.lastRunMonth || "";
+          let staleTag = "";
+          if (r.active && lastRun) {
+            const monthsAgo = monthDiff(lastRun, m);
+            if (monthsAgo >= 3) {
+              staleTag = `<span class="rec-stale-tag">⚠ Stale · ${monthsAgo}mo</span>`;
+            }
+          }
+          const statusTag = r.active
+            ? (lastRun ? `<span class="rec-status-tag">Last ran ${lastRun}</span>` : `<span class="rec-status-tag">Pending</span>`)
+            : `<span class="rec-status-tag rec-status-paused">Paused</span>`;
           return `
-            <li class="list-item">
+            <li class="list-item ${pausedCls}">
               <div class="list-item-main">
-                <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)}</div>
-                <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)}${goalLabel} · ${status}</div>
+                <div class="list-item-title">${typeLabel} ${escapeHtml(r.desc)} ${staleTag}</div>
+                <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)}${goalLabel} · ${statusTag}</div>
               </div>
               <div class="list-item-actions">
                 <button data-action="edit-rec" data-id="${r.id}" title="Edit">✏️</button>
@@ -1215,10 +1263,25 @@
             </li>`;
         })
         .join("");
+
+      const stalePaused = sorted.filter((r) => !r.active && r.lastRunMonth && monthDiff(r.lastRunMonth, m) >= 3);
+      const cleanupHtml = stalePaused.length > 0
+        ? `<li class="rec-cleanup-row"><button class="link" data-action="cleanup-stale-rec">🧹 Delete ${stalePaused.length} stale paused rule${stalePaused.length === 1 ? "" : "s"}</button></li>`
+        : "";
+
+      list.innerHTML = summary + rowsHtml + cleanupHtml;
     }
 
     // Subscription suggestions
     renderSubscriptionSuggestions();
+  }
+
+  // Months between two YYYY-MM strings (positive = later)
+  function monthDiff(from, to) {
+    if (!from || !to) return 0;
+    const [fy, fm] = from.split("-").map(Number);
+    const [ty, tm] = to.split("-").map(Number);
+    return (ty - fy) * 12 + (tm - fm);
   }
 
   /* ---------- Accounts ---------- */
@@ -9893,6 +9956,18 @@
           saveData();
           renderRecurringList();
         }
+      } else if (action === "cleanup-stale-rec") {
+        // Delete all paused rules whose last run is 3+ months ago
+        const m = currentMonth();
+        const stale = state.recurring.filter((r) => !r.active && r.lastRunMonth && monthDiff(r.lastRunMonth, m) >= 3);
+        if (!stale.length) return;
+        if (!confirm(`Delete ${stale.length} stale paused rule${stale.length === 1 ? "" : "s"}? Existing transactions stay.`)) return;
+        stale.forEach((r) => tombstoneRecord("recurring", r.id));
+        const ids = new Set(stale.map((r) => r.id));
+        state.recurring = state.recurring.filter((r) => !ids.has(r.id));
+        saveData();
+        renderRecurringList();
+        showToast(`Removed ${stale.length} stale rule${stale.length === 1 ? "" : "s"}`);
       } else if (action === "edit-card") {
         const card = state.cards.find((c) => c.id === id);
         if (card) openCardModal(card);
@@ -10084,6 +10159,14 @@
         saveData();
         renderAll();
         showToast("Savings updated");
+      } else if (action === "suggest-goal-amount") {
+        // Quick-fill the goal input with the suggested amount
+        const amt = btn.dataset.amt;
+        const input = document.querySelector(`[data-goal-input="${id}"]`);
+        if (input && amt) {
+          input.value = amt;
+          input.focus();
+        }
       }
     });
 

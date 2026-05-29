@@ -3462,3 +3462,47 @@ input[type="color"] {
 }
 .acc-monthly .positive { color: #16a34a; font-weight: 600; }
 .acc-monthly .negative { color: #dc2626; font-weight: 600; }
+
+
+/* Recurring rule rows: paused vs active styling + status tags */
+.list-item.rec-paused { opacity: 0.55; }
+.rec-status-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(91, 63, 184, 0.1);
+  color: var(--accent, #5b3fb8);
+  font-weight: 600;
+  vertical-align: middle;
+}
+.rec-status-tag.rec-status-paused {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--muted);
+}
+.rec-stale-tag {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.18);
+  color: #b45309;
+  font-weight: 600;
+  margin-left: 0.4rem;
+}
+.rec-cleanup-row {
+  text-align: center;
+  padding: 0.6rem;
+  list-style: none;
+}
+.rec-cleanup-row .link {
+  color: var(--accent, #5b3fb8);
+  font-size: 0.85rem;
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0.3rem 0.6rem;
+}
+[data-theme="dark"] .rec-status-tag.rec-status-paused {
+  background: rgba(255, 255, 255, 0.08);
+}
