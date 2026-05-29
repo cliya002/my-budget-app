@@ -6910,7 +6910,18 @@
       return makeEmptyPaystubResult();
     }
 
-    const lines = String(rawText).split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
+    // Normalize the input:
+    // - Convert Unicode minus (U+2212), en-dash, em-dash to ASCII hyphen
+    // - Convert non-breaking spaces to regular spaces
+    // - Insert a space between glued label-amount pairs like "Net Pay$1,902.12"
+    //   or "Federal Income Tax-$1,746.05"
+    let cleaned = String(rawText)
+      .replace(/[\u2212\u2013\u2014]/g, "-") // unicode minus, en-dash, em-dash → "-"
+      .replace(/\u00a0/g, " ") // nbsp → space
+      .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2") // "TaxX" or "Tax$" or "Tax-$" → space before amount
+      .replace(/\$\s+/g, "$"); // "$ 1,234.56" → "$1,234.56"
+
+    const lines = cleaned.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
     const text = lines.join(" ");
     const result = makeEmptyPaystubResult();
 
@@ -6925,11 +6936,22 @@
       }).filter((n) => n !== null);
     }
 
+    // For lines that may include hours/units before the dollar amount (e.g. "Gross 173.33 Units $10,608.33"),
+    // prefer amounts that have a $ prefix.
+    function moneyAmountsIn(line) {
+      const dollared = String(line || "").match(/\-?\$\s*[\d]{1,3}(?:,\d{3})*\.\d{2}\*?/g);
+      if (dollared && dollared.length) {
+        return dollared.map((m) => Math.abs(Number(m.replace(/[\$,\s\*]/g, "")))).filter((n) => !isNaN(n));
+      }
+      // Fall back to any decimal-2 number, but skip values < 1 to avoid "5.00*" footnote markers in odd cases
+      return amountsIn(line);
+    }
+
     // Find the FIRST amount on a line that contains the label
     function findOnLine(labelRegex) {
       for (const line of lines) {
         if (labelRegex.test(line)) {
-          const amts = amountsIn(line);
+          const amts = moneyAmountsIn(line);
           if (amts.length) return { value: amts[0], ytd: amts[1] || null };
         }
       }
@@ -6965,10 +6987,18 @@
       }
     }
     if (!result.date && result.payPeriodEnd) result.date = result.payPeriodEnd;
+    // Fallback: long-form date like "May 29, 2026" (often top of ADP web view)
+    if (!result.date) {
+      const longDate = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i);
+      if (longDate) {
+        const d = new Date(`${longDate[1]} ${longDate[2]}, ${longDate[3]}`);
+        if (!isNaN(d)) result.date = d.toISOString().slice(0, 10);
+      }
+    }
 
     // --- Gross + YTD
     {
-      const r = findOnLine(/Gross\s*Pay/i);
+      const r = findOnLine(/Gross\s*Pay|Gross\b/i);
       result.gross = r.value;
       result.ytdGross = r.ytd;
       if (result.gross === null) {
@@ -6976,15 +7006,25 @@
         result.gross = r2.value;
         result.ytdGross = r2.ytd;
       }
+      // ADP web view: "Gross 173.33 Units $10,608.33" — capture hours from "X Units"
+      for (const line of lines) {
+        if (/Gross/i.test(line)) {
+          const u = line.match(/(\d{1,3}(?:\.\d{1,2})?)\s*Units?/i);
+          if (u) {
+            result.hours = Number(u[1]);
+            break;
+          }
+        }
+      }
     }
 
-    // --- Net Pay (single amount usually)
+    // --- Net Pay (single amount usually) — also "Take Home" on ADP web view
     {
-      const r = findOnLine(/Net\s*Pay/i);
+      const r = findOnLine(/Net\s*Pay|Take[\s\-]?Home/i);
       result.net = r.value;
       result.ytdNet = r.ytd;
       if (result.net === null) {
-        const r2 = findOnLine(/Net\s*(?:Check|Wages|Take[\s\-]?Home)/i);
+        const r2 = findOnLine(/Net\s*(?:Check|Wages)/i);
         result.net = r2.value;
       }
     }
@@ -8374,14 +8414,7 @@
       savePaycheck();
     });
 
-    // Paystub upload
-    $("#paystubUploadBtn").addEventListener("click", () => $("#paystubFile").click());
-    $("#paystubFile").addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (file) handlePaystubUpload(file);
-      e.target.value = ""; // allow re-uploading same file
-    });
-    // Paste-text fallback
+    // Paystub paste-to-fill
     $("#pastePaystubBtn")?.addEventListener("click", () => {
       const box = $("#pastePaystubBox");
       if (box) box.hidden = !box.hidden;
