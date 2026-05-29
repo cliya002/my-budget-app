@@ -3209,3 +3209,14 @@ input[type="color"] {
 /* Dark mode tweak */
 [data-theme="dark"] .paystub-row:hover { background: rgba(255, 255, 255, 0.04); }
 [data-theme="dark"] .paystub-toggle { background: rgba(255, 255, 255, 0.08); }
+
+
+.app-version-top {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.2rem 0.5rem;
+  background: rgba(91, 63, 184, 0.15);
+  color: var(--accent, #5b3fb8);
+  border-radius: 999px;
+  margin-right: 0.5rem;
+}

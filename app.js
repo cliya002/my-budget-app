@@ -12033,6 +12033,8 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
       const ver = m ? m[1] : "?";
       const pill = document.getElementById("appVersionPill");
       if (pill) pill.textContent = "v" + ver;
+      const top = document.getElementById("appVersionTopPill");
+      if (top) top.textContent = "v" + ver;
     } catch (e) { /* ignore */ }
   });
 })();

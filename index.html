@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=90" />
+  <link rel="stylesheet" href="styles.css?v=91" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -55,6 +55,7 @@
         <span>Pocket Budget</span>
       </div>
       <span id="syncIndicator" class="sync-indicator" title="Sync status" hidden></span>
+      <span id="appVersionTopPill" class="app-version-top" title="App version">v—</span>
       <button id="lockNowBtn" class="icon-btn" aria-label="Lock">🔒</button>
     </div>
 
@@ -2149,11 +2150,21 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=90"></script>
+  <script src="app.js?v=91"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("sw.js").catch((err) =>
+        navigator.serviceWorker.register("sw.js").then((reg) => {
+          // Force update check on every page load
+          reg.update().catch(() => {});
+          // When a new SW takes over, reload the page so it serves fresh assets
+          let refreshing = false;
+          navigator.serviceWorker.addEventListener("controllerchange", () => {
+            if (refreshing) return;
+            refreshing = true;
+            window.location.reload();
+          });
+        }).catch((err) =>
           console.warn("SW registration failed:", err)
         );
       });
