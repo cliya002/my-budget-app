@@ -83,6 +83,7 @@
     sort: "date-desc",      // 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'
     groupByDay: true,
     hideTransfers: false,
+    eventId: "",            // filter by event (empty = all)
   };
 
   // Bulk-select & undo state
@@ -1016,6 +1017,7 @@
     renderIncomeSourcesManage();
     renderEventsTab();
     populateEventSelect();
+    populateEventFilterSelect();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
     renderTopbarSpent();
@@ -1414,6 +1416,27 @@
         const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
         return `<option value="${ev.id}">${tag} ${escapeHtml(ev.icon || "")} ${escapeHtml(ev.name)}</option>`;
       }).join("");
+  }
+
+  // Populate the Transactions filter dropdown — same sort, plus the "All events" option
+  function populateEventFilterSelect() {
+    const sel = $("#filterEvent");
+    if (!sel) return;
+    const cur = filters.eventId || "";
+    const today = todayStr();
+    const sorted = [...state.events].sort((a, b) => {
+      const ax = (a.endDate || "9999") < today ? 1 : 0;
+      const bx = (b.endDate || "9999") < today ? 1 : 0;
+      if (ax !== bx) return ax - bx;
+      return (a.startDate || "").localeCompare(b.startDate || "");
+    });
+    sel.innerHTML = '<option value="">All events</option>' +
+      sorted.map((ev) => {
+        const status = eventStatus(ev);
+        const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
+        return `<option value="${ev.id}">${tag} ${escapeHtml(ev.name)}</option>`;
+      }).join("");
+    sel.value = cur;
   }
 
   /* ---------- Event modal ---------- */
@@ -3378,6 +3401,62 @@
     renderSmartInsights();
     renderDashSyncCard();
     renderToday();
+    renderUpcomingEvent();
+  }
+
+  // Show the next upcoming/active event on the dashboard.
+  function renderUpcomingEvent() {
+    const card = document.getElementById("upcomingEventCard");
+    const body = document.getElementById("upcomingEventBody");
+    if (!card || !body) return;
+    if (!state.events.length) { card.hidden = true; return; }
+
+    const today = todayStr();
+    // Pick first event that's currently active OR upcoming (not completed)
+    const candidates = state.events
+      .filter((ev) => eventStatus(ev) !== "completed")
+      .sort((a, b) => (a.startDate || "9999").localeCompare(b.startDate || "9999"));
+    if (!candidates.length) { card.hidden = true; return; }
+
+    const ev = candidates[0];
+    const status = eventStatus(ev);
+    const spent = eventSpentTotal(ev.id);
+    const budget = Number(ev.budget) || 0;
+    const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+    let cls = "success";
+    if (pct >= 100) cls = "danger";
+    else if (pct >= 80) cls = "warning";
+
+    let timing = "";
+    if (status === "planning" && ev.startDate) {
+      const days = Math.ceil((new Date(ev.startDate) - new Date(today)) / (24 * 60 * 60 * 1000));
+      timing = days > 1 ? `Starts in ${days} days` : days === 1 ? "Starts tomorrow" : "Starts today";
+    } else if (status === "active") {
+      const end = ev.endDate ? new Date(ev.endDate) : null;
+      if (end) {
+        const days = Math.ceil((end - new Date(today)) / (24 * 60 * 60 * 1000));
+        timing = days > 1 ? `${days} days left` : days === 1 ? "Ends tomorrow" : "Ends today";
+      } else {
+        timing = "Active";
+      }
+    }
+
+    card.hidden = false;
+    body.innerHTML = `
+      <div class="upcoming-event-row">
+        <div>
+          <div class="upcoming-event-title">${ev.icon || "🌴"} ${escapeHtml(ev.name)}</div>
+          <div class="card-sub">${timing}${ev.startDate ? ` · ${ev.startDate}${ev.endDate ? ` → ${ev.endDate}` : ""}` : ""}</div>
+        </div>
+        <button class="btn-secondary" data-stat-jump="events" style="white-space:nowrap">Open</button>
+      </div>
+      ${budget > 0 ? `
+        <div class="upcoming-event-bar">
+          <div><strong>${fmt(spent)}</strong> of ${fmt(budget)} <span class="card-sub">(${pct.toFixed(0)}%)</span></div>
+          <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct}%"></div></div>
+        </div>
+      ` : `<div class="card-sub" style="margin-top:0.4rem">${fmt(spent)} spent · no budget set</div>`}
+    `;
   }
 
   // 7-day spending mini-sparkline rendered into the Spent stat card
@@ -3668,6 +3747,10 @@
     const personHtml = person
       ? `<div class="txn-person" style="color: ${person.color || "var(--primary)"}">→ ${escapeHtml(person.name)}</div>`
       : "";
+    const event = exp.eventId ? state.events.find((ev) => ev.id === exp.eventId) : null;
+    const eventHtml = event
+      ? `<div class="txn-event">${event.icon || "🌴"} ${escapeHtml(event.name)}</div>`
+      : "";
     return `
       <li class="txn-item ${isSelected ? "selected" : ""} ${isNew ? "newly-synced" : ""}" data-txn-row="${exp.id}">
         <input type="checkbox" class="txn-check" data-action="select-txn" data-id="${exp.id}" ${isSelected ? "checked" : ""} aria-label="Select transaction" />
@@ -3681,6 +3764,7 @@
           <div class="txn-name">${escapeHtml(exp.desc)}</div>
           <div class="txn-cat">${escapeHtml(catName)}</div>
           ${personHtml}
+          ${eventHtml}
           ${tagsHtml}
         </div>
         <div class="txn-right">
@@ -3699,6 +3783,9 @@
 
     if (filters.hideTransfers) {
       items = items.filter((e) => e.type !== "transfer-in" && e.type !== "transfer-out");
+    }
+    if (filters.eventId) {
+      items = items.filter((e) => e.eventId === filters.eventId);
     }
 
     if (filters.start) items = items.filter((e) => e.date >= filters.start);
@@ -10082,10 +10169,12 @@
       filters.tags.clear();
       filters.search = "";
       filters.hideTransfers = false;
+      filters.eventId = "";
       $("#filterStart").value = "";
       $("#filterEnd").value = "";
       $("#txnSearch").value = "";
       const ht = $("#hideTransfersToggle"); if (ht) ht.checked = false;
+      const fe = $("#filterEvent"); if (fe) fe.value = "";
       renderFilterChips();
       renderPersonFilterChips();
       renderTagFilterChips();
@@ -10103,6 +10192,10 @@
     });
     $("#hideTransfersToggle")?.addEventListener("change", (e) => {
       filters.hideTransfers = e.target.checked;
+      renderTransactions();
+    });
+    $("#filterEvent")?.addEventListener("change", (e) => {
+      filters.eventId = e.target.value;
       renderTransactions();
     });
 

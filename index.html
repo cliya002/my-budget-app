@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=115" />
+  <link rel="stylesheet" href="styles.css?v=116" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -139,6 +139,11 @@
           <div class="card today-card" id="todayCard">
             <div class="card-title">📅 Today</div>
             <div id="todaySummary"></div>
+          </div>
+
+          <div class="card upcoming-event-card" id="upcomingEventCard" hidden>
+            <div class="card-title">🌴 Upcoming Event</div>
+            <div id="upcomingEventBody"></div>
           </div>
 
           <div class="card insights-card">
@@ -537,6 +542,13 @@
                 <div id="filterTagChips" class="chip-row">
                   <span class="empty-chip">Tag transactions to filter</span>
                 </div>
+              </div>
+
+              <div class="filter-group">
+                <div class="filter-label">Event</div>
+                <select id="filterEvent" class="block">
+                  <option value="">All events</option>
+                </select>
               </div>
 
               <button id="clearFilters" class="link">Clear filters</button>
@@ -2178,7 +2190,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=115"></script>
+  <script src="app.js?v=116"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
