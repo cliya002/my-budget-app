@@ -11867,5 +11867,13 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     initKeyboardShortcuts();
     initSwipeGestures();
     initGlobalSearch();
+    // Set the version pill from the script tag's ?v= param
+    try {
+      const myScript = document.querySelector('script[src*="app.js"]');
+      const m = myScript?.src.match(/\?v=(\d+)/);
+      const ver = m ? m[1] : "?";
+      const pill = document.getElementById("appVersionPill");
+      if (pill) pill.textContent = "v" + ver;
+    } catch (e) { /* ignore */ }
   });
 })();
