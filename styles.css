@@ -2922,3 +2922,142 @@ input[type="color"] {
 }
 
 .sync-card-status.behind { color: var(--warning); }
+
+
+/* ---------- Credit Pay Planning ---------- */
+.pay-plan-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+.pay-plan-stat {
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem 0.75rem;
+}
+.pay-plan-stat .stat-label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.15rem;
+}
+.pay-plan-stat .stat-value {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+.pay-plan-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.pay-plan-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.pp-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.pp-row-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.pp-stmt {
+  font-size: 0.7rem;
+  font-weight: 500;
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
+.pp-row-sub {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.25rem;
+}
+.pay-plan-row .progress-bar {
+  height: 5px;
+}
+
+/* Pay Cards Modal */
+.pay-modal-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem;
+  margin-bottom: 0.85rem;
+}
+.pay-modal-summary .stat-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.pay-modal-summary .stat-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.pay-strategy-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.pay-strategy-row button {
+  font-size: 0.78rem;
+  padding: 0.45rem 0.7rem;
+  border-radius: 8px;
+}
+.pay-strategy-row button.active {
+  background: var(--accent, #5b3fb8);
+  color: #fff;
+  border-color: var(--accent, #5b3fb8);
+}
+.pay-card-list {
+  list-style: none;
+  margin: 0.6rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.pay-card-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.pcr-info { flex: 1; min-width: 0; }
+.pcr-name { font-weight: 600; font-size: 0.92rem; }
+.pcr-sub { font-size: 0.75rem; color: var(--muted); }
+.pcr-amount {
+  width: 110px;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: right;
+  background: var(--bg);
+  color: var(--text);
+}
+
+@media (max-width: 600px) {
+  .pay-plan-summary,
+  .pay-modal-summary {
+    grid-template-columns: 1fr;
+  }
+  .pcr-amount { width: 90px; }
+}

@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=76" />
+  <link rel="stylesheet" href="styles.css?v=77" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -177,6 +177,11 @@
               <div class="stat-label">Savings Rate</div>
               <div class="stat-value" id="statSavingsRate">0%</div>
               <div class="stat-meta" id="statSavingsRateHint"></div>
+            </div>
+            <div class="stat-card stat-credit-paid">
+              <div class="stat-label">Credit Paid</div>
+              <div class="stat-value" id="statCreditPaid">$0</div>
+              <div class="stat-meta" id="statCreditPaidHint"></div>
             </div>
           </div>
 
@@ -634,6 +639,7 @@
               <span id="creditScorePill" class="month-pill">No score yet</span>
               <button id="importCreditBtn" class="btn-secondary">📄 Import Report</button>
               <button id="addScoreBtn" class="btn-secondary">+ Log Score</button>
+              <button id="payCardsBtn" class="btn-secondary">💸 Pay Cards</button>
               <button id="addCardBtn" class="btn-primary">+ Add Card</button>
             </div>
           </div>
@@ -829,6 +835,21 @@
             <ul id="cardList" class="list">
               <li class="empty">No cards yet. Tap <strong>+ Add Card</strong>.</li>
             </ul>
+          </div>
+
+          <!-- Pay Planning -->
+          <div class="card" id="payPlanCard">
+            <div class="card-title">Pay Planning</div>
+            <p class="card-sub">Pay your cards from checking or savings. Posts a transfer transaction to both accounts.</p>
+            <div id="payPlanSummary" class="pay-plan-summary">
+              <div class="pay-plan-stat"><div class="stat-label">Total card debt</div><div class="stat-value" id="ppDebt">$0</div></div>
+              <div class="pay-plan-stat"><div class="stat-label">Liquid funds</div><div class="stat-value" id="ppLiquid">$0</div></div>
+              <div class="pay-plan-stat"><div class="stat-label">Paid this month</div><div class="stat-value" id="ppPaidMonth">$0</div></div>
+            </div>
+            <div id="payPlanRows" class="pay-plan-rows">
+              <p class="empty">Add cards with balances to see suggestions.</p>
+            </div>
+            <button id="payPlanOpen" class="btn-primary block" style="margin-top:0.6rem">💸 Plan & Pay Cards</button>
           </div>
 
           <div class="card">
@@ -1659,6 +1680,47 @@
     </div>
   </div>
 
+  <!-- Pay Cards Modal -->
+  <div id="payCardModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>Plan & Pay Cards</h2>
+        <button class="modal-close" id="payCardModalClose">×</button>
+      </div>
+      <div class="pay-modal-summary">
+        <div><div class="stat-label">Total debt</div><div class="stat-value" id="pmDebt">$0</div></div>
+        <div><div class="stat-label">Liquid funds</div><div class="stat-value" id="pmLiquid">$0</div></div>
+        <div><div class="stat-label">Plan total</div><div class="stat-value" id="pmPlanTotal">$0</div></div>
+      </div>
+      <div class="form-row two-col">
+        <div>
+          <label>Pay from</label>
+          <select id="pmSource"></select>
+        </div>
+        <div>
+          <label>Keep available</label>
+          <input type="number" id="pmKeep" step="1" min="0" placeholder="0" />
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Strategy</label>
+        <div class="pay-strategy-row">
+          <button type="button" class="btn-secondary" data-strategy="avalanche">Avalanche (highest APR)</button>
+          <button type="button" class="btn-secondary" data-strategy="snowball">Snowball (smallest debt)</button>
+          <button type="button" class="btn-secondary" data-strategy="statement">Pay statement balances</button>
+          <button type="button" class="btn-secondary" data-strategy="full">Pay in full</button>
+          <button type="button" class="btn-secondary" data-strategy="clear">Clear all</button>
+        </div>
+      </div>
+      <div class="form-row">
+        <label>Pay date</label>
+        <input type="date" id="pmDate" />
+      </div>
+      <ul id="pmCardList" class="pay-card-list"></ul>
+      <button id="pmApply" class="btn-primary block">Apply Plan</button>
+    </div>
+  </div>
+
   <!-- Import Credit Report Modal -->
   <div id="importCreditModal" class="modal">
     <div class="modal-card import-modal">
@@ -1941,7 +2003,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=76"></script>
+  <script src="app.js?v=77"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -296,6 +296,36 @@
     if (!Array.isArray(state.creditGoals)) state.creditGoals = [];
     if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
     if (!Array.isArray(state.billNegotiations)) state.billNegotiations = [];
+
+    // Migration: each credit card gets a paired account in Balances so debt is visible
+    // and pay-card transfers can post to it.
+    const palette = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444", "#10b981", "#3b82f6"];
+    state.cards.forEach((c) => {
+      if (c.accountId) {
+        // ensure the linked account still exists
+        const exists = state.accounts.find((a) => a.id === c.accountId);
+        if (exists) {
+          // Keep names in sync
+          if (exists.name !== c.name) { exists.name = c.name; touchRecord(exists); }
+          if (exists.cardId !== c.id) { exists.cardId = c.id; touchRecord(exists); }
+          return;
+        }
+        // Linked account was deleted — recreate
+        c.accountId = null;
+      }
+      const acc = touchRecord({
+        id: uid(),
+        name: c.name || "Credit Card",
+        type: "credit",
+        balance: -Math.abs(Number(c.balance) || 0),
+        color: palette[state.accounts.length % palette.length],
+        cardId: c.id,
+      });
+      state.accounts.push(acc);
+      c.accountId = acc.id;
+      touchRecord(c);
+    });
+
     if (typeof state.creditFreezes !== "object" || !state.creditFreezes) state.creditFreezes = {};
     if (typeof state.annualReports !== "object" || !state.annualReports) state.annualReports = {};
     if (typeof state.deletions !== "object" || !state.deletions) state.deletions = {};
@@ -2412,6 +2442,15 @@
           }
           return touchRecord({ ...it });
         });
+        // If this was a credit-payment, undo the card balance restore that delete did
+        const creditPay = lastDeleted.items.find((t) => t.kind === "credit-payment" && t.cardId);
+        if (creditPay) {
+          const card = state.cards.find((c) => c.id === creditPay.cardId);
+          if (card) {
+            card.balance = Math.max(0, (Number(card.balance) || 0) - Number(creditPay.amount || 0));
+            touchRecord(card);
+          }
+        }
         state.expenses.push(...restored);
         lastDeleted = null;
         saveData();
@@ -2500,6 +2539,27 @@
       rateHint.innerHTML = '<span class="negative">Low</span>';
     } else {
       rateHint.innerHTML = '<span class="negative">Spending more than earning</span>';
+    }
+
+    // Credit payments this month
+    const creditPaid = state.expenses
+      .filter((e) => e.type === "transfer-out" && e.kind === "credit-payment" && monthKey(e.date) === month)
+      .reduce((s, e) => s + Number(e.amount || 0), 0);
+    const creditPaidEl = $("#statCreditPaid");
+    if (creditPaidEl) creditPaidEl.textContent = fmt(creditPaid);
+    const creditPaidHint = $("#statCreditPaidHint");
+    if (creditPaidHint) {
+      const cardCount = state.cards.length;
+      if (!cardCount) {
+        creditPaidHint.textContent = "No cards tracked";
+      } else if (creditPaid === 0) {
+        creditPaidHint.innerHTML = `<a href="#" data-pay-cards="1" style="color:var(--accent, #5b3fb8)">Plan payment →</a>`;
+        const link = creditPaidHint.querySelector("[data-pay-cards]");
+        if (link) link.addEventListener("click", (ev) => { ev.preventDefault(); openPayCardModal(); });
+      } else {
+        const debt = totalCardBalance();
+        creditPaidHint.textContent = debt > 0 ? `${fmt(debt)} remaining` : "Cards paid off";
+      }
     }
 
     // Hide first-use hint once any transactions exist
@@ -3524,6 +3584,7 @@
     renderUtilTrendChart();
     renderScoreProjection();
     checkScoreMilestones();
+    renderPayPlanSummary();
   }
 
   function renderPayoffEmpty() {
@@ -4614,6 +4675,343 @@
       list.appendChild(summary);
     }
   }
+
+  /* ---------- Pay-card planning (credit cards <-> accounts) ---------- */
+
+  // Working state for the pay modal & summary card
+  const payCardPlanState = {
+    sourceId: null,
+    keep: 0,
+    strategy: "statement",
+    plan: {}, // { cardId: amount }
+    date: null,
+  };
+
+  // Liquid (cash-like) source accounts: anything that isn't a credit card
+  function liquidAccounts() {
+    return state.accounts.filter((a) => (a.type || "").toLowerCase() !== "credit" && !a.cardId);
+  }
+
+  function liquidTotal() {
+    return liquidAccounts().reduce((s, a) => s + accountBalance(a.id), 0);
+  }
+
+  // Sum of payments to credit cards this month (transfer-out + kind=credit-payment)
+  function creditPaymentsThisMonth() {
+    const m = currentMonth();
+    return state.expenses
+      .filter((e) => e.type === "transfer-out" && e.kind === "credit-payment" && monthKey(e.date) === m)
+      .reduce((s, e) => s + Number(e.amount || 0), 0);
+  }
+
+  // Render the summary card on the credit page
+  function renderPayPlanSummary() {
+    const debtEl = $("#ppDebt");
+    const liquidEl = $("#ppLiquid");
+    const paidEl = $("#ppPaidMonth");
+    const rows = $("#payPlanRows");
+    if (!debtEl || !liquidEl || !paidEl || !rows) return;
+
+    const debt = totalCardBalance();
+    const liquid = liquidTotal();
+    const paid = creditPaymentsThisMonth();
+
+    debtEl.textContent = fmt(debt);
+    liquidEl.textContent = fmt(liquid);
+    paidEl.textContent = fmt(paid);
+
+    if (!state.cards.length) {
+      rows.innerHTML = '<p class="empty">Add cards with balances to see suggestions.</p>';
+      return;
+    }
+
+    // Per-card row showing balance, suggested payment, util %, and a quick "pay" action
+    rows.innerHTML = state.cards
+      .filter((c) => Number(c.balance) > 0)
+      .sort((a, b) => Number(b.balance) - Number(a.balance))
+      .map((c) => {
+        const lim = Number(c.limit) || 0;
+        const bal = Number(c.balance) || 0;
+        const stmt = Number(c.statement) || 0;
+        const util = lim > 0 ? (bal / lim) * 100 : 0;
+        const minPay = Math.max(25, Math.round(bal * 0.02));
+        const utilCls = util >= 50 ? "danger" : util >= 30 ? "warning" : "success";
+        return `
+          <div class="pay-plan-row">
+            <div class="pp-row-main">
+              <div class="pp-row-name">${escapeHtml(c.name)} ${stmt > 0 ? `<span class="pp-stmt">stmt ${fmt(stmt)}</span>` : ""}</div>
+              <div class="pp-row-sub">${fmt(bal)} bal · ${util.toFixed(0)}% util · min ~${fmt(minPay)}</div>
+              <div class="progress-bar"><div class="progress-fill ${utilCls}" style="width:${Math.min(util, 100)}%"></div></div>
+            </div>
+            <button class="btn-secondary" data-action="quick-pay-card" data-id="${c.id}">Pay</button>
+          </div>`;
+      })
+      .join("") || '<p class="empty">No card balances to pay.</p>';
+  }
+
+  function openPayCardModal(prefillCardId) {
+    if (!state.cards.length) {
+      showToast("No credit cards to pay");
+      return;
+    }
+    const liquids = liquidAccounts();
+    if (!liquids.length) {
+      showToast("Add a checking or savings account first");
+      return;
+    }
+
+    // Default source: largest-balance liquid account
+    const defaultSource = liquids
+      .map((a) => ({ id: a.id, bal: accountBalance(a.id) }))
+      .sort((a, b) => b.bal - a.bal)[0];
+    payCardPlanState.sourceId = defaultSource.id;
+    payCardPlanState.keep = 0;
+    payCardPlanState.strategy = "statement";
+    payCardPlanState.plan = {};
+    payCardPlanState.date = todayStr();
+
+    // Populate source dropdown
+    const src = $("#pmSource");
+    if (src) {
+      src.innerHTML = liquids
+        .map((a) => `<option value="${a.id}">${escapeHtml(a.name)} (${fmt(accountBalance(a.id))})</option>`)
+        .join("");
+      src.value = payCardPlanState.sourceId;
+    }
+    $("#pmKeep").value = "";
+    $("#pmDate").value = payCardPlanState.date;
+
+    // If user clicked "Pay" on a single card, pre-fill plan with that card's statement
+    if (typeof prefillCardId === "string") {
+      const c = state.cards.find((x) => x.id === prefillCardId);
+      if (c) {
+        const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+        payCardPlanState.plan[c.id] = target;
+      }
+    } else {
+      // Default strategy: statement balances
+      applyStrategyToPlan();
+    }
+
+    // Highlight default strategy button
+    $$(".pay-strategy-row button[data-strategy]").forEach((b) => b.classList.remove("active"));
+    const def = document.querySelector('.pay-strategy-row button[data-strategy="statement"]');
+    if (def) def.classList.add("active");
+
+    renderPayCardPlanRows();
+    $("#payCardModal").classList.add("open");
+  }
+
+  function closePayCardModal() {
+    $("#payCardModal").classList.remove("open");
+  }
+
+  function applyStrategyToPlan() {
+    const cards = state.cards.filter((c) => Number(c.balance) > 0);
+    payCardPlanState.plan = {};
+    if (!cards.length) return;
+    const strat = payCardPlanState.strategy;
+
+    if (strat === "clear") return; // empty plan
+
+    if (strat === "full") {
+      cards.forEach((c) => { payCardPlanState.plan[c.id] = Number(c.balance) || 0; });
+      return;
+    }
+    if (strat === "statement") {
+      cards.forEach((c) => {
+        const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+        payCardPlanState.plan[c.id] = target;
+      });
+      return;
+    }
+
+    // Avalanche / Snowball: distribute available funds in priority order, paying minimums on the rest
+    const liquid = liquidTotal();
+    const keep = payCardPlanState.keep || 0;
+    const available = Math.max(0, liquid - keep);
+    const minPay = (c) => Math.max(25, Math.round((Number(c.balance) || 0) * 0.02));
+
+    let sorted = [...cards];
+    if (strat === "avalanche") sorted.sort((a, b) => (Number(b.apr) || 0) - (Number(a.apr) || 0));
+    else if (strat === "snowball") sorted.sort((a, b) => (Number(a.balance) || 0) - (Number(b.balance) || 0));
+
+    // First pass: minimums for everyone
+    let remaining = available;
+    sorted.forEach((c) => {
+      const m = Math.min(minPay(c), Number(c.balance) || 0);
+      const pay = Math.min(m, remaining);
+      payCardPlanState.plan[c.id] = pay;
+      remaining -= pay;
+    });
+    // Second pass: top up priority cards toward statement/full balance
+    for (const c of sorted) {
+      if (remaining <= 0) break;
+      const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+      const already = payCardPlanState.plan[c.id] || 0;
+      const room = Math.max(0, target - already);
+      const add = Math.min(room, remaining);
+      payCardPlanState.plan[c.id] = already + add;
+      remaining -= add;
+    }
+  }
+
+  function renderPayCardPlanRows() {
+    const list = $("#pmCardList");
+    if (!list) return;
+
+    const liquid = liquidTotal();
+    const planTotal = Object.values(payCardPlanState.plan).reduce((s, v) => s + (Number(v) || 0), 0);
+
+    $("#pmDebt").textContent = fmt(totalCardBalance());
+    $("#pmLiquid").textContent = fmt(liquid);
+    $("#pmPlanTotal").textContent = fmt(planTotal);
+
+    const cards = state.cards.filter((c) => Number(c.balance) > 0);
+    if (!cards.length) {
+      list.innerHTML = '<li class="empty">No card balances to pay.</li>';
+      return;
+    }
+
+    // Sort by current strategy
+    let sorted = [...cards];
+    if (payCardPlanState.strategy === "avalanche") sorted.sort((a, b) => (Number(b.apr) || 0) - (Number(a.apr) || 0));
+    else if (payCardPlanState.strategy === "snowball") sorted.sort((a, b) => (Number(a.balance) || 0) - (Number(b.balance) || 0));
+    else sorted.sort((a, b) => Number(b.balance) - Number(a.balance));
+
+    list.innerHTML = sorted
+      .map((c) => {
+        const bal = Number(c.balance) || 0;
+        const stmt = Number(c.statement) || 0;
+        const apr = c.apr ? `${c.apr}% APR · ` : "";
+        const planAmt = Number(payCardPlanState.plan[c.id] || 0);
+        return `
+          <li class="pay-card-row">
+            <div class="pcr-info">
+              <div class="pcr-name">${escapeHtml(c.name)}</div>
+              <div class="pcr-sub">${apr}bal ${fmt(bal)}${stmt > 0 ? ` · stmt ${fmt(stmt)}` : ""}</div>
+            </div>
+            <input type="number" class="pcr-amount" data-card-id="${c.id}" min="0" step="0.01" max="${bal}" value="${planAmt.toFixed(2)}" />
+          </li>`;
+      })
+      .join("");
+
+    // Wire amount changes
+    list.querySelectorAll(".pcr-amount").forEach((inp) => {
+      inp.addEventListener("input", (e) => {
+        const id = e.target.dataset.cardId;
+        const v = Math.max(0, Number(e.target.value) || 0);
+        payCardPlanState.plan[id] = v;
+        const total = Object.values(payCardPlanState.plan).reduce((s, x) => s + (Number(x) || 0), 0);
+        $("#pmPlanTotal").textContent = fmt(total);
+      });
+    });
+  }
+
+  // Make a single card payment: transfer from source liquid -> credit-card paired account
+  function executePayCard(cardId, amount, fromAccountId, date, transferGroupId) {
+    const card = state.cards.find((c) => c.id === cardId);
+    if (!card) return false;
+    const fromAcc = state.accounts.find((a) => a.id === fromAccountId);
+    if (!fromAcc) return false;
+
+    // Ensure card has a paired account
+    if (!card.accountId || !state.accounts.find((a) => a.id === card.accountId)) {
+      const palette = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444"];
+      const acc = touchRecord({
+        id: uid(),
+        name: card.name,
+        type: "credit",
+        balance: -Math.abs(Number(card.balance) || 0),
+        color: palette[state.accounts.length % palette.length],
+        cardId: card.id,
+      });
+      state.accounts.push(acc);
+      card.accountId = acc.id;
+      touchRecord(card);
+    }
+
+    const groupId = transferGroupId || uid();
+    const desc = `Payment: ${fromAcc.name} → ${card.name}`;
+    const dt = date || todayStr();
+
+    state.expenses.push(touchRecord({
+      id: uid(),
+      type: "transfer-out",
+      desc,
+      amount,
+      date: dt,
+      accountId: fromAccountId,
+      categoryId: null,
+      tags: ["transfer", "credit-payment"],
+      receipt: null,
+      transferGroupId: groupId,
+      kind: "credit-payment",
+      cardId: card.id,
+    }));
+    state.expenses.push(touchRecord({
+      id: uid(),
+      type: "transfer-in",
+      desc,
+      amount,
+      date: dt,
+      accountId: card.accountId,
+      categoryId: null,
+      tags: ["transfer", "credit-payment"],
+      receipt: null,
+      transferGroupId: groupId,
+      kind: "credit-payment",
+      cardId: card.id,
+    }));
+
+    // Reduce card.balance by the payment amount (don't go below zero)
+    const newBal = Math.max(0, (Number(card.balance) || 0) - amount);
+    card.balance = newBal;
+    touchRecord(card);
+    return true;
+  }
+
+  function applyPayCardPlan() {
+    const fromId = $("#pmSource")?.value;
+    const date = $("#pmDate")?.value || todayStr();
+    if (!fromId) {
+      showToast("Pick a source account");
+      return;
+    }
+    const entries = Object.entries(payCardPlanState.plan)
+      .map(([cardId, amt]) => [cardId, Number(amt) || 0])
+      .filter(([, amt]) => amt > 0);
+    if (!entries.length) {
+      showToast("No payments to apply");
+      return;
+    }
+
+    // Sanity: warn if plan exceeds liquid
+    const planTotal = entries.reduce((s, [, a]) => s + a, 0);
+    const liquid = liquidTotal();
+    const keep = Number($("#pmKeep")?.value) || 0;
+    if (planTotal > liquid - keep) {
+      const proceed = confirm(
+        `Plan total ${fmt(planTotal)} exceeds available cash ${fmt(Math.max(0, liquid - keep))}. Apply anyway?`
+      );
+      if (!proceed) return;
+    }
+
+    let applied = 0;
+    let total = 0;
+    entries.forEach(([cardId, amt]) => {
+      if (executePayCard(cardId, amt, fromId, date)) {
+        applied++;
+        total += amt;
+      }
+    });
+
+    saveData();
+    closePayCardModal();
+    renderAll();
+    showToast(`Applied ${applied} payment${applied === 1 ? "" : "s"} totaling ${fmt(total)}`);
+  }
+
 
   function renderScoreList() {
     const list = $("#scoreList");
@@ -7697,6 +8095,31 @@
     $("#addCardBtn").addEventListener("click", () => openCardModal(null));
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
     $("#importCreditBtn").addEventListener("click", openImportCreditModal);
+    $("#payCardsBtn")?.addEventListener("click", openPayCardModal);
+    $("#payPlanOpen")?.addEventListener("click", openPayCardModal);
+    $("#payCardModalClose")?.addEventListener("click", closePayCardModal);
+    $("#payCardModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "payCardModal") closePayCardModal();
+    });
+    $("#pmApply")?.addEventListener("click", applyPayCardPlan);
+    $("#pmKeep")?.addEventListener("input", () => {
+      // re-apply current strategy with new keep buffer
+      payCardPlanState.keep = Number($("#pmKeep").value) || 0;
+      renderPayCardPlanRows();
+    });
+    $("#pmSource")?.addEventListener("change", () => {
+      payCardPlanState.sourceId = $("#pmSource").value;
+      renderPayCardPlanRows();
+    });
+    $$(".pay-strategy-row button[data-strategy]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        $$(".pay-strategy-row button[data-strategy]").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        payCardPlanState.strategy = btn.dataset.strategy;
+        applyStrategyToPlan();
+        renderPayCardPlanRows();
+      });
+    });
 
     // Card list search & filter
     $("#cardSearch")?.addEventListener("input", (e) => {
@@ -7929,6 +8352,8 @@
         annualFee: parseFloat($("#cardAnnualFee").value) || 0,
         cashbackRate: parseFloat($("#cardCashback").value) || 0,
         signupBonus: parseFloat($("#cardBonus").value) || 0,
+        // Preserve existing accountId link if editing
+        accountId: oldCard?.accountId || null,
       };
       if (!card.name) return;
 
@@ -7944,6 +8369,46 @@
         }));
       }
 
+      // Auto-create or sync paired account so the card's debt shows up on Balances
+      if (!card.accountId) {
+        // Create a new account for this card with starting balance = -current debt
+        const palette = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444"];
+        const acc = touchRecord({
+          id: uid(),
+          name: card.name,
+          type: "credit",
+          balance: -Math.abs(Number(card.balance) || 0), // negative = debt
+          color: palette[state.accounts.length % palette.length],
+          cardId: card.id, // back-reference
+        });
+        state.accounts.push(acc);
+        card.accountId = acc.id;
+      } else {
+        // Sync paired account when name or balance changes. Recompute starting balance so
+        // accountBalance(account.id) = -current_card_balance after considering existing txns.
+        const acc = state.accounts.find((a) => a.id === card.accountId);
+        if (acc) {
+          let dirty = false;
+          if (acc.name !== card.name) { acc.name = card.name; dirty = true; }
+          // Compute current account txn delta and adjust starting balance to match new card balance
+          const txnDelta = state.expenses
+            .filter((e) => e.accountId === acc.id)
+            .reduce((s, t) => {
+              if (t.type === "income") return s + Number(t.amount);
+              if (t.type === "transfer-out") return s - Number(t.amount);
+              if (t.type === "transfer-in") return s + Number(t.amount);
+              return s - Number(t.amount);
+            }, 0);
+          const desiredAccBal = -Math.abs(Number(card.balance) || 0);
+          const newStarting = desiredAccBal - txnDelta;
+          if (Math.abs((Number(acc.balance) || 0) - newStarting) > 0.005) {
+            acc.balance = newStarting;
+            dirty = true;
+          }
+          if (dirty) touchRecord(acc);
+        }
+      }
+
       if (editId) {
         const idx = state.cards.findIndex((c) => c.id === editId);
         if (idx >= 0) state.cards[idx] = touchRecord(card);
@@ -7952,8 +8417,8 @@
       }
       saveData();
       closeCardModal();
-      renderCredit();
-      showToast(editId ? "Card updated" : "Card added");
+      renderAll();
+      showToast(editId ? "Card updated" : "Card added with paired account");
     });
 
     // Score form
@@ -8294,6 +8759,15 @@
             if (!proceed) return;
           }
           const allRemoved = [txn, ...linked];
+          // If this group is a credit-payment, restore the card balance before deleting
+          const creditPay = allRemoved.find((t) => t.kind === "credit-payment" && t.cardId);
+          if (creditPay) {
+            const card = state.cards.find((c) => c.id === creditPay.cardId);
+            if (card) {
+              card.balance = (Number(card.balance) || 0) + Number(creditPay.amount || 0);
+              touchRecord(card);
+            }
+          }
           allRemoved.forEach((t) => tombstoneRecord("expenses", t.id));
           const removeIds = new Set(allRemoved.map((t) => t.id));
           state.expenses = state.expenses.filter((x) => !removeIds.has(x.id));
@@ -8456,11 +8930,22 @@
         }
       } else if (action === "del-card") {
         if (confirm("Delete this card?")) {
+          const card = state.cards.find((c) => c.id === id);
           tombstoneRecord("cards", id);
           state.cards = state.cards.filter((c) => c.id !== id);
+          // Remove paired account if it was auto-created and has no transaction history
+          if (card?.accountId) {
+            const pairedHasTxns = state.expenses.some((e) => e.accountId === card.accountId);
+            if (!pairedHasTxns) {
+              tombstoneRecord("accounts", card.accountId);
+              state.accounts = state.accounts.filter((a) => a.id !== card.accountId);
+            }
+          }
           saveData();
-          renderCredit();
+          renderAll();
         }
+      } else if (action === "quick-pay-card") {
+        openPayCardModal(id);
       } else if (action === "del-score") {
         if (confirm("Delete this score entry?")) {
           tombstoneRecord("creditScores", id);
