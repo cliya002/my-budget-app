@@ -6435,9 +6435,11 @@
     const received = filterFamilyByPeriod(familyReceivedTransactions())
       .reduce((s, e) => s + Number(e.amount), 0);
     const net = total - received;
+    const txnCount = filterFamilyByPeriod(familyTransactions()).length
+      + filterFamilyByPeriod(familyReceivedTransactions()).length;
     const pillText = received > 0
-      ? `Sent ${fmt(total)} · Received ${fmt(received)} · Net ${net >= 0 ? "−" : "+"}${fmt(Math.abs(net))}`
-      : `Total sent: ${fmt(total)}`;
+      ? `Sent ${fmt(total)} · Received ${fmt(received)} · Net ${net >= 0 ? "−" : "+"}${fmt(Math.abs(net))} · ${txnCount} txn${txnCount === 1 ? "" : "s"}`
+      : `Total sent: ${fmt(total)} · ${txnCount} txn${txnCount === 1 ? "" : "s"}`;
     $("#familyTotalPill").textContent = pillText;
   }
 
@@ -6480,6 +6482,7 @@
             <div class="list-item-amount">${amountHtml}</div>
             <div class="list-item-actions">
               <button data-action="quick-send-person" data-id="${p.id}" title="Send money">💸</button>
+              <button data-action="quick-receive-person" data-id="${p.id}" title="Received from">💰</button>
               <button data-action="edit-person" data-id="${p.id}" title="Edit">✏️</button>
               <button data-action="del-person" data-id="${p.id}" title="Delete">🗑️</button>
             </div>
@@ -10110,6 +10113,17 @@
           desc: `Sent to ${p.name}`,
           personId: p.id,
           categoryId: familyCat ? familyCat.id : null,
+          date: todayStr(),
+        });
+      } else if (action === "quick-receive-person") {
+        // Open Add Transaction modal as INCOME pre-filled with this person
+        const p = state.people.find((x) => x.id === id);
+        if (!p) return;
+        openExpenseModal({
+          type: "income",
+          desc: `Received from ${p.name}`,
+          personId: p.id,
+          source: p.name,
           date: todayStr(),
         });
       } else if (action === "del-person") {
