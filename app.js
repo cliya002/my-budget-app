@@ -49,6 +49,7 @@
     annualReports: {},     // map: bureau -> { lastPulled: 'YYYY-MM-DD' }
     utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
     billNegotiations: [],  // each: { id, vendor, before, after, savedMonthly, date, note }
+    incomeSources: [],     // each: { id, name, employer, type, defaultAmount } — saved payers/employers
     deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
     mapTimestamps: {},     // map: collectionName -> { key: lastUpdatedAt } for map-style collections
     settings: {
@@ -296,6 +297,7 @@
     if (!Array.isArray(state.creditGoals)) state.creditGoals = [];
     if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
     if (!Array.isArray(state.billNegotiations)) state.billNegotiations = [];
+    if (!Array.isArray(state.incomeSources)) state.incomeSources = [];
 
     // Migration: each credit card gets a paired account in Balances so debt is visible
     // and pay-card transfers can post to it.
@@ -927,6 +929,7 @@
     renderPersonFilterChips();
     renderTagFilterChips();
     renderBillNegotiations();
+    renderIncomeSourcesManage();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
   }
@@ -2225,6 +2228,38 @@
             </div>
             <div class="list-item-actions">
               <button data-action="del-billneg" data-id="${n.id}" title="Delete">🗑️</button>
+            </div>
+          </li>`;
+      }).join("");
+  }
+
+  function renderIncomeSourcesManage() {
+    const list = $("#incomeSourceManageList");
+    if (!list) return;
+    const items = state.incomeSources || [];
+    if (!items.length) {
+      list.innerHTML = '<li class="empty">No saved sources yet. Add your employer or recurring payer above.</li>';
+      return;
+    }
+    const typeIcons = {
+      salary: "💼", hourly: "⏱️", freelance: "🧾", bonus: "🎁",
+      dividend: "📈", rental: "🏠", other: "💰",
+    };
+    list.innerHTML = items
+      .sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      .map((s) => {
+        const icon = typeIcons[s.type] || "💰";
+        const amt = Number(s.defaultAmount) > 0 ? ` · ${fmt(s.defaultAmount)}` : "";
+        const note = s.note ? ` · ${escapeHtml(s.note)}` : "";
+        return `
+          <li class="list-item">
+            <div class="list-item-main">
+              <div class="list-item-title">${icon} ${escapeHtml(s.name)}</div>
+              <div class="list-item-sub">${escapeHtml(s.type || "other")}${amt}${note}</div>
+            </div>
+            <div class="list-item-actions">
+              <button data-action="use-incsrc" data-id="${s.id}" title="Use in paycheck">💼</button>
+              <button data-action="del-incsrc" data-id="${s.id}" title="Delete">🗑️</button>
             </div>
           </li>`;
       }).join("");
@@ -6959,12 +6994,19 @@
     }
 
     // --- Employer
-    const companyKeywords = /(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings|Services\b)/;
-    for (const line of lines.slice(0, 20)) {
-      if (/^(Earnings\s*Statement|Pay\s*Stub|Pay\s*Statement|ADP|Deposited|Period|Pay\s*Date|ATTN)/i.test(line)) continue;
+    // Word boundaries are critical here — without them, "Inc" matches inside "Income"
+    // and we'd grab "Federal Income Tax" as the employer.
+    const companyKeywords = /\b(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings|Services)\b/;
+    const skipLineHints = /(Federal\s*Income\s*Tax|State\s*Income\s*Tax|Income\s*Tax|Pay\s*Stub|Pay\s*Statement|Earnings\s*Statement|^ADP\b|Deposited|Period\s*Beginning|Period\s*End|Pay\s*Date|^ATTN|Take\s*Home|Net\s*Pay|Gross\s*Pay)/i;
+    for (const line of lines.slice(0, 25)) {
+      if (skipLineHints.test(line)) continue;
       if (companyKeywords.test(line) && line.length < 100 && line.length > 4) {
-        result.employer = line.replace(/Pay\s*stub/i, "").replace(/ATTN:.*$/i, "").trim();
-        break;
+        // Strip ATTN: lines and trailing label noise
+        const cleaned = line.replace(/Pay\s*stub/i, "").replace(/ATTN:.*$/i, "").trim();
+        if (cleaned.length > 3) {
+          result.employer = cleaned;
+          break;
+        }
       }
     }
 
@@ -7353,6 +7395,17 @@
       }));
     });
 
+    // Auto-add employer to saved income sources if not already there
+    if (employer && !state.incomeSources.some((s) => (s.name || "").toLowerCase() === employer.toLowerCase())) {
+      state.incomeSources.push(touchRecord({
+        id: uid(),
+        name: employer,
+        type: "salary",
+        defaultAmount: gross,
+        note: "Auto-added from paycheck",
+      }));
+    }
+
     saveData();
     closePaycheckModal();
     renderAll();
@@ -7384,6 +7437,11 @@
     const list = $("#incomeSourceList");
     if (!list) return;
     const sources = new Set();
+    // Manually saved sources (from Settings)
+    (state.incomeSources || []).forEach((s) => {
+      if (s && s.name) sources.add(s.name);
+    });
+    // Auto-detected from past income transactions
     state.expenses
       .filter((e) => e.type === "income" && e.source)
       .forEach((e) => sources.add(e.source));
@@ -8676,6 +8734,37 @@
         ? `Saved ${fmt(savedMonthly)}/mo (${fmt(annual)}/yr)`
         : `Recorded ${vendor}`);
     });
+
+    // Income sources form (Settings)
+    $("#incomeSourceForm")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const name = $("#incSrcName").value.trim();
+      const type = $("#incSrcType").value || "salary";
+      const defaultAmount = parseFloat($("#incSrcAmount").value) || 0;
+      const note = $("#incSrcNote").value.trim();
+      if (!name) return;
+      // De-duplicate by name (case-insensitive)
+      const existing = state.incomeSources.find((s) => (s.name || "").toLowerCase() === name.toLowerCase());
+      if (existing) {
+        existing.type = type;
+        existing.defaultAmount = defaultAmount;
+        existing.note = note;
+        touchRecord(existing);
+      } else {
+        state.incomeSources.push(touchRecord({
+          id: uid(),
+          name,
+          type,
+          defaultAmount,
+          note,
+        }));
+      }
+      saveData();
+      e.target.reset();
+      renderIncomeSourcesManage();
+      populateIncomeSourceList();
+      showToast(existing ? "Income source updated" : "Income source saved");
+    });
     $("#cardModalClose").addEventListener("click", closeCardModal);
     $("#cardModal").addEventListener("click", (e) => {
       if (e.target.id === "cardModal") closeCardModal();
@@ -9287,6 +9376,27 @@
           saveData();
           renderBillNegotiations();
         }
+      } else if (action === "del-incsrc") {
+        if (confirm("Delete this income source?")) {
+          tombstoneRecord("incomeSources", id);
+          state.incomeSources = state.incomeSources.filter((s) => s.id !== id);
+          saveData();
+          renderIncomeSourcesManage();
+          populateIncomeSourceList();
+        }
+      } else if (action === "use-incsrc") {
+        const src = state.incomeSources.find((s) => s.id === id);
+        if (!src) return;
+        openPaycheckModal();
+        // Pre-fill employer + default amount
+        setTimeout(() => {
+          const empEl = $("#pcEmployer");
+          if (empEl) empEl.value = src.name;
+          if (Number(src.defaultAmount) > 0) {
+            const grossEl = $("#pcGross");
+            if (grossEl && !grossEl.value) grossEl.value = Number(src.defaultAmount).toFixed(2);
+          }
+        }, 100);
       } else if (action === "preset-fav") {
         const p = state.presets.find((x) => x.id === id);
         if (!p) return;
@@ -10379,7 +10489,7 @@
     "categories", "expenses", "goals", "presets", "recurring",
     "cards", "creditScores", "accounts", "people",
     "creditInquiries", "negativeItems", "limitIncreases", "creditGoals",
-    "billNegotiations",
+    "billNegotiations", "incomeSources",
   ];
   // Date-keyed time series — keep newest value per date
   const DATE_SERIES_COLLECTIONS = ["netWorthHistory", "utilHistory"];

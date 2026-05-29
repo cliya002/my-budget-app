@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=85" />
+  <link rel="stylesheet" href="styles.css?v=86" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1156,6 +1156,45 @@
           </div>
 
           <div class="card">
+            <div class="card-title">💼 Income Sources</div>
+            <p class="card-sub">Save your employers and recurring payers so they autofill in the Paycheck and Income forms.</p>
+            <form id="incomeSourceForm" class="stack-form" style="margin-top:0.75rem">
+              <div class="form-row two-col">
+                <div>
+                  <label>Name / Employer</label>
+                  <input type="text" id="incSrcName" placeholder="Amazon, Acme Corp, Side Gig" required />
+                </div>
+                <div>
+                  <label>Type</label>
+                  <select id="incSrcType">
+                    <option value="salary">Salary / Paycheck</option>
+                    <option value="hourly">Hourly</option>
+                    <option value="freelance">Freelance / 1099</option>
+                    <option value="bonus">Bonus</option>
+                    <option value="dividend">Dividend / Interest</option>
+                    <option value="rental">Rental</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label>Default amount (optional)</label>
+                  <input type="number" id="incSrcAmount" step="0.01" min="0" placeholder="0.00" />
+                </div>
+                <div>
+                  <label>Note (optional)</label>
+                  <input type="text" id="incSrcNote" placeholder="e.g. biweekly Friday" />
+                </div>
+              </div>
+              <button type="submit" class="btn-primary block">Save Source</button>
+            </form>
+            <ul id="incomeSourceManageList" class="list" style="margin-top:0.75rem">
+              <li class="empty">No saved sources yet.</li>
+            </ul>
+          </div>
+
+          <div class="card">
             <div class="card-title">Currency</div>
             <select id="currencySelect" class="block">
               <option value="USD">USD ($)</option>
@@ -2007,7 +2046,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=85"></script>
+  <script src="app.js?v=86"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
