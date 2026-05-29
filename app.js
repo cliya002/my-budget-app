@@ -1469,7 +1469,7 @@
         date: dateStr,
         day,
         name: `${c.name} payment`,
-        amount: c.statement || c.balance || 0,
+        amount: Number(c.statement) > 0 ? Number(c.statement) : cardCurrentBalance(c),
         paid: paidThisMonth,
         autopay: c.autopay,
         icon: "💳",
@@ -1817,7 +1817,7 @@
       const today = new Date();
       const todayMonth = currentMonth();
       const inSoon = state.cards.filter((c) => {
-        if (!c.dueDay || !(Number(c.balance) > 0)) return false;
+        if (!c.dueDay || !(cardCurrentBalance(c) > 0)) return false;
         const day = clampDayToMonth(Number(c.dueDay), todayMonth);
         const due = new Date(today.getFullYear(), today.getMonth(), day);
         const diffDays = Math.round((due - today) / 86400000);
@@ -1828,7 +1828,7 @@
         insights.push({
           icon: "⏰",
           tone: "warn",
-          text: `<strong>${escapeHtml(c.name)}</strong> payment due ${c.dueDay > today.getDate() ? `in ${c.dueDay - today.getDate()}d` : "today"} (${fmt(c.balance)} balance).`,
+          text: `<strong>${escapeHtml(c.name)}</strong> payment due ${c.dueDay > today.getDate() ? `in ${c.dueDay - today.getDate()}d` : "today"} (${fmt(cardCurrentBalance(c))} balance).`,
         });
       } else if (inSoon.length > 1) {
         insights.push({
@@ -2867,7 +2867,7 @@
     const todayDate = new Date();
     const dueAlerts = [];
     state.cards.forEach((c) => {
-      if (!c.dueDay || !(Number(c.balance) > 0)) return;
+      if (!c.dueDay || !(cardCurrentBalance(c) > 0)) return;
       const day = clampDayToMonth(Number(c.dueDay), currentMonth());
       const due = new Date(todayDate.getFullYear(), todayDate.getMonth(), day);
       const diffDays = Math.round((due - todayDate) / 86400000);
@@ -2878,7 +2878,7 @@
     const dueHtml = dueAlerts.length
       ? `<div class="today-due-alerts">${dueAlerts.slice(0, 3).map((a) => {
           const when = a.diffDays === 0 ? "due today" : a.diffDays === 1 ? "due tomorrow" : `due in ${a.diffDays}d`;
-          return `<div class="today-due-row"><span>💳 ${escapeHtml(a.card.name)}</span><span class="today-due-when">${when} · ${fmt(a.card.balance)}</span></div>`;
+          return `<div class="today-due-row"><span>💳 ${escapeHtml(a.card.name)}</span><span class="today-due-when">${when} · ${fmt(cardCurrentBalance(a.card))}</span></div>`;
         }).join("")}</div>`
       : "";
 
@@ -3787,7 +3787,7 @@
   }
 
   function renderPayoffEmpty() {
-    const eligible = state.cards.filter((c) => Number(c.balance) > 0);
+    const eligible = state.cards.filter((c) => cardCurrentBalance(c) > 0);
     $("#payoffEmpty").hidden = eligible.length > 0;
   }
 
@@ -4304,11 +4304,11 @@
     const monthly = parseFloat($("#payoffMonthly").value);
     const strategy = $("#payoffStrategy").value;
     const cards = state.cards
-      .filter((c) => Number(c.balance) > 0)
+      .filter((c) => cardCurrentBalance(c) > 0)
       .map((c) => ({
         id: c.id,
         name: c.name,
-        balance: Number(c.balance),
+        balance: cardCurrentBalance(c),
         apr: Number(c.apr) || 22.99, // assume 22.99% if missing
       }));
 
@@ -4461,8 +4461,8 @@
 
   function simulateQuick(monthly, strategy) {
     const cards = state.cards
-      .filter((c) => Number(c.balance) > 0)
-      .map((c) => ({ balance: Number(c.balance), apr: Number(c.apr) || 22.99 }));
+      .filter((c) => cardCurrentBalance(c) > 0)
+      .map((c) => ({ balance: cardCurrentBalance(c), apr: Number(c.apr) || 22.99 }));
     if (!cards.length || monthly <= 0) return null;
 
     if (strategy === "snowball") cards.sort((a, b) => a.balance - b.balance);
@@ -4511,7 +4511,29 @@
     return state.cards.reduce((s, c) => s + (Number(c.limit) || 0), 0);
   }
   function totalCardBalance() {
-    return state.cards.reduce((s, c) => s + (Number(c.balance) || 0), 0);
+    return state.cards.reduce((s, c) => s + cardCurrentBalance(c), 0);
+  }
+
+  // Live card balance: card.balance is the recorded number that gets adjusted by:
+  //   + expense txns on the paired credit account (purchases increase debt)
+  //   − transfer-in txns (payments reduce debt)
+  // This means whenever the user logs a transaction with the card's paired account
+  // selected, the card balance reflects the new total automatically.
+  function cardCurrentBalance(card) {
+    if (!card) return 0;
+    const base = Number(card.balance) || 0;
+    if (!card.accountId) return base;
+    let purchaseDelta = 0;
+    state.expenses.forEach((e) => {
+      if (e.accountId !== card.accountId) return;
+      // Skip the credit-payment transfer-in (it's already accounted for in card.balance via executePayCard)
+      if (e.kind === "credit-payment") return;
+      if (e.type === "expense") purchaseDelta += Number(e.amount) || 0; // purchases add to debt
+      else if (e.type === "transfer-in") purchaseDelta -= Number(e.amount) || 0; // manual payments reduce
+      else if (e.type === "transfer-out") purchaseDelta += Number(e.amount) || 0; // refunds out of card add debt back
+      else if (e.type === "income") purchaseDelta -= Number(e.amount) || 0; // refund credited to card reduces debt
+    });
+    return Math.max(0, base + purchaseDelta);
   }
   function utilizationPct() {
     const lim = totalCardLimit();
@@ -4592,7 +4614,7 @@
     if (state.cards.length) {
       const utils = state.cards
         .filter((c) => Number(c.limit) > 0)
-        .map((c) => (Number(c.balance) / Number(c.limit)) * 100);
+        .map((c) => (cardCurrentBalance(c) / Number(c.limit)) * 100);
       const avg = utils.reduce((a, b) => a + b, 0) / (utils.length || 1);
       $("#creditAvgUtil").textContent = `Avg ${avg.toFixed(0)}% per card`;
     } else {
@@ -4799,7 +4821,7 @@
         if (!isClosed) return false;
       } else if (cardListFilters.filter === "high-util") {
         const lim = Number(c.limit) || 0;
-        const bal = Number(c.balance) || 0;
+        const bal = cardCurrentBalance(c);
         const util = lim > 0 ? (bal / lim) * 100 : 0;
         if (util < 80) return false;
       } else if (cardListFilters.filter === "autopay") {
@@ -4828,7 +4850,7 @@
     list.innerHTML = filtered
       .map((c) => {
         const lim = Number(c.limit) || 0;
-        const bal = Number(c.balance) || 0;
+        const bal = cardCurrentBalance(c);
         const stmt = Number(c.statement) || 0;
         const util = lim > 0 ? (bal / lim) * 100 : 0;
         const stmtUtil = lim > 0 && stmt > 0 ? (stmt / lim) * 100 : 0;
@@ -4850,7 +4872,7 @@
             <div class="card-item-head">
               <div class="card-item-title">${escapeHtml(c.name)}${last4} ${autopay}</div>
               <div class="list-item-actions">
-                ${Number(c.balance) > 0 ? `<button data-action="quick-pay-card" data-id="${c.id}" title="Pay this card">💸 Pay</button>` : ""}
+                ${cardCurrentBalance(c) > 0 ? `<button data-action="quick-pay-card" data-id="${c.id}" title="Pay this card">💸 Pay</button>` : ""}
                 <button data-action="edit-card" data-id="${c.id}" title="Edit">✏️</button>
                 <button data-action="del-card" data-id="${c.id}" title="Delete">🗑️</button>
               </div>
@@ -4930,11 +4952,11 @@
 
     // Per-card row showing balance, suggested payment, util %, and a quick "pay" action
     rows.innerHTML = state.cards
-      .filter((c) => Number(c.balance) > 0)
-      .sort((a, b) => Number(b.balance) - Number(a.balance))
+      .filter((c) => cardCurrentBalance(c) > 0)
+      .sort((a, b) => cardCurrentBalance(b) - cardCurrentBalance(a))
       .map((c) => {
         const lim = Number(c.limit) || 0;
-        const bal = Number(c.balance) || 0;
+        const bal = cardCurrentBalance(c);
         const stmt = Number(c.statement) || 0;
         const util = lim > 0 ? (bal / lim) * 100 : 0;
         const minPay = Math.max(25, Math.round(bal * 0.02));
@@ -4988,7 +5010,7 @@
     if (typeof prefillCardId === "string") {
       const c = state.cards.find((x) => x.id === prefillCardId);
       if (c) {
-        const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+        const target = Number(c.statement) > 0 ? Number(c.statement) : cardCurrentBalance(c);
         payCardPlanState.plan[c.id] = target;
       }
     } else {
@@ -5010,7 +5032,7 @@
   }
 
   function applyStrategyToPlan() {
-    const cards = state.cards.filter((c) => Number(c.balance) > 0);
+    const cards = state.cards.filter((c) => cardCurrentBalance(c) > 0);
     payCardPlanState.plan = {};
     if (!cards.length) return;
     const strat = payCardPlanState.strategy;
@@ -5018,12 +5040,12 @@
     if (strat === "clear") return; // empty plan
 
     if (strat === "full") {
-      cards.forEach((c) => { payCardPlanState.plan[c.id] = Number(c.balance) || 0; });
+      cards.forEach((c) => { payCardPlanState.plan[c.id] = cardCurrentBalance(c); });
       return;
     }
     if (strat === "statement") {
       cards.forEach((c) => {
-        const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+        const target = Number(c.statement) > 0 ? Number(c.statement) : cardCurrentBalance(c);
         payCardPlanState.plan[c.id] = target;
       });
       return;
@@ -5033,16 +5055,16 @@
     const liquid = liquidTotal();
     const keep = payCardPlanState.keep || 0;
     const available = Math.max(0, liquid - keep);
-    const minPay = (c) => Math.max(25, Math.round((Number(c.balance) || 0) * 0.02));
+    const minPay = (c) => Math.max(25, Math.round(cardCurrentBalance(c) * 0.02));
 
     let sorted = [...cards];
     if (strat === "avalanche") sorted.sort((a, b) => (Number(b.apr) || 0) - (Number(a.apr) || 0));
-    else if (strat === "snowball") sorted.sort((a, b) => (Number(a.balance) || 0) - (Number(b.balance) || 0));
+    else if (strat === "snowball") sorted.sort((a, b) => cardCurrentBalance(a) - cardCurrentBalance(b));
 
     // First pass: minimums for everyone
     let remaining = available;
     sorted.forEach((c) => {
-      const m = Math.min(minPay(c), Number(c.balance) || 0);
+      const m = Math.min(minPay(c), cardCurrentBalance(c));
       const pay = Math.min(m, remaining);
       payCardPlanState.plan[c.id] = pay;
       remaining -= pay;
@@ -5050,7 +5072,7 @@
     // Second pass: top up priority cards toward statement/full balance
     for (const c of sorted) {
       if (remaining <= 0) break;
-      const target = Number(c.statement) > 0 ? Number(c.statement) : Number(c.balance) || 0;
+      const target = Number(c.statement) > 0 ? Number(c.statement) : cardCurrentBalance(c);
       const already = payCardPlanState.plan[c.id] || 0;
       const room = Math.max(0, target - already);
       const add = Math.min(room, remaining);
@@ -5070,7 +5092,7 @@
     $("#pmLiquid").textContent = fmt(liquid);
     $("#pmPlanTotal").textContent = fmt(planTotal);
 
-    const cards = state.cards.filter((c) => Number(c.balance) > 0);
+    const cards = state.cards.filter((c) => cardCurrentBalance(c) > 0);
     if (!cards.length) {
       list.innerHTML = '<li class="empty">No card balances to pay.</li>';
       return;
@@ -5079,12 +5101,12 @@
     // Sort by current strategy
     let sorted = [...cards];
     if (payCardPlanState.strategy === "avalanche") sorted.sort((a, b) => (Number(b.apr) || 0) - (Number(a.apr) || 0));
-    else if (payCardPlanState.strategy === "snowball") sorted.sort((a, b) => (Number(a.balance) || 0) - (Number(b.balance) || 0));
-    else sorted.sort((a, b) => Number(b.balance) - Number(a.balance));
+    else if (payCardPlanState.strategy === "snowball") sorted.sort((a, b) => cardCurrentBalance(a) - cardCurrentBalance(b));
+    else sorted.sort((a, b) => cardCurrentBalance(b) - cardCurrentBalance(a));
 
     list.innerHTML = sorted
       .map((c) => {
-        const bal = Number(c.balance) || 0;
+        const bal = cardCurrentBalance(c);
         const stmt = Number(c.statement) || 0;
         const apr = c.apr ? `${c.apr}% APR · ` : "";
         const planAmt = Number(payCardPlanState.plan[c.id] || 0);
@@ -5318,7 +5340,7 @@
     }
     state.cards.forEach((c) => {
       const lim = Number(c.limit) || 0;
-      const bal = Number(c.balance) || 0;
+      const bal = cardCurrentBalance(c);
       if (lim > 0 && bal / lim >= 0.5) {
         tips.push({
           icon: "🚨",
