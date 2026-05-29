@@ -6784,14 +6784,19 @@
     const benefits = num("#pcBenefits");
     const other = num("#pcOther");
 
-    const net = Math.max(0, gross - taxes - benefits - other);
+    // If user has 0 or only gross (no buckets), don't compute — leave net as whatever was set
     const netEl = $("#pcNet");
-    if (netEl) netEl.value = net.toFixed(2);
+    const allBucketsZero = taxes === 0 && benefits === 0 && other === 0;
+    let net;
+    if (allBucketsZero && netEl && parseFloat(netEl.value) > 0) {
+      // Preserve parser-supplied net
+      net = parseFloat(netEl.value);
+    } else {
+      net = Math.max(0, gross - taxes - benefits - other);
+      if (netEl) netEl.value = net.toFixed(2);
+    }
     const disp = $("#pcNetDisplay");
     if (disp) disp.textContent = fmt(net);
-
-    // Backwards-compat: keep hidden FICA / Health fields zeroed (we no longer collect them granularly)
-    // The detailed paystub parser uses these directly when filling.
   }
 
   function updateSplitRemaining() {
@@ -6992,6 +6997,12 @@
       .replace(/[\u2212\u2013\u2014]/g, "-")
       .replace(/\u00a0/g, " ");
 
+    // OCR fixes: Tesseract often confuses S/$ when reading dollar amounts
+    // "S3,086.95" or "S 3,086.95" → "$3,086.95"
+    cleaned = cleaned.replace(/\bS(\s*\d{1,3}(?:,\d{3})*\.\d{2})/g, "$$$1");
+    // Tesseract sometimes puts a stray period or comma at start: ".$3,086.95"
+    cleaned = cleaned.replace(/[.,]\$/g, "$");
+
     // Insert spaces between glued letter↔digit boundaries
     cleaned = cleaned
       .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2")
@@ -7071,17 +7082,23 @@
     }
 
     // --- Section totals (collapsed view): "Taxes -$3,086.95", "Benefits -$138.00", "Other -$5,481.26"
+    // Accept any decimal amount (not just $-prefixed) since OCR may drop the $.
     function findSectionTotal(headerRegex) {
       for (let i = 0; i < lines.length; i++) {
         if (!headerRegex.test(lines[i])) continue;
-        const amts = dollarAmts(lines[i]);
+        let amts = dollarAmts(lines[i]);
+        if (!amts.length) amts = anyAmts(lines[i]);
+        if (!amts.length && i + 1 < lines.length) {
+          amts = dollarAmts(lines[i + 1]);
+          if (!amts.length) amts = anyAmts(lines[i + 1]);
+        }
         if (amts.length) return amts[0];
       }
       return null;
     }
-    result._taxesTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Taxes\b(?!.*Calculator)/i);
-    result._benefitsTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Benefits\b(?!\s*and\s*Information)/i);
-    result._otherTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Other\b(?!\s*Benefits\s*and\s*Information)/i);
+    result._taxesTotal = findSectionTotal(/(?:^|\s)(?:Show\s*content\s*|Hide\s*content\s*)?Taxes\b(?!.*Calculator)/i);
+    result._benefitsTotal = findSectionTotal(/(?:^|\s)(?:Show\s*content\s*|Hide\s*content\s*)?Benefits\b(?!\s*and\s*Information)/i);
+    result._otherTotal = findSectionTotal(/(?:^|\s)(?:Show\s*content\s*|Hide\s*content\s*)?Other\b(?!\s*Benefits\s*and\s*Information)/i);
 
     // --- Granular taxes (when expanded view is pasted)
     result.fedTax = find(/Federal\s*Income\s*Tax|\bFederal\s*W\/?H\b|\bFIT\b/i).value;
@@ -7197,18 +7214,15 @@
     // Recompute net display
     updatePaycheckTotals();
 
-    // If parser supplied a net that disagrees with the computed value, prefer the parsed one
-    if (p.net !== null) {
-      const computed = parseFloat($("#pcNet").value) || 0;
-      if (Math.abs(p.net - computed) > 0.5) {
-        // Adjust "Other" so net ends up matching the parsed value
-        const gross = parseFloat($("#pcGross").value) || 0;
-        const taxes = parseFloat($("#pcTaxes").value) || 0;
-        const benefits = parseFloat($("#pcBenefits").value) || 0;
-        const otherNeeded = Math.max(0, gross - taxes - benefits - p.net);
-        $("#pcOther").value = otherNeeded.toFixed(2);
-        updatePaycheckTotals();
-      }
+    // If parser supplied both a gross AND a net but our buckets don't add up,
+    // it's because the parser didn't find Taxes/Benefits/Other. Don't silently
+    // dump the difference into "Other" — leave the net as the override and let
+    // the user fill in the buckets manually if they care.
+    if (p.net !== null && p.gross !== null) {
+      const netEl = $("#pcNet");
+      if (netEl) netEl.value = p.net.toFixed(2);
+      const dispEl = $("#pcNetDisplay");
+      if (dispEl) dispEl.textContent = fmt(p.net);
     }
   }
 
