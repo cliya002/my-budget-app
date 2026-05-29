@@ -6987,275 +6987,123 @@
       return makeEmptyPaystubResult();
     }
 
-    // Normalize the input:
-    // - Convert Unicode minus (U+2212), en-dash, em-dash to ASCII hyphen
-    // - Convert non-breaking spaces to regular spaces
-    // - Insert spaces between glued label-amount pairs ("Tax-$1,746.05") and amount-label
-    //   pairs ("$10,608.33Hide content")
-    // - Insert newlines after each dollar amount so each label/amount pair becomes its own line
+    // Normalize: convert unicode minus, en/em dashes to ASCII; nbsp to space.
     let cleaned = String(rawText)
-      .replace(/[\u2212\u2013\u2014]/g, "-") // unicode minus, en-dash, em-dash → "-"
-      .replace(/\u00a0/g, " ") // nbsp → space
-      .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2") // "TaxX" / "Tax-$X" → space before
-      .replace(/(\d)([A-Za-z])/g, "$1 $2") // "Hide" after "$10.00Hide" → "$10.00 Hide"
-      .replace(/\$\s+/g, "$"); // "$ 1,234.56" → "$1,234.56"
+      .replace(/[\u2212\u2013\u2014]/g, "-")
+      .replace(/\u00a0/g, " ");
 
-    // After spaces are normalized, break the text into one line per label/amount pair.
-    // Match a dollar amount (with optional sign) and add a newline immediately after it.
+    // Insert spaces between glued letter↔digit boundaries
+    cleaned = cleaned
+      .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2")
+      .replace(/(\d)([A-Za-z])/g, "$1 $2")
+      .replace(/\$\s+/g, "$");
+
+    // Insert newlines after each dollar amount so each label/amount pair gets its own line
     cleaned = cleaned.replace(/(-?\$\d{1,3}(?:,\d{3})*\.\d{2}\*?)/g, "$1\n");
-    // Also break after standalone amounts not prefixed with $ (e.g. "153.33 9,384.27 45,758.50")
-    // — separate consecutive amounts so each becomes its own anchor.
+    // Also after consecutive bare amounts
     cleaned = cleaned.replace(/(\d{1,3}(?:,\d{3})*\.\d{2}\*?)\s+(?=\d{1,3}(?:,\d{3})*\.\d{2})/g, "$1\n");
 
     const lines = cleaned.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
     const text = lines.join(" ");
     const result = makeEmptyPaystubResult();
 
-    // --- Helper: extract amounts from a line. Handles "1,746.05", "-650.17", "$1,902.12", "5.00*"
-    function amountsIn(line) {
-      const matches = String(line || "").match(/\-?\$?\s*[\d]{1,3}(?:,\d{3})*\.\d{2}\*?/g);
-      if (!matches) return [];
-      return matches.map((m) => {
-        const cleaned = m.replace(/[\$,\s\*]/g, "");
-        const n = Number(cleaned);
-        return isNaN(n) ? null : Math.abs(n); // store as positive — sign indicates direction in context
-      }).filter((n) => n !== null);
+    // --- Helpers
+    function dollarAmts(s) {
+      const m = String(s || "").match(/-?\$\s*\d{1,3}(?:,\d{3})*\.\d{2}\*?/g);
+      if (!m) return [];
+      return m.map((x) => Math.abs(Number(x.replace(/[\$,\s\*]/g, "")))).filter((n) => !isNaN(n));
+    }
+    function anyAmts(s) {
+      const m = String(s || "").match(/-?\$?\s*\d{1,3}(?:,\d{3})*\.\d{2}\*?/g);
+      if (!m) return [];
+      return m.map((x) => Math.abs(Number(x.replace(/[\$,\s\*]/g, "")))).filter((n) => !isNaN(n));
     }
 
-    // For lines that may include hours/units before the dollar amount (e.g. "Gross 173.33 Units $10,608.33"),
-    // prefer amounts that have a $ prefix.
-    function moneyAmountsIn(line) {
-      const dollared = String(line || "").match(/\-?\$\s*[\d]{1,3}(?:,\d{3})*\.\d{2}\*?/g);
-      if (dollared && dollared.length) {
-        return dollared.map((m) => Math.abs(Number(m.replace(/[\$,\s\*]/g, "")))).filter((n) => !isNaN(n));
-      }
-      return [];
-    }
-    // Looser version: any decimal-2 number, used as a fallback
-    function anyAmountsIn(line) {
-      return amountsIn(line);
-    }
-
-    // Find the FIRST amount on a line that contains the label.
-    // Strategy:
-    //   1. Look at the matching line for $-marked amounts
-    //   2. If none, look at the next 1-2 lines for $-marked amounts (web layouts wrap)
-    //   3. As a last resort, look at the matching line for any decimal amount
-    function findOnLine(labelRegex) {
+    // Find first amount on any line matching label, walking forward up to 2 lines for the value
+    function find(labelRegex, opts = {}) {
+      const { dollarOnly = true } = opts;
+      const amtFn = dollarOnly ? dollarAmts : anyAmts;
       for (let i = 0; i < lines.length; i++) {
         if (!labelRegex.test(lines[i])) continue;
-        let amts = moneyAmountsIn(lines[i]);
-        if (!amts.length && i + 1 < lines.length) amts = moneyAmountsIn(lines[i + 1]);
-        if (!amts.length && i + 2 < lines.length) amts = moneyAmountsIn(lines[i + 2]);
-        if (!amts.length) amts = anyAmountsIn(lines[i]);
+        let amts = amtFn(lines[i]);
+        if (!amts.length && i + 1 < lines.length) amts = amtFn(lines[i + 1]);
+        if (!amts.length && i + 2 < lines.length) amts = amtFn(lines[i + 2]);
+        // Last resort: any amount on the matched line (for "Gross 173.33 Units $10,608.33")
+        if (!amts.length) amts = anyAmts(lines[i]);
         if (amts.length) return { value: amts[0], ytd: amts[1] || null };
       }
       return { value: null, ytd: null };
     }
 
-    // --- Employer
-    // Word boundaries are critical here — without them, "Inc" matches inside "Income"
-    // and we'd grab "Federal Income Tax" as the employer.
-    const companyKeywords = /\b(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings|Services)\b/;
-    const skipLineHints = /(Federal\s*Income\s*Tax|State\s*Income\s*Tax|Income\s*Tax|Pay\s*Stub|Pay\s*Statement|Earnings\s*Statement|^ADP\b|Deposited|Period\s*Beginning|Period\s*End|Pay\s*Date|^ATTN|Take\s*Home|Net\s*Pay|Gross\s*Pay)/i;
-    for (const line of lines.slice(0, 25)) {
-      if (skipLineHints.test(line)) continue;
-      if (companyKeywords.test(line) && line.length < 100 && line.length > 4) {
-        // Strip ATTN: lines and trailing label noise
-        const cleaned = line.replace(/Pay\s*stub/i, "").replace(/ATTN:.*$/i, "").trim();
-        if (cleaned.length > 3) {
-          result.employer = cleaned;
-          break;
-        }
-      }
+    // --- Pay date
+    const longDate = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i);
+    if (longDate) {
+      const d = new Date(`${longDate[1]} ${longDate[2]}, ${longDate[3]}`);
+      if (!isNaN(d)) result.date = d.toISOString().slice(0, 10);
     }
-
-    // --- Pay period
-    const ppStart = text.match(/Period\s*Beginning\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
-    if (ppStart) result.payPeriodStart = normalizeDate(ppStart[1]);
+    if (!result.date) {
+      const slash = text.match(/Pay\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i)
+        || text.match(/Check\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+      if (slash) result.date = normalizeDate(slash[1]);
+    }
     const ppEnd = text.match(/Period\s*End(?:ing)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
     if (ppEnd) result.payPeriodEnd = normalizeDate(ppEnd[1]);
-
-    // --- Pay date
-    const dateRegexes = [
-      /Pay\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-      /Check\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-    ];
-    for (const re of dateRegexes) {
-      const m = text.match(re);
-      if (m) {
-        result.date = normalizeDate(m[1]);
-        if (result.date) break;
-      }
-    }
+    const ppStart = text.match(/Period\s*Beginning\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+    if (ppStart) result.payPeriodStart = normalizeDate(ppStart[1]);
     if (!result.date && result.payPeriodEnd) result.date = result.payPeriodEnd;
-    // Fallback: long-form date like "May 29, 2026" (often top of ADP web view)
-    if (!result.date) {
-      const longDate = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i);
-      if (longDate) {
-        const d = new Date(`${longDate[1]} ${longDate[2]}, ${longDate[3]}`);
-        if (!isNaN(d)) result.date = d.toISOString().slice(0, 10);
-      }
-    }
 
-    // --- Gross + YTD
+    // --- Gross (prefer the line that has "Gross" but not "Income Tax" etc.)
     {
-      const r = findOnLine(/Gross\s*Pay|Gross\b/i);
+      const r = find(/^\s*Gross\b(?!\s*(?:Income|Wages\s+for))/i);
       result.gross = r.value;
       result.ytdGross = r.ytd;
-      if (result.gross === null) {
-        const r2 = findOnLine(/Gross\s*(?:Earnings|Wages|Income)/i);
-        result.gross = r2.value;
-        result.ytdGross = r2.ytd;
-      }
-      // ADP web view: "Gross 173.33 Units $10,608.33" — capture hours from "X Units"
-      for (const line of lines) {
-        if (/Gross/i.test(line)) {
-          const u = line.match(/(\d{1,3}(?:\.\d{1,2})?)\s*Units?/i);
-          if (u) {
-            result.hours = Number(u[1]);
-            break;
-          }
-        }
-      }
     }
 
-    // --- Net Pay (single amount usually) — also "Take Home" on ADP web view
+    // --- Net / Take Home (prefer "Take Home" since it's the simpler label)
     {
-      const r = findOnLine(/Net\s*Pay|Take[\s\-]?Home/i);
+      const r = find(/(?:Show\s*content\s*|Hide\s*content\s*)?Take[\s\-]?Home\b/i);
       result.net = r.value;
-      result.ytdNet = r.ytd;
       if (result.net === null) {
-        const r2 = findOnLine(/Net\s*(?:Check|Wages)/i);
+        const r2 = find(/Net\s*(?:Pay|Check)\b/i);
         result.net = r2.value;
+        result.ytdNet = r2.ytd;
       }
     }
 
-    // --- Federal Income Tax
-    {
-      const r = findOnLine(/Federal\s*Income\s*Tax|Federal\s*W\/?H|\bFIT\b|Fed\.?\s*Tax/i);
-      result.fedTax = r.value;
-      result.ytdFedTax = r.ytd;
-    }
-
-    // --- State Income Tax (handles "VA State Income Tax", etc.)
-    {
-      const r = findOnLine(/State\s*(?:Income\s*)?Tax|State\s*W\/?H|\bSIT\b/i);
-      result.stateTax = r.value;
-      result.ytdStateTax = r.ytd;
-    }
-
-    // --- Social Security & Medicare
-    {
-      const r = findOnLine(/Social\s*Security\s*Tax|OASDI/i);
-      result.ssTax = r.value;
-      result.ytdSs = r.ytd;
-    }
-    {
-      const r = findOnLine(/Medicare\s*Tax/i);
-      result.medicareTax = r.value;
-      result.ytdMedicare = r.ytd;
-    }
-    if (result.ssTax !== null || result.medicareTax !== null) {
-      result.fica = (result.ssTax || 0) + (result.medicareTax || 0);
-    } else {
-      const r = findOnLine(/\bFICA\b/i);
-      result.fica = r.value;
-    }
-
-    // --- Health/Dental/Vision (can be Pre-Tax variants)
-    {
-      const r = findOnLine(/(?:Pre-?Tax\s*)?Dental(?:\s*Insurance)?/i);
-      result.dental = r.value;
-    }
-    {
-      const r = findOnLine(/(?:Pre-?Tax\s*)?Vision(?:\s*Insurance)?/i);
-      result.vision = r.value;
-    }
-    {
-      const r = findOnLine(/(?:Pre-?Tax\s*)?(?:Medical|Health\s*Insurance|Health\s*Plan)/i);
-      result.health = r.value;
-    }
-
-    // --- Section totals (the collapsed ADP web view shows just headers like
-    // "Taxes -$3,086.95" with no individual line items underneath). When that
-    // happens we use these totals as fallbacks.
+    // --- Section totals (collapsed view): "Taxes -$3,086.95", "Benefits -$138.00", "Other -$5,481.26"
     function findSectionTotal(headerRegex) {
       for (let i = 0; i < lines.length; i++) {
         if (!headerRegex.test(lines[i])) continue;
-        const amts = moneyAmountsIn(lines[i]);
+        const amts = dollarAmts(lines[i]);
         if (amts.length) return amts[0];
       }
       return null;
     }
-    result._taxesTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Taxes\b(?!.*Calculator)/i);
-    result._benefitsTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Benefits\b(?!\s*and\s*Information)/i);
-    result._otherTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Other\b(?!\s*Benefits\s*and\s*Information)/i);
+    result._taxesTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Taxes\b(?!.*Calculator)/i);
+    result._benefitsTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Benefits\b(?!\s*and\s*Information)/i);
+    result._otherTotal = findSectionTotal(/^\s*(?:Show\s*content\s*|Hide\s*content\s*)?Other\b(?!\s*Benefits\s*and\s*Information)/i);
 
-    // --- 401k / HSA
-    {
-      const r = findOnLine(/401\s*\(?k\)?|\bRetirement\b|Pension|\bTSP\b|403\s*\(?b\)?/i);
-      result.k401 = r.value;
-    }
-    {
-      const r = findOnLine(/\bHSA\b|\bFSA\b|Health\s*Savings|Flex\s*Spend/i);
-      result.hsa = r.value;
-    }
-
-    // --- Earnings line items + hours. ADP rows look like:
-    // "Regular 61.2031 153.33 9,384.27 45,758.50"
-    const earningPatterns = [
-      ["Regular", /^Regular\b/i],
-      ["Overtime", /^(?:Overtime|O\.?T\.?)\b/i],
-      ["Holiday", /^Holiday(?:\s*Pay)?\b/i],
-      ["PTO", /^(?:Flex\/?Pto|PTO|Vacation|Stnd\s*Pto\s*Pay)\b/i],
-      ["Bonus", /^Bonus\b/i],
-      ["RSU", /^RSU(?:\s*Vest)?/i],
-    ];
-    for (const line of lines) {
-      for (const [name, re] of earningPatterns) {
-        if (re.test(line)) {
-          // Try to extract rate (X.XXXX), hours (X.XX), and amount(s)
-          const rateM = line.match(/\b(\d{1,3}\.\d{3,4})\b/);
-          const hoursM = line.match(/\b(\d{1,3}\.\d{1,2})\b(?!\d|\.)/g);
-          const amts = amountsIn(line);
-          const rate = rateM ? Number(rateM[1]) : null;
-          let hours = null;
-          if (hoursM && hoursM.length) {
-            // The first decimal-2 number after the rate is hours
-            for (const h of hoursM) {
-              const v = Number(h);
-              if (v < 200 && v !== rate) { hours = v; break; }
-            }
-          }
-          if (amts.length) {
-            const entry = { name };
-            if (rate) entry.rate = rate;
-            if (hours) entry.hours = hours;
-            entry.amount = amts[0];
-            result.earnings.push(entry);
-            if (name === "Regular") {
-              result.regularRate = rate;
-              result.regularHours = hours;
-            } else if (name === "Overtime") result.otHours = hours;
-            else if (name === "Holiday") result.holidayHours = hours;
-            else if (name === "PTO") result.ptoHours = hours;
-          }
-          break;
-        }
-      }
+    // --- Granular taxes (when expanded view is pasted)
+    result.fedTax = find(/Federal\s*Income\s*Tax|\bFederal\s*W\/?H\b|\bFIT\b/i).value;
+    result.stateTax = find(/State\s*Income\s*Tax|\bState\s*W\/?H\b|\bSIT\b/i).value;
+    result.ssTax = find(/Social\s*Security\s*Tax|\bOASDI\b/i).value;
+    result.medicareTax = find(/Medicare\s*Tax/i).value;
+    if (result.ssTax || result.medicareTax) {
+      result.fica = (result.ssTax || 0) + (result.medicareTax || 0);
     }
 
-    // Total work hours
-    const totH = text.match(/Tot(?:al)?\s*Work\s*Hours?\s+(\d{1,3}\.?\d{0,2})/i);
-    if (totH) result.hours = Number(totH[1]);
-    else {
-      const sum = (result.regularHours || 0) + (result.otHours || 0)
-        + (result.holidayHours || 0) + (result.ptoHours || 0);
-      if (sum > 0) result.hours = sum;
-    }
+    // --- Granular benefits
+    result.dental = find(/(?:Pre-?Tax\s*)?Dental(?:\s*Insurance)?/i).value;
+    result.vision = find(/(?:Pre-?Tax\s*)?Vision(?:\s*Insurance)?/i).value;
+    result.health = find(/(?:Pre-?Tax\s*)?(?:Medical|Health\s*Insurance|Health\s*Plan)/i).value;
+    result.k401 = find(/\b401\s*\(?k\)?\b|\bRetirement\b|\bPension\b|\bTSP\b|\b403\s*\(?b\)?\b/i).value;
+    result.hsa = find(/\bHSA\b|\bFSA\b|Health\s*Savings|Flex\s*Spend/i).value;
 
-    // Account last 4 (for ADP "xxxxxxx4110")
+    // --- Hours
+    const unitsM = text.match(/(\d{1,3}(?:\.\d{1,2})?)\s*Units?\b/i);
+    if (unitsM) result.hours = Number(unitsM[1]);
+
+    // Account last 4
     const acct = text.match(/x{4,}(\d{3,4})/i);
     if (acct) result.checkAccountLast4 = acct[1];
 
@@ -7417,25 +7265,29 @@
       if (raw) stub = JSON.parse(raw) || {};
     } catch (e) { /* ignore */ }
 
-    // Create the income transaction (gross amount, pre-tax flag true)
+    // Create ONE income transaction for the NET pay deposited to the chosen account.
+    // Gross / taxes / benefits / other are stored on the record (paycheckMeta) for reporting,
+    // but they DO NOT create expense transactions — your "spent" totals stay clean.
     state.expenses.push(touchRecord({
       id: uid(),
       type: "income",
       desc: `Paycheck — ${employer}`,
-      amount: gross,
+      amount: net,
       date,
       categoryId: null,
-      accountId: null, // gross goes nowhere directly; net is split below
+      accountId: depositAccountId || null,
       personId: null,
       tags: ["paycheck"],
       receipt: null,
       incomeType: "salary",
       source: employer,
-      preTax: true,
+      preTax: false, // amount is the net, no longer pre-tax
       paycheckId,
       paycheckMeta: {
-        gross, net, fedTax, stateTax, fica, health, k401, hsa,
-        // Rich metadata from paystub upload (parser) and accordion (form)
+        gross, net,
+        taxesTotal, benefitsTotal, otherTotal,
+        // Detailed breakouts (from form or paystub paste, if present)
+        fedTax, stateTax, fica, health, k401, hsa,
         ssTax: ssTaxField || (stub.ssTax ?? null),
         medicareTax: medicareTaxField || (stub.medicareTax ?? null),
         medical: medical || null,
@@ -7464,46 +7316,13 @@
     }));
 
     // Create deduction expenses — three high-level buckets matching the form
-    const taxCat = state.categories.find((c) => /tax/i.test(c.name))?.id || null;
-    const otherCat = state.categories.find((c) => c.name === "Other")?.id || null;
-    const buckets = [
-      ["Taxes", taxesTotal, taxCat],
-      ["Benefits", benefitsTotal, otherCat],
-      ["Other deductions", otherTotal, otherCat],
-    ];
-    buckets.forEach(([name, amount, catId]) => {
-      if (amount <= 0) return;
-      state.expenses.push(touchRecord({
-        id: uid(),
-        type: "expense",
-        desc: `${name} (${employer})`,
-        amount,
-        date,
-        categoryId: catId,
-        accountId: null,
-        personId: null,
-        tags: ["paycheck-deduction"],
-        receipt: null,
-        paycheckId,
-      }));
-    });
+    // REMOVED: deductions are no longer recorded as separate expense transactions.
+    // They are stored in paycheckMeta on the income record above for reporting only.
+    // This keeps your "spent" totals clean — only what you actually spent counts.
 
     // Single transfer-in for the net pay to the chosen account
-    if (depositAccountId && net > 0) {
-      state.expenses.push(touchRecord({
-        id: uid(),
-        type: "transfer-in",
-        desc: `Paycheck deposit — ${employer}`,
-        amount: net,
-        date,
-        categoryId: null,
-        accountId: depositAccountId,
-        personId: null,
-        tags: ["paycheck"],
-        receipt: null,
-        paycheckId,
-      }));
-    }
+    // REMOVED: the income transaction itself is already attributed to the deposit account
+    // (accountId set on the income above), so no separate transfer is needed.
 
     // Auto-add employer to saved income sources if not already there
     if (employer && !state.incomeSources.some((s) => (s.name || "").toLowerCase() === employer.toLowerCase())) {
