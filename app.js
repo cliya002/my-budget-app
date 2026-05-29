@@ -5945,8 +5945,9 @@
       .reduce((s, e) => s + Number(e.amount), 0);
     const received = filterFamilyByPeriod(familyReceivedTransactions())
       .reduce((s, e) => s + Number(e.amount), 0);
+    const net = total - received;
     const pillText = received > 0
-      ? `Sent: ${fmt(total)} · Received: ${fmt(received)} · Net: ${fmt(total - received)}`
+      ? `Sent ${fmt(total)} · Received ${fmt(received)} · Net ${net >= 0 ? "−" : "+"}${fmt(Math.abs(net))}`
       : `Total sent: ${fmt(total)}`;
     $("#familyTotalPill").textContent = pillText;
   }
@@ -5960,18 +5961,29 @@
     }
     list.innerHTML = state.people
       .map((p) => {
-        const totalAll = state.expenses
-          .filter((e) => e.personId === p.id && e.type !== "income"
-            && e.type !== "transfer-in" && e.type !== "transfer-out")
+        const sentAll = state.expenses
+          .filter((e) => e.personId === p.id && e.type === "expense")
+          .reduce((s, e) => s + Number(e.amount), 0);
+        const receivedAll = state.expenses
+          .filter((e) => e.personId === p.id && e.type === "income")
           .reduce((s, e) => s + Number(e.amount), 0);
         const notes = p.notes ? ` · ${escapeHtml(p.notes)}` : "";
+        let amountHtml;
+        if (sentAll > 0 && receivedAll > 0) {
+          const net = sentAll - receivedAll;
+          amountHtml = `${fmt(sentAll)} sent<div class="list-item-sub" style="margin-top:0.15rem">${fmt(receivedAll)} received · net ${net >= 0 ? "−" : "+"}${fmt(Math.abs(net))}</div>`;
+        } else if (receivedAll > 0) {
+          amountHtml = `<span class="positive">${fmt(receivedAll)}</span><div class="list-item-sub" style="margin-top:0.15rem">received all-time</div>`;
+        } else {
+          amountHtml = `${fmt(sentAll)}<div class="list-item-sub" style="margin-top:0.15rem">all-time</div>`;
+        }
         return `
           <li class="list-item person-item" style="border-left: 4px solid ${p.color || "#5b3fb8"}">
             <div class="list-item-main">
               <div class="list-item-title">${escapeHtml(p.name)}</div>
               <div class="list-item-sub">${escapeHtml(p.relation || "Other")}${notes}</div>
             </div>
-            <div class="list-item-amount">${fmt(totalAll)}<div class="list-item-sub" style="margin-top:0.15rem">all-time</div></div>
+            <div class="list-item-amount">${amountHtml}</div>
             <div class="list-item-actions">
               <button data-action="edit-person" data-id="${p.id}" title="Edit">✏️</button>
               <button data-action="del-person" data-id="${p.id}" title="Delete">🗑️</button>
@@ -6009,18 +6021,27 @@
 
     el.innerHTML = rows
       .map((r) => {
+        const sentPct = totalActivity > 0 ? (r.sent / totalActivity) * 100 : 0;
+        const recvPct = totalActivity > 0 ? (r.received / totalActivity) * 100 : 0;
         const netLabel = r.received > 0
-          ? `Sent ${fmt(r.sent)} · Received ${fmt(r.received)} · Net ${fmt(r.net)}`
+          ? `Sent ${fmt(r.sent)} · Received ${fmt(r.received)} · Net ${r.net >= 0 ? "−" : "+"}${fmt(Math.abs(r.net))}`
           : `${fmt(r.sent)} · ${r.count} txn${r.count === 1 ? "" : "s"}`;
+        // When both directions exist, show two bars (sent in person color, received in green)
+        const barsHtml = r.received > 0
+          ? `<div class="progress-bar progress-bar-stack">
+              <div class="progress-fill" style="width: ${sentPct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}" title="Sent ${fmt(r.sent)}"></div>
+              <div class="progress-fill" style="width: ${recvPct.toFixed(1)}%; background: #22c55e" title="Received ${fmt(r.received)}"></div>
+            </div>`
+          : `<div class="progress-bar">
+              <div class="progress-fill" style="width: ${r.pct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}"></div>
+            </div>`;
         return `
           <div class="progress-item person-progress" style="border-left: 4px solid ${r.person.color || "#5b3fb8"}">
             <div class="progress-header">
               <span class="progress-name">${escapeHtml(r.person.name)} <span class="progress-amount">${escapeHtml(r.person.relation || "")}</span></span>
               <span class="progress-amount">${netLabel}</span>
             </div>
-            <div class="progress-bar">
-              <div class="progress-fill" style="width: ${r.pct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}"></div>
-            </div>
+            ${barsHtml}
           </div>`;
       })
       .join("");
@@ -6036,8 +6057,11 @@
     const ctx = $("#chartFamilyTrend");
     if (!ctx) return;
 
-    const txns = familyTransactions();
-    if (!txns.length || !state.people.length) {
+    // Include BOTH sent and received transactions in the trend
+    const sentTxns = familyTransactions();
+    const recvTxns = familyReceivedTransactions();
+    const allTxns = [...sentTxns, ...recvTxns];
+    if (!allTxns.length || !state.people.length) {
       $("#familyTrendEmpty").hidden = false;
       ctx.style.display = "none";
       return;
@@ -6045,17 +6069,22 @@
     $("#familyTrendEmpty").hidden = true;
     ctx.style.display = "block";
 
-    // Last 6 months totals per person, stacked
+    // Last 6 months totals per person (net = sent − received)
     const m = currentMonth();
     const months = [];
     for (let i = 5; i >= 0; i--) months.push(monthOffset(m, -i));
 
     const datasets = state.people.map((p) => {
-      const data = months.map((mk) =>
-        txns
+      const data = months.map((mk) => {
+        const sent = sentTxns
           .filter((e) => e.personId === p.id && monthKey(e.date) === mk)
-          .reduce((s, e) => s + Number(e.amount), 0)
-      );
+          .reduce((s, e) => s + Number(e.amount), 0);
+        const received = recvTxns
+          .filter((e) => e.personId === p.id && monthKey(e.date) === mk)
+          .reduce((s, e) => s + Number(e.amount), 0);
+        // Net (sent minus received) — positive = you sent net, negative = you received net
+        return sent - received;
+      });
       return {
         label: p.name,
         data,

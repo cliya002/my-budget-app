@@ -3347,3 +3347,13 @@ input[type="color"] {
 }
 .preset-group.collapsed .preset-row { display: none; }
 [data-theme="dark"] .preset-group-header:hover { background: rgba(255, 255, 255, 0.04); }
+
+
+/* Stacked progress bar (sent + received) on Family breakdown */
+.progress-bar.progress-bar-stack {
+  display: flex;
+  overflow: hidden;
+}
+.progress-bar.progress-bar-stack .progress-fill {
+  height: 100%;
+}
