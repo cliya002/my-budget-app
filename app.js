@@ -1996,6 +1996,34 @@
           text: `<strong>${inSoon.length} card payments</strong> due in the next 7 days. Plan now in the Credit tab.`,
         });
       }
+
+      // Statement closing soon — pay BEFORE close to lower reported util
+      const closingSoon = state.cards.filter((c) => {
+        if (!c.closeDay || !(cardCurrentBalance(c) > 0)) return false;
+        const day = clampDayToMonth(Number(c.closeDay), todayMonth);
+        const close = new Date(today.getFullYear(), today.getMonth(), day);
+        const diffDays = Math.round((close - today) / 86400000);
+        return diffDays >= 0 && diffDays <= 5;
+      });
+      if (closingSoon.length === 1) {
+        const c = closingSoon[0];
+        const lim = Number(c.limit) || 0;
+        const bal = cardCurrentBalance(c);
+        const util = lim > 0 ? (bal / lim) * 100 : 0;
+        if (util >= 10) {
+          insights.push({
+            icon: "📅",
+            tone: util >= 30 ? "warn" : "",
+            text: `<strong>${escapeHtml(c.name)}</strong> statement closes in ${c.closeDay - today.getDate()}d at ${util.toFixed(0)}% util. Pay before close to report lower utilization.`,
+          });
+        }
+      } else if (closingSoon.length > 1) {
+        insights.push({
+          icon: "📅",
+          tone: "warn",
+          text: `<strong>${closingSoon.length} statements</strong> closing in 5 days. Pay down before close to lower reported util.`,
+        });
+      }
     }
 
     // Cap to 6 most relevant
@@ -5178,7 +5206,6 @@
     $("#simUtil").textContent = `${newUtil.toFixed(0)}%`;
 
     // Rough heuristic: utilization is ~30% of FICO. Going from >30% → <10% can yield ~30-50 pts.
-    // Use a simple linear estimate based on utilization brackets.
     let estChange = 0;
     if (oldUtil >= 50 && newUtil < 30) estChange = 40;
     else if (oldUtil >= 30 && newUtil < 10) estChange = 30;
@@ -5193,6 +5220,23 @@
     } else {
       el.textContent = "+0";
       el.className = "";
+    }
+
+    // Extra context: estimated monthly interest savings from paying down
+    const simSavingsEl = $("#simInterestSavings");
+    if (simSavingsEl) {
+      const avgApr = state.cards.length
+        ? state.cards.reduce((s, c) => s + (Number(c.apr) || 22.99), 0) / state.cards.length
+        : 22.99;
+      const monthlySavings = (payDown * (avgApr / 100)) / 12;
+      simSavingsEl.textContent = monthlySavings > 0
+        ? `≈ ${fmt(monthlySavings)}/mo less interest`
+        : "";
+    }
+    // Show new debt total
+    const simDebtEl = $("#simNewDebt");
+    if (simDebtEl) {
+      simDebtEl.textContent = `${fmt(newBal)} remaining`;
     }
   }
 
