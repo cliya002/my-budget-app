@@ -3528,3 +3528,115 @@ input[type="color"] {
 }
 .card-detail-row span:first-child { color: var(--muted); }
 .card-detail-row strong { font-variant-numeric: tabular-nums; }
+
+
+/* ---------- Events tab ---------- */
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.event-card {
+  padding: 0.85rem 1rem;
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.event-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.event-card-head h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+.event-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.78rem;
+  margin-bottom: 0.55rem;
+}
+.event-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+}
+.event-badge.active {
+  background: rgba(34, 197, 94, 0.15);
+  color: #16a34a;
+}
+.event-badge.completed {
+  background: rgba(91, 63, 184, 0.12);
+  color: var(--accent, #5b3fb8);
+}
+.event-badge.planning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #b45309;
+}
+.event-badge.over {
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+}
+.event-amounts {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 0.4rem;
+  font-size: 0.92rem;
+}
+.event-lines {
+  margin-top: 0.6rem;
+  border-top: 1px dashed var(--border);
+  padding-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.event-line-row { display: flex; flex-direction: column; gap: 0.25rem; }
+.event-line-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+}
+.event-line-row .progress-bar { height: 5px; }
+.event-notes {
+  margin-top: 0.55rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed var(--border);
+  font-size: 0.82rem;
+  color: var(--muted);
+  white-space: pre-wrap;
+}
+
+/* Event modal — line item form rows */
+.event-line-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+}
+.event-line-form-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr auto;
+  gap: 0.4rem;
+  align-items: center;
+}
+.event-line-form-row input {
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
+.event-line-form-row .li-budget { text-align: right; }
+.event-line-form-row .li-remove {
+  padding: 0.3rem 0.6rem;
+  font-size: 1rem;
+  line-height: 1;
+}

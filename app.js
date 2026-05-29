@@ -50,6 +50,7 @@
     utilHistory: [],       // each: { date: 'YYYY-MM-DD', util: number }
     billNegotiations: [],  // each: { id, vendor, before, after, savedMonthly, date, note }
     incomeSources: [],     // each: { id, name, employer, type, defaultAmount } — saved payers/employers
+    events: [],            // each: { id, name, icon, color, startDate, endDate, budget, lineItems, notes, status }
     deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
     mapTimestamps: {},     // map: collectionName -> { key: lastUpdatedAt } for map-style collections
     settings: {
@@ -299,6 +300,7 @@
     if (!Array.isArray(state.utilHistory)) state.utilHistory = [];
     if (!Array.isArray(state.billNegotiations)) state.billNegotiations = [];
     if (!Array.isArray(state.incomeSources)) state.incomeSources = [];
+    if (!Array.isArray(state.events)) state.events = [];
 
     // Migration: each credit card gets a paired account in Balances so debt is visible
     // and pay-card transfers can post to it.
@@ -993,6 +995,8 @@
     renderTagFilterChips();
     renderBillNegotiations();
     renderIncomeSourcesManage();
+    renderEventsTab();
+    populateEventSelect();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
     renderTopbarSpent();
@@ -1202,6 +1206,215 @@
         },
       },
     });
+  }
+
+  /* ---------- Events (vacations, life events) ---------- */
+
+  // Compute spend on an event by summing expense txns tagged to it
+  function eventSpentTotal(eventId, lineItemId) {
+    return state.expenses.reduce((s, e) => {
+      if (e.eventId !== eventId) return s;
+      if (e.type !== "expense") return s;
+      if (lineItemId && e.eventLineItemId !== lineItemId) return s;
+      return s + (Number(e.amount) || 0);
+    }, 0);
+  }
+
+  // Auto-derive status if not explicitly set
+  function eventStatus(ev) {
+    if (ev.status === "completed") return "completed";
+    const today = todayStr();
+    if (ev.endDate && today > ev.endDate) return "completed";
+    if (ev.startDate && today >= ev.startDate) return "active";
+    return "planning";
+  }
+
+  function renderEventsTab() {
+    const activeList = $("#eventsActiveList");
+    const completedList = $("#eventsCompletedList");
+    const pill = $("#eventsTotalPill");
+    if (!activeList || !completedList) return;
+
+    if (!state.events.length) {
+      activeList.innerHTML = '<p class="empty">No events yet. Tap <strong>+ New Event</strong> to plan your first one.</p>';
+      completedList.innerHTML = '<p class="empty">No completed events yet.</p>';
+      if (pill) pill.textContent = "No events yet";
+      return;
+    }
+
+    const active = [];
+    const completed = [];
+    state.events.forEach((ev) => {
+      if (eventStatus(ev) === "completed") completed.push(ev);
+      else active.push(ev);
+    });
+    // Active sorted by start date asc; completed by end date desc
+    active.sort((a, b) => (a.startDate || "9999").localeCompare(b.startDate || "9999"));
+    completed.sort((a, b) => (b.endDate || "").localeCompare(a.endDate || ""));
+
+    if (pill) {
+      const totalBudget = state.events.reduce((s, ev) => s + (Number(ev.budget) || 0), 0);
+      const totalSpent = state.events.reduce((s, ev) => s + eventSpentTotal(ev.id), 0);
+      pill.textContent = `${state.events.length} event${state.events.length === 1 ? "" : "s"} · ${fmt(totalSpent)} / ${fmt(totalBudget)}`;
+    }
+
+    activeList.innerHTML = active.length ? active.map(renderEventCard).join("") : '<p class="empty">No upcoming events.</p>';
+    completedList.innerHTML = completed.length ? completed.map(renderEventCard).join("") : '<p class="empty">No completed events yet.</p>';
+  }
+
+  function renderEventCard(ev) {
+    const status = eventStatus(ev);
+    const today = new Date();
+    const spent = eventSpentTotal(ev.id);
+    const budget = Number(ev.budget) || 0;
+    const pct = budget > 0 ? Math.min(100, (spent / budget) * 100) : 0;
+    const overBudget = budget > 0 && spent > budget;
+    let cls = "success";
+    if (pct >= 100) cls = "danger";
+    else if (pct >= 80) cls = "warning";
+
+    let timing = "";
+    if (status === "planning" && ev.startDate) {
+      const start = new Date(ev.startDate);
+      const days = Math.ceil((start - today) / (24 * 60 * 60 * 1000));
+      timing = days > 0 ? `Starts in ${days} day${days === 1 ? "" : "s"}` : "Starting soon";
+    } else if (status === "active") {
+      const end = ev.endDate ? new Date(ev.endDate) : null;
+      if (end) {
+        const days = Math.ceil((end - today) / (24 * 60 * 60 * 1000));
+        timing = days > 0 ? `Active · ${days} day${days === 1 ? "" : "s"} left` : "Active · ends today";
+      } else {
+        timing = "Active";
+      }
+    } else {
+      timing = "Completed";
+    }
+
+    const dateRange = ev.startDate && ev.endDate
+      ? `${ev.startDate} → ${ev.endDate}`
+      : (ev.startDate || ev.endDate || "No dates set");
+
+    // Line item breakdown
+    let lineItemsHtml = "";
+    if (Array.isArray(ev.lineItems) && ev.lineItems.length) {
+      lineItemsHtml = `<div class="event-lines">${ev.lineItems.map((li) => {
+        const liSpent = eventSpentTotal(ev.id, li.id);
+        const liBudget = Number(li.budget) || 0;
+        const liPct = liBudget > 0 ? Math.min(100, (liSpent / liBudget) * 100) : 0;
+        const liCls = liPct >= 100 ? "danger" : liPct >= 80 ? "warning" : "success";
+        return `
+          <div class="event-line-row">
+            <div class="event-line-head">
+              <span>${escapeHtml(li.label)}</span>
+              <span class="card-sub">${fmt(liSpent)}${liBudget > 0 ? ` / ${fmt(liBudget)}` : ""}</span>
+            </div>
+            ${liBudget > 0 ? `<div class="progress-bar"><div class="progress-fill ${liCls}" style="width:${liPct}%"></div></div>` : ""}
+          </div>`;
+      }).join("")}</div>`;
+    }
+
+    const statusBadge = status === "active" ? '<span class="event-badge active">🟢 Active</span>'
+      : status === "completed" ? '<span class="event-badge completed">✓ Completed</span>'
+      : '<span class="event-badge planning">📅 Planning</span>';
+
+    const overTag = overBudget ? `<span class="event-badge over">⚠ Over by ${fmt(spent - budget)}</span>` : "";
+
+    return `
+      <div class="event-card" style="border-left: 4px solid ${ev.color || "#5b3fb8"}">
+        <div class="event-card-head">
+          <h3>${ev.icon || "🌴"} ${escapeHtml(ev.name)}</h3>
+          <div class="list-item-actions">
+            <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
+            <button data-action="edit-event" data-id="${ev.id}" title="Edit">✏️</button>
+            <button data-action="del-event" data-id="${ev.id}" title="Delete">🗑️</button>
+          </div>
+        </div>
+        <div class="event-meta">${statusBadge}${overTag}<span class="card-sub">${timing} · ${dateRange}</span></div>
+        ${budget > 0 ? `
+          <div class="event-amounts">
+            <div><strong>${fmt(spent)}</strong> of ${fmt(budget)}</div>
+            <div class="card-sub">${pct.toFixed(0)}% used${budget > 0 ? ` · ${fmt(Math.max(0, budget - spent))} left` : ""}</div>
+          </div>
+          <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct}%"></div></div>
+        ` : `
+          <div class="event-amounts">
+            <div><strong>${fmt(spent)}</strong> spent</div>
+            <div class="card-sub">No budget set</div>
+          </div>
+        `}
+        ${lineItemsHtml}
+        ${ev.notes ? `<div class="event-notes">${escapeHtml(ev.notes)}</div>` : ""}
+      </div>`;
+  }
+
+  function populateEventSelect() {
+    const sel = $("#expEvent");
+    if (!sel) return;
+    const today = todayStr();
+    // Prefer active/upcoming events at top
+    const sorted = [...state.events].sort((a, b) => {
+      const ax = (a.endDate || "9999") < today ? 1 : 0;
+      const bx = (b.endDate || "9999") < today ? 1 : 0;
+      if (ax !== bx) return ax - bx;
+      return (a.startDate || "").localeCompare(b.startDate || "");
+    });
+    sel.innerHTML = '<option value="">— No event —</option>' +
+      sorted.map((ev) => {
+        const status = eventStatus(ev);
+        const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
+        return `<option value="${ev.id}">${tag} ${escapeHtml(ev.icon || "")} ${escapeHtml(ev.name)}</option>`;
+      }).join("");
+  }
+
+  /* ---------- Event modal ---------- */
+  function openEventModal(ev) {
+    const isEdit = !!ev;
+    $("#eventModalTitle").textContent = isEdit ? "Edit Event" : "New Event";
+    $("#eventEditId").value = isEdit ? ev.id : "";
+    $("#eventName").value = isEdit ? ev.name : "";
+    $("#eventIcon").value = isEdit ? (ev.icon || "🌴") : "🌴";
+    $("#eventStart").value = isEdit ? (ev.startDate || "") : "";
+    $("#eventEnd").value = isEdit ? (ev.endDate || "") : "";
+    $("#eventBudget").value = isEdit && ev.budget ? Number(ev.budget) : "";
+    $("#eventNotes").value = isEdit ? (ev.notes || "") : "";
+    renderEventLineItemsForm(isEdit ? (ev.lineItems || []) : []);
+    $("#eventModal").classList.add("open");
+    setTimeout(() => $("#eventName")?.focus(), 50);
+  }
+
+  function closeEventModal() {
+    $("#eventModal").classList.remove("open");
+  }
+
+  function renderEventLineItemsForm(items) {
+    const container = $("#eventLineItems");
+    if (!container) return;
+    container.innerHTML = "";
+    items.forEach((li) => addEventLineItemRow(li));
+  }
+
+  function addEventLineItemRow(li) {
+    const container = $("#eventLineItems");
+    if (!container) return;
+    const row = document.createElement("div");
+    row.className = "event-line-form-row";
+    row.dataset.liId = li?.id || uid();
+    row.innerHTML = `
+      <input type="text" class="li-label" placeholder="Flights, Hotel, Food" value="${escapeHtml(li?.label || "")}" />
+      <input type="number" class="li-budget" step="0.01" min="0" placeholder="Budget" value="${li?.budget || ""}" />
+      <button type="button" class="btn-secondary li-remove" title="Remove">×</button>
+    `;
+    row.querySelector(".li-remove").addEventListener("click", () => row.remove());
+    container.appendChild(row);
+  }
+
+  function readEventLineItemsFromForm() {
+    return Array.from(document.querySelectorAll(".event-line-form-row")).map((row) => {
+      const label = row.querySelector(".li-label").value.trim();
+      const budget = parseFloat(row.querySelector(".li-budget").value) || 0;
+      if (!label) return null;
+      return { id: row.dataset.liId, label, budget };
+    }).filter(Boolean);
   }
 
   function renderRecurringList() {
@@ -7260,6 +7473,9 @@
     if (prefill && prefill.goalId) {
       $("#expGoal").value = prefill.goalId;
     }
+    if (prefill && prefill.eventId) {
+      $("#expEvent") && ($("#expEvent").value = prefill.eventId);
+    }
 
     // Income-specific prefill
     if (prefill && prefill.type === "income") {
@@ -8341,6 +8557,7 @@
       const accountId = $("#expAccount").value;
       const personId = $("#expPerson").value;
       const goalId = $("#expGoal").value;
+      const eventId = $("#expEvent")?.value || "";
       const tagsRaw = $("#expTags").value.trim();
       const tags = tagsRaw
         ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
@@ -8382,6 +8599,7 @@
             accountId: accountId || null,
             personId: personId || null,
             goalId: goalId || null,
+            eventId: eventId || null,
             tags,
             receipt,
             incomeType,
@@ -8396,6 +8614,7 @@
           accountId: accountId || null,
           personId: personId || null,
           goalId: goalId || null,
+          eventId: eventId || null,
           tags,
           receipt,
           incomeType,
@@ -9479,6 +9698,39 @@
     $("#personModal").addEventListener("click", (e) => {
       if (e.target.id === "personModal") closePersonModal();
     });
+
+    // Events: form
+    $("#addEventBtn")?.addEventListener("click", () => openEventModal(null));
+    $("#eventModalClose")?.addEventListener("click", closeEventModal);
+    $("#eventModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "eventModal") closeEventModal();
+    });
+    $("#addEventLineItemBtn")?.addEventListener("click", () => addEventLineItemRow(null));
+    $("#eventForm")?.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const editId = $("#eventEditId").value;
+      const ev = {
+        id: editId || uid(),
+        name: $("#eventName").value.trim(),
+        icon: $("#eventIcon").value.trim() || "🌴",
+        startDate: $("#eventStart").value || null,
+        endDate: $("#eventEnd").value || null,
+        budget: parseFloat($("#eventBudget").value) || 0,
+        notes: $("#eventNotes").value.trim(),
+        lineItems: readEventLineItemsFromForm(),
+      };
+      if (!ev.name) return;
+      if (editId) {
+        const idx = state.events.findIndex((x) => x.id === editId);
+        if (idx >= 0) state.events[idx] = touchRecord({ ...state.events[idx], ...ev });
+      } else {
+        state.events.push(touchRecord(ev));
+      }
+      saveData();
+      closeEventModal();
+      renderAll();
+      showToast(editId ? "Event updated" : "Event saved");
+    });
     $("#personForm").addEventListener("submit", (e) => {
       e.preventDefault();
       const editId = $("#personEditId").value;
@@ -10165,6 +10417,39 @@
       } else if (action === "edit-person") {
         const p = state.people.find((x) => x.id === id);
         if (p) openPersonModal(p);
+      } else if (action === "edit-event") {
+        const ev = state.events.find((x) => x.id === id);
+        if (ev) openEventModal(ev);
+      } else if (action === "del-event") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        const tagged = state.expenses.filter((e) => e.eventId === id).length;
+        const msg = tagged > 0
+          ? `Delete "${ev.name}"? ${tagged} transaction${tagged === 1 ? "" : "s"} tagged to this event will be unlinked but kept.`
+          : `Delete "${ev.name}"?`;
+        if (!confirm(msg)) return;
+        tombstoneRecord("events", id);
+        state.events = state.events.filter((x) => x.id !== id);
+        // Unlink txns from the deleted event
+        state.expenses.forEach((e) => {
+          if (e.eventId === id) {
+            e.eventId = null;
+            e.eventLineItemId = null;
+            touchRecord(e);
+          }
+        });
+        saveData();
+        renderAll();
+        showToast("Event deleted");
+      } else if (action === "quick-event-spend") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        openExpenseModal({
+          type: "expense",
+          desc: `${ev.name} expense`,
+          eventId: ev.id,
+          date: todayStr(),
+        });
       } else if (action === "quick-send-person") {
         // Open Add Transaction modal pre-filled with this person and Family category
         const p = state.people.find((x) => x.id === id);
@@ -11167,7 +11452,7 @@
     "categories", "expenses", "goals", "presets", "recurring",
     "cards", "creditScores", "accounts", "people",
     "creditInquiries", "negativeItems", "limitIncreases", "creditGoals",
-    "billNegotiations", "incomeSources",
+    "billNegotiations", "incomeSources", "events",
   ];
   // Date-keyed time series — keep newest value per date
   const DATE_SERIES_COLLECTIONS = ["netWorthHistory", "utilHistory"];
