@@ -3220,3 +3220,68 @@ input[type="color"] {
   border-radius: 999px;
   margin-right: 0.5rem;
 }
+
+
+/* ---------- Simplified paycheck form ---------- */
+.paycheck-simple {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  margin: 0.75rem 0;
+}
+.ps-row {
+  display: grid;
+  grid-template-columns: 6px minmax(110px, 0.85fr) 1.15fr;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-alt, var(--card));
+}
+.ps-bar {
+  width: 4px;
+  height: 28px;
+  border-radius: 4px;
+  background: transparent;
+}
+.ps-bar-gross { background: transparent; }
+.ps-bar-taxes { background: #ec4899; }
+.ps-bar-benefits { background: #06b6d4; }
+.ps-bar-other { background: #f59e0b; }
+.ps-bar-takehome { background: #22c55e; }
+.ps-label {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text);
+  margin: 0;
+}
+.ps-row input[type="number"],
+.ps-account-select {
+  width: 100%;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.95rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ps-account-select { text-align: left; }
+.ps-row-takehome {
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.08), rgba(34, 197, 94, 0.02));
+  border-color: rgba(34, 197, 94, 0.3);
+}
+.ps-takehome-value {
+  text-align: right;
+  font-weight: 700;
+  font-size: 1.2rem;
+  color: #16a34a;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 600px) {
+  .ps-row { padding: 0.6rem 0.7rem; gap: 0.45rem; grid-template-columns: 6px minmax(95px, 0.85fr) 1.15fr; }
+  .ps-label { font-size: 0.88rem; }
+  .ps-takehome-value { font-size: 1.1rem; }
+}

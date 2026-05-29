@@ -6718,10 +6718,10 @@
   }
 
   /* ---------- Paycheck Logger ---------- */
-  // All paycheck input field IDs
+  // Simplified field set + hidden compatibility fields
   const PAYCHECK_FIELD_IDS = [
-    "#pcGross", "#pcHours", "#pcNet",
-    "#pcFedTax", "#pcStateTax", "#pcSsTax", "#pcMedicareTax", "#pcFica",
+    "#pcGross", "#pcTaxes", "#pcBenefits", "#pcOther", "#pcNet",
+    "#pcHours", "#pcFedTax", "#pcStateTax", "#pcSsTax", "#pcMedicareTax", "#pcFica",
     "#pcMedical", "#pcDental", "#pcVision", "#pcHsa", "#pc401k", "#pcOtherBenefits", "#pcHealth",
     "#pcAccidentIns", "#pcOtherDed",
   ];
@@ -6732,9 +6732,6 @@
     PAYCHECK_FIELD_IDS.forEach((id) => {
       const el = $(id); if (el) el.value = "";
     });
-    // Reset user-set marker on net so auto-fill resumes
-    const netReset = $("#pcNet");
-    if (netReset) delete netReset.dataset.userSet;
     // Reset any stashed paystub metadata
     const form = $("#paycheckForm");
     if (form) delete form.dataset.paystubMeta;
@@ -6744,15 +6741,9 @@
       status.textContent = "";
       status.className = "paystub-status";
     }
-    // Reset accordion: collapse all sections, show takehome by default
-    $$(".paystub-section").forEach((sec) => {
-      sec.classList.remove("open");
-      const body = sec.querySelector(".paystub-body");
-      if (body) body.hidden = true;
-    });
+    populatePaycheckAccountSelect();
     updatePaycheckTotals();
     populateIncomeSourceList();
-    initPaycheckSplits();
     $("#paycheckModal").classList.add("open");
     setTimeout(() => $("#pcEmployer")?.focus(), 50);
   }
@@ -6766,56 +6757,45 @@
   }
 
   function initPaycheckSplits() {
-    const container = $("#paycheckSplits");
-    container.innerHTML = "";
-    if (state.accounts.length === 0) {
-      container.innerHTML = '<p class="empty">Add accounts in Balances first.</p>';
-      return;
-    }
-    // Default: one row, full net pay to first account
-    addSplitRow(state.accounts[0].id, "");
-    updateSplitRemaining();
+    // Legacy — no-op, retained so paystub upload code that references it doesn't error.
+    // The new simple form uses a single account dropdown instead of split rows.
   }
 
-  // Calculate live subtotals for each accordion section and update the header amounts.
-  // Also auto-derive net from gross - taxes - benefits - other (unless user manually set it).
+  function populatePaycheckAccountSelect() {
+    const sel = $("#pcAccount");
+    if (!sel) return;
+    if (!state.accounts.length) {
+      sel.innerHTML = '<option value="">(no accounts — add one in Balances)</option>';
+      return;
+    }
+    // Prefer non-credit accounts (cash/checking/savings) for paycheck deposits
+    const liquid = state.accounts.filter((a) => (a.type || "").toLowerCase() !== "credit" && !a.cardId);
+    const accs = liquid.length ? liquid : state.accounts;
+    sel.innerHTML = accs
+      .map((a) => `<option value="${a.id}">${escapeHtml(a.name)}</option>`)
+      .join("");
+  }
+
+  // Simple totals: just compute net = gross − taxes − benefits − other and update the label.
   function updatePaycheckTotals() {
     const num = (id) => parseFloat($(id)?.value) || 0;
-
     const gross = num("#pcGross");
-    const hours = num("#pcHours");
+    const taxes = num("#pcTaxes");
+    const benefits = num("#pcBenefits");
+    const other = num("#pcOther");
 
-    const taxes = num("#pcFedTax") + num("#pcStateTax") + num("#pcSsTax") + num("#pcMedicareTax");
-    // Keep FICA hidden field in sync as SS + Medicare for backward compat
-    const ficaEl = $("#pcFica");
-    if (ficaEl) ficaEl.value = (num("#pcSsTax") + num("#pcMedicareTax")).toFixed(2);
-
-    const benefits = num("#pcMedical") + num("#pcDental") + num("#pcVision")
-      + num("#pcHsa") + num("#pc401k") + num("#pcOtherBenefits");
-    // Health hidden field = medical + dental + vision (for backward compat)
-    const healthEl = $("#pcHealth");
-    if (healthEl) healthEl.value = (num("#pcMedical") + num("#pcDental") + num("#pcVision")).toFixed(2);
-
-    const other = num("#pcAccidentIns") + num("#pcOtherDed");
-
-    const computedNet = Math.max(0, gross - taxes - benefits - other);
-
-    // Update displays
-    $("#pcGrossDisplay") && ($("#pcGrossDisplay").textContent = fmt(gross));
-    $("#pcGrossUnits") && ($("#pcGrossUnits").textContent = hours > 0 ? `${hours} Units` : "");
-    $("#pcTaxesDisplay") && ($("#pcTaxesDisplay").textContent = taxes > 0 ? `−${fmt(taxes)}` : fmt(0));
-    $("#pcBenefitsDisplay") && ($("#pcBenefitsDisplay").textContent = benefits > 0 ? `−${fmt(benefits)}` : fmt(0));
-    $("#pcOtherDisplay") && ($("#pcOtherDisplay").textContent = other > 0 ? `−${fmt(other)}` : fmt(0));
-
-    // Auto-fill net unless user manually edited it (we mark via dataset.userSet)
+    const net = Math.max(0, gross - taxes - benefits - other);
     const netEl = $("#pcNet");
-    if (netEl && netEl.dataset.userSet !== "1" && gross > 0) {
-      netEl.value = computedNet.toFixed(2);
-    }
-    const netDisplayed = parseFloat(netEl?.value) || computedNet;
-    $("#pcNetDisplay") && ($("#pcNetDisplay").textContent = fmt(netDisplayed));
+    if (netEl) netEl.value = net.toFixed(2);
+    const disp = $("#pcNetDisplay");
+    if (disp) disp.textContent = fmt(net);
 
-    updateSplitRemaining();
+    // Backwards-compat: keep hidden FICA / Health fields zeroed (we no longer collect them granularly)
+    // The detailed paystub parser uses these directly when filling.
+  }
+
+  function updateSplitRemaining() {
+    // Legacy — single-account flow doesn't use splits, so this is a no-op.
   }
 
   function addSplitRow(accountId, amount) {
@@ -7317,56 +7297,23 @@
     if (p.employer) $("#pcEmployer").value = p.employer;
     if (p.date) $("#pcDate").value = p.date;
     if (p.gross !== null) $("#pcGross").value = p.gross.toFixed(2);
-    if (p.hours) $("#pcHours").value = String(p.hours);
-    else if (p.regularHours) $("#pcHours").value = String(p.regularHours);
 
-    if (p.fedTax !== null) $("#pcFedTax").value = p.fedTax.toFixed(2);
-    if (p.stateTax !== null) $("#pcStateTax").value = p.stateTax.toFixed(2);
-    if (p.ssTax !== null) $("#pcSsTax").value = p.ssTax.toFixed(2);
-    if (p.medicareTax !== null) $("#pcMedicareTax").value = p.medicareTax.toFixed(2);
-    // If only combined FICA available (no SS/Medicare separately), put it on SS
-    if (p.ssTax === null && p.medicareTax === null && p.fica !== null) {
-      $("#pcSsTax").value = p.fica.toFixed(2);
-    }
+    // SIMPLIFIED: collapse parsed details into the 3 buckets the form actually shows
+    let taxesItemized = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0);
+    if (taxesItemized < 0.01 && p.fica) taxesItemized = p.fica;
+    const taxesTotal = taxesItemized > 0 ? taxesItemized : (p._taxesTotal || 0);
+    if (taxesTotal > 0) $("#pcTaxes").value = taxesTotal.toFixed(2);
 
-    if (p.health !== null) $("#pcMedical").value = p.health.toFixed(2);
-    if (p.dental !== null) $("#pcDental").value = p.dental.toFixed(2);
-    if (p.vision !== null) $("#pcVision").value = p.vision.toFixed(2);
-    if (p.k401 !== null) $("#pc401k").value = p.k401.toFixed(2);
-    if (p.hsa !== null) $("#pcHsa").value = p.hsa.toFixed(2);
-
-    // Fallbacks: when the user pasted only the COLLAPSED ADP view, individual line items
-    // are missing but section totals are available. Drop the totals into the bucket so
-    // the form still adds up correctly.
-    const taxesItemized = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0);
-    if (taxesItemized < 0.01 && p._taxesTotal && p._taxesTotal > 0) {
-      // Whole tax bucket as a single Federal Income Tax fallback (most common)
-      $("#pcFedTax").value = p._taxesTotal.toFixed(2);
-    }
     const benefitsItemized = (p.health || 0) + (p.dental || 0) + (p.vision || 0)
       + (p.k401 || 0) + (p.hsa || 0);
-    if (benefitsItemized < 0.01 && p._benefitsTotal && p._benefitsTotal > 0) {
-      // Drop the whole benefits bucket onto Other Benefits so totals still match
-      $("#pcOtherBenefits").value = p._benefitsTotal.toFixed(2);
-    }
+    const benefitsTotal = benefitsItemized > 0 ? benefitsItemized : (p._benefitsTotal || 0);
+    if (benefitsTotal > 0) $("#pcBenefits").value = benefitsTotal.toFixed(2);
+
     if (p._otherTotal && p._otherTotal > 0) {
-      $("#pcOtherDed").value = p._otherTotal.toFixed(2);
+      $("#pcOther").value = p._otherTotal.toFixed(2);
     }
 
-    // Net: only set if parser found one explicitly. Otherwise let updatePaycheckTotals compute it.
-    const netEl = $("#pcNet");
-    if (p.net !== null && netEl) {
-      netEl.value = p.net.toFixed(2);
-      // If parser-supplied net differs from computed, mark as user-set so it's preserved
-      const totalDed = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0)
-        + (p.health || 0) + (p.dental || 0) + (p.vision || 0) + (p.k401 || 0) + (p.hsa || 0);
-      const computedNet = Math.max(0, (p.gross || 0) - totalDed);
-      if (Math.abs(p.net - computedNet) > 0.5) {
-        netEl.dataset.userSet = "1"; // preserve the explicit value
-      }
-    }
-
-    // Stash extra metadata on the form (used at save time for richer record)
+    // Stash all parsed metadata onto the form for the eventual save record
     const form = $("#paycheckForm");
     if (form) {
       form.dataset.paystubMeta = JSON.stringify({
@@ -7390,37 +7337,52 @@
         payPeriodEnd: p.payPeriodEnd,
         checkAccountLast4: p.checkAccountLast4,
         earnings: p.earnings,
+        // Granular tax / benefit breakouts
+        fedTax: p.fedTax,
+        stateTax: p.stateTax,
+        health: p.health,
+        k401: p.k401,
+        hsa: p.hsa,
       });
     }
 
-    // Refresh accordion totals + split remaining
+    // Recompute net display
     updatePaycheckTotals();
 
-    // Auto-expand sections that received data so the user can review immediately
-    const expandSection = (key) => {
-      const sec = document.querySelector(`.paystub-section.section-${key}`);
-      if (!sec) return;
-      sec.classList.add("open");
-      const body = sec.querySelector(".paystub-body");
-      if (body) body.hidden = false;
-    };
-    if (p.gross !== null) expandSection("gross");
-    if (p.fedTax !== null || p.stateTax !== null || p.ssTax !== null || p.medicareTax !== null || (p._taxesTotal && p._taxesTotal > 0)) expandSection("taxes");
-    if (p.health !== null || p.dental !== null || p.vision !== null || p.k401 !== null || p.hsa !== null || (p._benefitsTotal && p._benefitsTotal > 0)) expandSection("benefits");
-    if (p._otherTotal && p._otherTotal > 0) expandSection("other");
-    if (p.net !== null) expandSection("takehome");
+    // If parser supplied a net that disagrees with the computed value, prefer the parsed one
+    if (p.net !== null) {
+      const computed = parseFloat($("#pcNet").value) || 0;
+      if (Math.abs(p.net - computed) > 0.5) {
+        // Adjust "Other" so net ends up matching the parsed value
+        const gross = parseFloat($("#pcGross").value) || 0;
+        const taxes = parseFloat($("#pcTaxes").value) || 0;
+        const benefits = parseFloat($("#pcBenefits").value) || 0;
+        const otherNeeded = Math.max(0, gross - taxes - benefits - p.net);
+        $("#pcOther").value = otherNeeded.toFixed(2);
+        updatePaycheckTotals();
+      }
+    }
   }
 
   function savePaycheck() {
-    // Make sure live totals are current before reading hidden fica/health
+    // Make sure live totals are current
     updatePaycheckTotals();
 
     const employer = $("#pcEmployer").value.trim();
     const date = $("#pcDate").value;
     const gross = parseFloat($("#pcGross").value);
     const net = parseFloat($("#pcNet").value);
-    if (!employer || !date || isNaN(gross) || isNaN(net)) return false;
+    if (!employer || !date || isNaN(gross) || isNaN(net)) {
+      showToast("Fill in employer, date, and gross pay");
+      return false;
+    }
 
+    // Simple bucket totals from the form
+    const taxesTotal = parseFloat($("#pcTaxes").value) || 0;
+    const benefitsTotal = parseFloat($("#pcBenefits").value) || 0;
+    const otherTotal = parseFloat($("#pcOther").value) || 0;
+
+    // Backwards-compat fields (kept on the saved record)
     const fedTax = parseFloat($("#pcFedTax").value) || 0;
     const stateTax = parseFloat($("#pcStateTax").value) || 0;
     const fica = parseFloat($("#pcFica").value) || 0;
@@ -7428,7 +7390,7 @@
     const k401 = parseFloat($("#pc401k").value) || 0;
     const hsa = parseFloat($("#pcHsa").value) || 0;
 
-    // Granular breakouts from accordion
+    // Granular breakouts (mostly from paystub metadata stash)
     const ssTaxField = parseFloat($("#pcSsTax")?.value) || 0;
     const medicareTaxField = parseFloat($("#pcMedicareTax")?.value) || 0;
     const medical = parseFloat($("#pcMedical")?.value) || 0;
@@ -7439,18 +7401,11 @@
     const otherDed = parseFloat($("#pcOtherDed")?.value) || 0;
     const hours = parseFloat($("#pcHours")?.value) || 0;
 
-    // Collect splits
-    const splits = [];
-    $$(".paycheck-split-row").forEach((row) => {
-      const accountId = row.querySelector(".split-account").value;
-      const amount = parseFloat(row.querySelector(".split-amount").value) || 0;
-      if (amount > 0 && accountId) splits.push({ accountId, amount });
-    });
-    const splitTotal = splits.reduce((s, x) => s + x.amount, 0);
-    if (Math.abs(splitTotal - net) > 0.01) {
-      if (!confirm(`Split total (${fmt(splitTotal)}) doesn't match net pay (${fmt(net)}). Save anyway?`)) {
-        return false;
-      }
+    // Single deposit account from the dropdown
+    const depositAccountId = $("#pcAccount")?.value || null;
+    if (!depositAccountId) {
+      const proceed = confirm("No deposit account selected. Save without depositing the net to an account?");
+      if (!proceed) return false;
     }
 
     const paycheckId = uid();
@@ -7508,18 +7463,15 @@
       },
     }));
 
-    // Create deduction expenses (categorized as Tax / Benefits where possible)
+    // Create deduction expenses — three high-level buckets matching the form
     const taxCat = state.categories.find((c) => /tax/i.test(c.name))?.id || null;
     const otherCat = state.categories.find((c) => c.name === "Other")?.id || null;
-    const deductions = [
-      ["Federal tax", fedTax, taxCat],
-      ["State tax", stateTax, taxCat],
-      ["FICA", fica, taxCat],
-      ["Health insurance", health, otherCat],
-      ["401(k)", k401, otherCat],
-      ["HSA/FSA", hsa, otherCat],
+    const buckets = [
+      ["Taxes", taxesTotal, taxCat],
+      ["Benefits", benefitsTotal, otherCat],
+      ["Other deductions", otherTotal, otherCat],
     ];
-    deductions.forEach(([name, amount, catId]) => {
+    buckets.forEach(([name, amount, catId]) => {
       if (amount <= 0) return;
       state.expenses.push(touchRecord({
         id: uid(),
@@ -7536,22 +7488,22 @@
       }));
     });
 
-    // Create transfer-in transactions for each account split
-    splits.forEach((split) => {
+    // Single transfer-in for the net pay to the chosen account
+    if (depositAccountId && net > 0) {
       state.expenses.push(touchRecord({
         id: uid(),
         type: "transfer-in",
-        desc: `Paycheck split — ${employer}`,
-        amount: split.amount,
+        desc: `Paycheck deposit — ${employer}`,
+        amount: net,
         date,
         categoryId: null,
-        accountId: split.accountId,
+        accountId: depositAccountId,
         personId: null,
         tags: ["paycheck"],
         receipt: null,
         paycheckId,
       }));
-    });
+    }
 
     // Auto-add employer to saved income sources if not already there
     if (employer && !state.incomeSources.some((s) => (s.name || "").toLowerCase() === employer.toLowerCase())) {
@@ -8595,51 +8547,10 @@
     $("#paycheckModal").addEventListener("click", (e) => {
       if (e.target.id === "paycheckModal") closePaycheckModal();
     });
-    $("#addSplitBtn").addEventListener("click", () => {
-      if (state.accounts.length === 0) {
-        showToast("Add accounts in Balances first");
-        return;
-      }
-      addSplitRow(state.accounts[0].id, "");
-      updateSplitRemaining();
-    });
-    $("#pcNet").addEventListener("input", () => {
-      // Mark as user-set so updatePaycheckTotals won't overwrite
-      $("#pcNet").dataset.userSet = "1";
-      updateSplitRemaining();
-      const netVal = parseFloat($("#pcNet").value) || 0;
-      const disp = $("#pcNetDisplay");
-      if (disp) disp.textContent = fmt(netVal);
-    });
-    // Wire up live totals: any field change updates the section header amounts
-    PAYCHECK_FIELD_IDS.forEach((id) => {
+    // Live totals: gross/taxes/benefits/other → net
+    ["#pcGross", "#pcTaxes", "#pcBenefits", "#pcOther"].forEach((id) => {
       const el = $(id);
       if (el) el.addEventListener("input", updatePaycheckTotals);
-    });
-    // Accordion: toggle each section open/closed
-    $$(".paystub-row").forEach((row) => {
-      row.addEventListener("click", () => {
-        const section = row.closest(".paystub-section");
-        const body = section.querySelector(".paystub-body");
-        const isOpen = section.classList.toggle("open");
-        if (body) body.hidden = !isOpen;
-      });
-    });
-    // Expand-all toggles all sections at once
-    $("#paystubExpandAll")?.addEventListener("click", () => {
-      const sections = $$(".paystub-section");
-      const anyClosed = sections.some((s) => !s.classList.contains("open"));
-      sections.forEach((s) => {
-        const body = s.querySelector(".paystub-body");
-        if (anyClosed) {
-          s.classList.add("open");
-          if (body) body.hidden = false;
-        } else {
-          s.classList.remove("open");
-          if (body) body.hidden = true;
-        }
-      });
-      $("#paystubExpandAll").textContent = anyClosed ? "⌃ Collapse All" : "⌄ Expand All";
     });
     $("#paycheckForm").addEventListener("submit", (e) => {
       e.preventDefault();
