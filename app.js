@@ -1250,6 +1250,8 @@
     return "planning";
   }
 
+  let eventsSearchQuery = "";
+
   function renderEventsTab() {
     const activeList = $("#eventsActiveList");
     const completedList = $("#eventsCompletedList");
@@ -1263,9 +1265,17 @@
       return;
     }
 
+    const q = (eventsSearchQuery || "").toLowerCase().trim();
+    const matches = (ev) => {
+      if (!q) return true;
+      return (ev.name || "").toLowerCase().includes(q)
+        || (ev.notes || "").toLowerCase().includes(q);
+    };
+
     const active = [];
     const completed = [];
     state.events.forEach((ev) => {
+      if (!matches(ev)) return;
       if (eventStatus(ev) === "completed") completed.push(ev);
       else active.push(ev);
     });
@@ -1279,8 +1289,8 @@
       pill.textContent = `${state.events.length} event${state.events.length === 1 ? "" : "s"} · ${fmt(totalSpent)} / ${fmt(totalBudget)}`;
     }
 
-    activeList.innerHTML = active.length ? active.map(renderEventCard).join("") : '<p class="empty">No upcoming events.</p>';
-    completedList.innerHTML = completed.length ? completed.map(renderEventCard).join("") : '<p class="empty">No completed events yet.</p>';
+    activeList.innerHTML = active.length ? active.map(renderEventCard).join("") : `<p class="empty">${q ? "No matches." : "No upcoming events."}</p>`;
+    completedList.innerHTML = completed.length ? completed.map(renderEventCard).join("") : `<p class="empty">${q ? "No matches." : "No completed events yet."}</p>`;
   }
 
   function renderEventCard(ev) {
@@ -1368,6 +1378,7 @@
             <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
             <button data-action="event-checklist" data-id="${ev.id}" title="Checklist">📋</button>
             <button data-action="event-report" data-id="${ev.id}" title="Generate report">📄</button>
+            <button data-action="dup-event" data-id="${ev.id}" title="Duplicate">⎘</button>
             ${status !== "completed" ? `<button data-action="event-complete" data-id="${ev.id}" title="Mark as completed">✓</button>` : `<button data-action="event-reopen" data-id="${ev.id}" title="Reopen event">↻</button>`}
             <button data-action="edit-event" data-id="${ev.id}" title="Edit">✏️</button>
             <button data-action="del-event" data-id="${ev.id}" title="Delete">🗑️</button>
@@ -1471,6 +1482,8 @@
     $("#eventStart").value = isEdit ? (ev.startDate || "") : "";
     $("#eventEnd").value = isEdit ? (ev.endDate || "") : "";
     $("#eventBudget").value = isEdit && ev.budget ? Number(ev.budget) : "";
+    const colorEl = $("#eventColor");
+    if (colorEl) colorEl.value = isEdit && ev.color ? ev.color : "#5b3fb8";
     $("#eventNotes").value = isEdit ? (ev.notes || "") : "";
     const vmEl = $("#eventVacationMode");
     if (vmEl) vmEl.checked = isEdit ? !!ev.vacationMode : false;
@@ -9863,6 +9876,10 @@
 
     // Events: form
     $("#addEventBtn")?.addEventListener("click", () => openEventModal(null));
+    $("#eventsSearch")?.addEventListener("input", (e) => {
+      eventsSearchQuery = e.target.value;
+      renderEventsTab();
+    });
     $("#eventModalClose")?.addEventListener("click", closeEventModal);
     $("#eventModal")?.addEventListener("click", (e) => {
       if (e.target.id === "eventModal") closeEventModal();
@@ -9899,6 +9916,7 @@
         id: editId || uid(),
         name: $("#eventName").value.trim(),
         icon: $("#eventIcon").value.trim() || "🌴",
+        color: $("#eventColor")?.value || "#5b3fb8",
         startDate: $("#eventStart").value || null,
         endDate: $("#eventEnd").value || null,
         budget: parseFloat($("#eventBudget").value) || 0,
@@ -9910,6 +9928,16 @@
         checklist: editId ? (state.events.find((x) => x.id === editId)?.checklist || []) : [],
       };
       if (!ev.name) return;
+      // Validate: if endDate set without startDate, swap
+      if (ev.endDate && !ev.startDate) {
+        ev.startDate = ev.endDate;
+        ev.endDate = null;
+      }
+      // Validate: endDate must be after or equal startDate
+      if (ev.startDate && ev.endDate && ev.endDate < ev.startDate) {
+        showToast("End date must be after start date");
+        return;
+      }
       if (editId) {
         const idx = state.events.findIndex((x) => x.id === editId);
         if (idx >= 0) state.events[idx] = touchRecord({ ...state.events[idx], ...ev });
@@ -10669,6 +10697,25 @@
         saveData();
         renderAll();
         showToast(`"${ev.name}" reopened`);
+      } else if (action === "dup-event") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        // Open the event modal with cloned data (no id, no checklist done states, no dates)
+        openEventModal({
+          id: null, // forces new
+          name: `${ev.name} (copy)`,
+          icon: ev.icon,
+          color: ev.color,
+          budget: ev.budget,
+          notes: ev.notes,
+          startDate: null,
+          endDate: null,
+          vacationMode: ev.vacationMode,
+          // Reset line item ids so duplicates don't share txn-tagging keys
+          lineItems: (ev.lineItems || []).map((li) => ({ id: uid(), label: li.label, budget: li.budget })),
+          // Fresh checklist (carry labels but reset done state)
+          checklist: (ev.checklist || []).map((it) => ({ id: uid(), label: it.label, done: false })),
+        });
       } else if (action === "add-event-check") {
         const evId = btn.dataset.eventId;
         const input = document.querySelector(`.event-check-input[data-event-id="${evId}"]`);
