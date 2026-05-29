@@ -1268,7 +1268,17 @@
     const year = currentMonth().slice(0, 4);
     return state.expenses
       .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
-      .reduce((s, e) => s + Number(e.amount), 0);
+      .reduce((s, e) => s + incomeReportingAmount(e), 0);
+  }
+
+  // Return the "reportable" amount for an income transaction. For paychecks this is the
+  // GROSS pay (deductions are tracked in paycheckMeta but not as separate transactions),
+  // so income totals, savings rate, and tax estimates all reflect what was earned, not
+  // just what was deposited.
+  function incomeReportingAmount(e) {
+    if (!e) return 0;
+    if (e.paycheckMeta && Number(e.paycheckMeta.gross) > 0) return Number(e.paycheckMeta.gross);
+    return Number(e.amount) || 0;
   }
 
   function ytdIncomeBySource() {
@@ -1278,7 +1288,7 @@
       .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
       .forEach((e) => {
         const key = e.source || "(unspecified)";
-        out[key] = (out[key] || 0) + Number(e.amount);
+        out[key] = (out[key] || 0) + incomeReportingAmount(e);
       });
     return out;
   }
@@ -1290,7 +1300,7 @@
       .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
       .forEach((e) => {
         const key = e.incomeType || "other";
-        out[key] = (out[key] || 0) + Number(e.amount);
+        out[key] = (out[key] || 0) + incomeReportingAmount(e);
       });
     return out;
   }
@@ -1660,7 +1670,7 @@
     // 4) Savings rate insight
     const incomeReal = state.expenses
       .filter((e) => e.type === "income" && monthKey(e.date) === m)
-      .reduce((s, e) => s + Number(e.amount), 0);
+      .reduce((s, e) => s + incomeReportingAmount(e), 0);
     const incomeTarget = incomeForMonth(m);
     const incomeForRate = incomeReal > 0 ? incomeReal : incomeTarget;
     if (incomeForRate > 0) {
@@ -1832,7 +1842,7 @@
       el.innerHTML = '<p class="empty">No income recorded yet this month.</p>';
       return;
     }
-    const totalThisMonth = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalThisMonth = monthIncomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
     const ytd = ytdIncomeTotal();
     const target = incomeForMonth(m);
     const pctOfTarget = target > 0 ? (totalThisMonth / target) * 100 : 0;
@@ -2655,7 +2665,7 @@
     );
     const monthIncomes = monthTxns.filter((e) => e.type === "income");
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
-    const totalIncomeReal = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncomeReal = monthIncomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
     const targetIncome = incomeForMonth(month);
     const totalIncome = Math.max(targetIncome, totalIncomeReal);
     const totalSaved = state.goals.reduce((s, g) => s + goalSavedTotal(g), 0);
@@ -3355,7 +3365,7 @@
     const monthTxns = state.expenses.filter((e) => monthKey(e.date) === m);
     const incomes = monthTxns.filter((e) => e.type === "income");
     const expenses = monthTxns.filter((e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out");
-    const totalIncome = incomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = incomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
     const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
 
     if (totalIncome === 0 && totalExpenses === 0) {
@@ -11552,7 +11562,7 @@
     );
     const monthIncomes = state.expenses.filter((e) => e.type === "income" && monthKey(e.date) === m);
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
-    const totalIncome = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = monthIncomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
 
     const catTotals = {};
     monthExpenses.forEach((e) => {
@@ -11650,7 +11660,7 @@ Format your response as a numbered list of short, specific recommendations. No f
     );
     const monthIncomes = state.expenses.filter((e) => e.type === "income" && monthKey(e.date) === m);
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
-    const totalIncome = monthIncomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalIncome = monthIncomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
     const target = incomeForMonth(m);
     const incomeForRate = totalIncome > 0 ? totalIncome : target;
     const savingsRate = incomeForRate > 0 ? ((incomeForRate - totalSpent) / incomeForRate) * 100 : 0;
