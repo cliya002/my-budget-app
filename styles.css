@@ -3506,3 +3506,25 @@ input[type="color"] {
 [data-theme="dark"] .rec-status-tag.rec-status-paused {
   background: rgba(255, 255, 255, 0.08);
 }
+
+
+/* Expandable card detail panel on Credit tab */
+.card-detail-panel {
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.card-detail-panel[hidden] { display: none; }
+.card-detail-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+}
+.card-detail-row span:first-child { color: var(--muted); }
+.card-detail-row strong { font-variant-numeric: tabular-nums; }

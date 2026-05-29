@@ -5243,6 +5243,61 @@
   // Card list filter state — persists across renders within a session
   const cardListFilters = { search: "", filter: "all" };
 
+  // Render the expandable detail panel for a card row
+  function renderCardDetailRows(c) {
+    const today = new Date();
+    const todayMonth = currentMonth();
+    const rows = [];
+
+    if (c.opened) {
+      const opened = new Date(c.opened);
+      const ageYears = (today - opened) / (365.25 * 24 * 60 * 60 * 1000);
+      rows.push(`<div class="card-detail-row"><span>Opened</span><strong>${c.opened} · ${ageYears.toFixed(1)}y old</strong></div>`);
+    }
+    if (c.closeDay) {
+      const day = clampDayToMonth(Number(c.closeDay), todayMonth);
+      const close = new Date(today.getFullYear(), today.getMonth(), day);
+      if (close < today) close.setMonth(close.getMonth() + 1);
+      const days = Math.ceil((close - today) / (24 * 60 * 60 * 1000));
+      rows.push(`<div class="card-detail-row"><span>Statement closes</span><strong>${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`} (day ${c.closeDay})</strong></div>`);
+    }
+    if (c.dueDay) {
+      const day = clampDayToMonth(Number(c.dueDay), todayMonth);
+      const due = new Date(today.getFullYear(), today.getMonth(), day);
+      if (due < today) due.setMonth(due.getMonth() + 1);
+      const days = Math.ceil((due - today) / (24 * 60 * 60 * 1000));
+      rows.push(`<div class="card-detail-row"><span>Payment due</span><strong>${days === 0 ? "today" : `in ${days} day${days === 1 ? "" : "s"}`} (day ${c.dueDay})</strong></div>`);
+    }
+    if (Number(c.minPayment) > 0) {
+      rows.push(`<div class="card-detail-row"><span>Min payment</span><strong>${fmt(c.minPayment)}</strong></div>`);
+    }
+    if (Number(c.cashbackRate) > 0) {
+      rows.push(`<div class="card-detail-row"><span>Cashback</span><strong>${c.cashbackRate}%</strong></div>`);
+    }
+    if (Number(c.annualFee) > 0) {
+      rows.push(`<div class="card-detail-row"><span>Annual fee</span><strong>${fmt(c.annualFee)}</strong></div>`);
+    }
+    if (Number(c.signupBonus) > 0) {
+      rows.push(`<div class="card-detail-row"><span>Sign-up bonus</span><strong>${fmt(c.signupBonus)} earned</strong></div>`);
+    }
+    // Last payment
+    const lastPay = state.expenses
+      .filter((e) => e.kind === "credit-payment" && e.cardId === c.id && e.type === "transfer-out")
+      .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id))[0];
+    if (lastPay) {
+      rows.push(`<div class="card-detail-row"><span>Last payment</span><strong>${fmt(lastPay.amount)} on ${lastPay.date}</strong></div>`);
+    }
+    // Total payments YTD
+    const year = todayMonth.slice(0, 4);
+    const ytdPaid = state.expenses
+      .filter((e) => e.kind === "credit-payment" && e.cardId === c.id && e.type === "transfer-out" && (e.date || "").startsWith(year))
+      .reduce((s, e) => s + Number(e.amount || 0), 0);
+    if (ytdPaid > 0) {
+      rows.push(`<div class="card-detail-row"><span>Paid YTD</span><strong>${fmt(ytdPaid)}</strong></div>`);
+    }
+    return rows.length ? rows.join("") : '<div class="card-sub">No additional details. Edit the card to add cashback, fees, opened date, etc.</div>';
+  }
+
   function renderCardList() {
     const list = $("#cardList");
     if (!state.cards.length) {
@@ -5309,11 +5364,12 @@
           stmtAlert = `<div class="stmt-alert ${cls2}">⚠️ Statement balance is ${stmtUtil.toFixed(0)}% — this is what gets reported. Pay before statement closes.</div>`;
         }
         return `
-          <li class="card-item">
+          <li class="card-item" data-card-row="${c.id}">
             <div class="card-item-head">
               <div class="card-item-title">${escapeHtml(c.name)}${last4} ${autopay}</div>
               <div class="list-item-actions">
                 ${cardCurrentBalance(c) > 0 ? `<button data-action="quick-pay-card" data-id="${c.id}" title="Pay this card">💸 Pay</button>` : ""}
+                <button data-action="expand-card" data-id="${c.id}" title="Show details">ℹ️</button>
                 <button data-action="edit-card" data-id="${c.id}" title="Edit">✏️</button>
                 <button data-action="del-card" data-id="${c.id}" title="Delete">🗑️</button>
               </div>
@@ -5327,6 +5383,9 @@
               <div class="progress-fill ${cls}" style="width: ${Math.min(util, 100)}%"></div>
             </div>
             ${stmtAlert}
+            <div class="card-detail-panel" data-card-detail="${c.id}" hidden>
+              ${renderCardDetailRows(c)}
+            </div>
           </li>`;
       })
       .join("");
@@ -10048,6 +10107,9 @@
       } else if (action === "edit-card") {
         const card = state.cards.find((c) => c.id === id);
         if (card) openCardModal(card);
+      } else if (action === "expand-card") {
+        const panel = document.querySelector(`[data-card-detail="${id}"]`);
+        if (panel) panel.hidden = !panel.hidden;
       } else if (action === "edit-acc") {
         const acc = state.accounts.find((a) => a.id === id);
         if (!acc) return;
