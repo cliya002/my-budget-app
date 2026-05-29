@@ -2477,6 +2477,20 @@
             }
           }
 
+          // 6-month sparkline of spending in this category
+          const sparkPoints = [];
+          let cursor = month;
+          for (let i = 0; i < 6; i++) {
+            const m2 = cursor;
+            const total = state.expenses
+              .filter((e) => e.categoryId === cat.id && monthKey(e.date) === m2 && e.type !== "income")
+              .reduce((s, e) => s + Number(e.amount), 0);
+            sparkPoints.push(total);
+            cursor = prevMonth(cursor);
+          }
+          sparkPoints.reverse();
+          const sparkSvg = renderSparkline(sparkPoints);
+
           return `
             <div class="progress-item">
               <div class="progress-header">
@@ -2487,6 +2501,7 @@
                 <div class="progress-fill ${cls}" style="width: ${pct}%"></div>
               </div>
               ${forecastTag}
+              <div class="sparkline-row">${sparkSvg}<span class="sparkline-label">last 6 mo</span></div>
             </div>`;
         })
         .join("");
@@ -2810,6 +2825,219 @@
     renderHeatmapCalendar();
     renderTopVendors();
     renderTagsChart();
+    renderYoYChart();
+    renderMoneyFlow();
+  }
+
+  // Tiny inline SVG sparkline. Used in dashboard category list for 6-month trend.
+  function renderSparkline(values, opts) {
+    const width = (opts && opts.width) || 80;
+    const height = (opts && opts.height) || 18;
+    if (!values || !values.length) return "";
+    const max = Math.max(...values, 1);
+    const min = Math.min(...values, 0);
+    const range = max - min || 1;
+    const stepX = width / Math.max(1, values.length - 1);
+    const points = values.map((v, i) => {
+      const x = i * stepX;
+      const y = height - ((v - min) / range) * (height - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const last = values[values.length - 1];
+    const prev = values.length > 1 ? values[values.length - 2] : last;
+    const trendUp = last > prev;
+    const color = trendUp ? "var(--danger)" : "var(--success)";
+    return `<svg class="sparkline" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="6-month trend">
+      <polyline fill="none" stroke="${color}" stroke-width="1.5" points="${points}" />
+    </svg>`;
+  }
+
+  // Year-over-year comparison: this month vs same month last year, this month last 6mo vs prior 6mo, etc.
+  function renderYoYChart() {
+    if (typeof Chart === "undefined") return;
+    destroyChart("yoy");
+    const ctx = $("#chartYoY");
+    if (!ctx) return;
+    const headline = $("#yoyHeadline");
+    const breakdown = $("#yoyBreakdown");
+    const empty = $("#yoyEmpty");
+
+    // Build last 12 months ending at current month, plus the same months last year
+    const cur = currentMonth();
+    const months = [];
+    let cursor = cur;
+    for (let i = 0; i < 12; i++) {
+      months.unshift(cursor);
+      cursor = prevMonth(cursor);
+    }
+    // For each month, total expenses in the year and the prior year's same month
+    const labels = [];
+    const thisYearVals = [];
+    const lastYearVals = [];
+    months.forEach((m) => {
+      const [y, mm] = m.split("-").map(Number);
+      const lastYearKey = `${y - 1}-${String(mm).padStart(2, "0")}`;
+      const thisYearTotal = state.expenses
+        .filter((e) => monthKey(e.date) === m && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+        .reduce((s, e) => s + Number(e.amount), 0);
+      const lastYearTotal = state.expenses
+        .filter((e) => monthKey(e.date) === lastYearKey && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+        .reduce((s, e) => s + Number(e.amount), 0);
+      labels.push(monthLabel(m).split(" ")[0]); // Just month name
+      thisYearVals.push(thisYearTotal);
+      lastYearVals.push(lastYearTotal);
+    });
+
+    const hasLastYearData = lastYearVals.some((v) => v > 0);
+    if (!hasLastYearData) {
+      if (empty) empty.hidden = false;
+      ctx.style.display = "none";
+      if (headline) headline.textContent = "No last-year data yet — keep tracking and this'll fill in.";
+      if (breakdown) breakdown.innerHTML = "";
+      return;
+    }
+    if (empty) empty.hidden = true;
+    ctx.style.display = "block";
+
+    // Headline: this month vs same month last year
+    const curIdx = labels.length - 1;
+    const curVal = thisYearVals[curIdx];
+    const priorVal = lastYearVals[curIdx];
+    if (priorVal > 0) {
+      const diff = curVal - priorVal;
+      const pct = (diff / priorVal) * 100;
+      const arrow = pct > 0 ? "↑" : (pct < 0 ? "↓" : "→");
+      const word = pct > 0 ? "more" : "less";
+      if (headline) {
+        headline.innerHTML = `${monthLabel(cur)}: <strong>${fmt(curVal)}</strong> ${arrow} ${Math.abs(pct).toFixed(0)}% ${word} than ${monthLabel(`${cur.slice(0, 4) - 1}-${cur.slice(5)}`)} (${fmt(priorVal)})`;
+      }
+    } else if (headline) {
+      headline.textContent = `${monthLabel(cur)}: ${fmt(curVal)} (no comparable data last year)`;
+    }
+
+    charts.yoy = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "This year",
+            data: thisYearVals,
+            backgroundColor: "rgba(91, 63, 184, 0.8)",
+          },
+          {
+            label: "Last year",
+            data: lastYearVals,
+            backgroundColor: "rgba(148, 163, 184, 0.5)",
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { position: "bottom" } },
+      },
+    });
+
+    // Per-category breakdown: top 5 categories with biggest YoY difference
+    if (breakdown) {
+      const catDiffs = state.categories.map((cat) => {
+        const thisYearTotal = state.expenses
+          .filter((e) => e.categoryId === cat.id && (e.date || "").startsWith(cur.slice(0, 4)) && e.type !== "income")
+          .reduce((s, e) => s + Number(e.amount), 0);
+        const lastYearTotal = state.expenses
+          .filter((e) => e.categoryId === cat.id && (e.date || "").startsWith(String(Number(cur.slice(0, 4)) - 1)) && e.type !== "income")
+          .reduce((s, e) => s + Number(e.amount), 0);
+        return { name: cat.name, thisYear: thisYearTotal, lastYear: lastYearTotal, diff: thisYearTotal - lastYearTotal };
+      }).filter((c) => c.thisYear > 0 || c.lastYear > 0)
+        .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff))
+        .slice(0, 5);
+
+      if (catDiffs.length) {
+        breakdown.innerHTML = `<div class="yoy-title">Biggest changes (YTD):</div>` +
+          catDiffs.map((c) => {
+            const pct = c.lastYear > 0 ? ((c.diff / c.lastYear) * 100).toFixed(0) : "—";
+            const cls = c.diff > 0 ? "negative" : "positive";
+            const arrow = c.diff > 0 ? "↑" : "↓";
+            return `<div class="yoy-row">
+              <span>${escapeHtml(c.name)}</span>
+              <span class="${cls}">${arrow} ${fmt(Math.abs(c.diff))} (${c.lastYear > 0 ? pct + "%" : "new"})</span>
+            </div>`;
+          }).join("");
+      } else {
+        breakdown.innerHTML = "";
+      }
+    }
+  }
+
+  // Money flow: visual breakdown of where current month's income went,
+  // by category and top vendors per category.
+  function renderMoneyFlow() {
+    const el = $("#moneyFlow");
+    const empty = $("#moneyFlowEmpty");
+    if (!el) return;
+    const m = currentMonth();
+    const monthTxns = state.expenses.filter((e) => monthKey(e.date) === m);
+    const incomes = monthTxns.filter((e) => e.type === "income");
+    const expenses = monthTxns.filter((e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out");
+    const totalIncome = incomes.reduce((s, e) => s + Number(e.amount), 0);
+    const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
+
+    if (totalIncome === 0 && totalExpenses === 0) {
+      if (empty) empty.hidden = false;
+      el.innerHTML = "";
+      return;
+    }
+    if (empty) empty.hidden = true;
+
+    // Group expenses by category
+    const byCat = {};
+    expenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      if (!byCat[name]) byCat[name] = { total: 0, vendors: {} };
+      byCat[name].total += Number(e.amount);
+      const vendor = e.desc || "(no description)";
+      byCat[name].vendors[vendor] = (byCat[name].vendors[vendor] || 0) + Number(e.amount);
+    });
+    const sortedCats = Object.entries(byCat).sort((a, b) => b[1].total - a[1].total);
+
+    const saved = Math.max(0, totalIncome - totalExpenses);
+    const overspent = totalExpenses > totalIncome ? totalExpenses - totalIncome : 0;
+
+    let html = `
+      <div class="flow-summary">
+        <div class="flow-pill flow-income">💰 Income · ${fmt(totalIncome)}</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-pill flow-expense">💸 Spent · ${fmt(totalExpenses)}</div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-pill ${overspent > 0 ? "flow-overspent" : "flow-saved"}">${overspent > 0 ? `⚠️ Overspent · ${fmt(overspent)}` : `✓ Saved · ${fmt(saved)}`}</div>
+      </div>
+      <div class="flow-cats">
+    `;
+
+    sortedCats.forEach(([catName, info]) => {
+      const pct = totalExpenses > 0 ? (info.total / totalExpenses) * 100 : 0;
+      const topVendors = Object.entries(info.vendors)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 3);
+      html += `
+        <div class="flow-cat">
+          <div class="flow-cat-head">
+            <span class="flow-cat-name">${escapeHtml(catName)}</span>
+            <span class="flow-cat-amount">${fmt(info.total)} · ${pct.toFixed(0)}%</span>
+          </div>
+          <div class="flow-cat-bar">
+            <div class="flow-cat-fill" style="width: ${pct.toFixed(1)}%"></div>
+          </div>
+          <div class="flow-vendors">
+            ${topVendors.map(([v, amt]) => `<span class="flow-vendor">${escapeHtml(v)} · ${fmt(amt)}</span>`).join("")}
+            ${Object.keys(info.vendors).length > 3 ? `<span class="flow-vendor-more">+${Object.keys(info.vendors).length - 3} more</span>` : ""}
+          </div>
+        </div>`;
+    });
+    html += "</div>";
+    el.innerHTML = html;
   }
 
   function filterExpensesForInsights() {
