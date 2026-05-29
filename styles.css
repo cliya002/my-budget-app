@@ -3113,3 +3113,99 @@ input[type="color"] {
 .credit-pill {
   background: linear-gradient(135deg, rgba(236, 72, 153, 0.05), rgba(139, 92, 246, 0.05));
 }
+
+
+/* ---------- ADP-style paystub accordion ---------- */
+.paystub-expand-all {
+  background: none;
+  border: 0;
+  color: var(--accent, #5b3fb8);
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  margin: 0.3rem 0 0.5rem auto;
+  display: block;
+}
+.paystub-expand-all:hover { text-decoration: underline; }
+
+.paystub-section {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-alt, var(--card));
+  margin-bottom: 0.55rem;
+  overflow: hidden;
+}
+.paystub-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 6px 1fr auto auto auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+.paystub-row:hover { background: rgba(91, 63, 184, 0.04); }
+.paystub-bar {
+  width: 4px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.paystub-label { font-weight: 700; }
+.paystub-units {
+  font-size: 0.85rem;
+  color: var(--muted);
+  font-weight: 500;
+}
+.paystub-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.paystub-amount.negative { color: var(--text); }
+.paystub-amount.positive { color: var(--text); }
+.paystub-toggle {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.06);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  color: var(--muted);
+  transition: transform 0.2s;
+}
+.paystub-section.open .paystub-toggle { transform: rotate(180deg); }
+.paystub-body {
+  padding: 0 1rem 1rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.paystub-body[hidden] { display: none; }
+.paystub-body .form-row { margin-top: 0.65rem; }
+
+/* Section accent bars (matches ADP color coding) */
+.section-gross   .paystub-bar { background: transparent; }
+.section-taxes   .paystub-bar { background: #ec4899; }
+.section-benefits .paystub-bar { background: #06b6d4; }
+.section-other   .paystub-bar { background: #f59e0b; }
+.section-takehome .paystub-bar { background: #22c55e; }
+
+.section-takehome .paystub-amount.positive { color: #16a34a; }
+
+/* Tighter on mobile */
+@media (max-width: 600px) {
+  .paystub-row { padding: 0.7rem 0.75rem; gap: 0.45rem; font-size: 0.9rem; }
+  .paystub-units { display: none; }
+  .paystub-body { padding: 0 0.75rem 0.85rem 0.75rem; }
+}
+
+/* Dark mode tweak */
+[data-theme="dark"] .paystub-row:hover { background: rgba(255, 255, 255, 0.04); }
+[data-theme="dark"] .paystub-toggle { background: rgba(255, 255, 255, 0.08); }

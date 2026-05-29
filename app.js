@@ -6718,12 +6718,23 @@
   }
 
   /* ---------- Paycheck Logger ---------- */
+  // All paycheck input field IDs
+  const PAYCHECK_FIELD_IDS = [
+    "#pcGross", "#pcHours", "#pcNet",
+    "#pcFedTax", "#pcStateTax", "#pcSsTax", "#pcMedicareTax", "#pcFica",
+    "#pcMedical", "#pcDental", "#pcVision", "#pcHsa", "#pc401k", "#pcOtherBenefits", "#pcHealth",
+    "#pcAccidentIns", "#pcOtherDed",
+  ];
+
   function openPaycheckModal() {
     $("#pcDate").value = todayStr();
     $("#pcEmployer").value = "";
-    ["#pcGross", "#pcNet", "#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
+    PAYCHECK_FIELD_IDS.forEach((id) => {
       const el = $(id); if (el) el.value = "";
     });
+    // Reset user-set marker on net so auto-fill resumes
+    const netReset = $("#pcNet");
+    if (netReset) delete netReset.dataset.userSet;
     // Reset any stashed paystub metadata
     const form = $("#paycheckForm");
     if (form) delete form.dataset.paystubMeta;
@@ -6733,6 +6744,13 @@
       status.textContent = "";
       status.className = "paystub-status";
     }
+    // Reset accordion: collapse all sections, show takehome by default
+    $$(".paystub-section").forEach((sec) => {
+      sec.classList.remove("open");
+      const body = sec.querySelector(".paystub-body");
+      if (body) body.hidden = true;
+    });
+    updatePaycheckTotals();
     populateIncomeSourceList();
     initPaycheckSplits();
     $("#paycheckModal").classList.add("open");
@@ -6756,6 +6774,47 @@
     }
     // Default: one row, full net pay to first account
     addSplitRow(state.accounts[0].id, "");
+    updateSplitRemaining();
+  }
+
+  // Calculate live subtotals for each accordion section and update the header amounts.
+  // Also auto-derive net from gross - taxes - benefits - other (unless user manually set it).
+  function updatePaycheckTotals() {
+    const num = (id) => parseFloat($(id)?.value) || 0;
+
+    const gross = num("#pcGross");
+    const hours = num("#pcHours");
+
+    const taxes = num("#pcFedTax") + num("#pcStateTax") + num("#pcSsTax") + num("#pcMedicareTax");
+    // Keep FICA hidden field in sync as SS + Medicare for backward compat
+    const ficaEl = $("#pcFica");
+    if (ficaEl) ficaEl.value = (num("#pcSsTax") + num("#pcMedicareTax")).toFixed(2);
+
+    const benefits = num("#pcMedical") + num("#pcDental") + num("#pcVision")
+      + num("#pcHsa") + num("#pc401k") + num("#pcOtherBenefits");
+    // Health hidden field = medical + dental + vision (for backward compat)
+    const healthEl = $("#pcHealth");
+    if (healthEl) healthEl.value = (num("#pcMedical") + num("#pcDental") + num("#pcVision")).toFixed(2);
+
+    const other = num("#pcAccidentIns") + num("#pcOtherDed");
+
+    const computedNet = Math.max(0, gross - taxes - benefits - other);
+
+    // Update displays
+    $("#pcGrossDisplay") && ($("#pcGrossDisplay").textContent = fmt(gross));
+    $("#pcGrossUnits") && ($("#pcGrossUnits").textContent = hours > 0 ? `${hours} Units` : "");
+    $("#pcTaxesDisplay") && ($("#pcTaxesDisplay").textContent = taxes > 0 ? `−${fmt(taxes)}` : fmt(0));
+    $("#pcBenefitsDisplay") && ($("#pcBenefitsDisplay").textContent = benefits > 0 ? `−${fmt(benefits)}` : fmt(0));
+    $("#pcOtherDisplay") && ($("#pcOtherDisplay").textContent = other > 0 ? `−${fmt(other)}` : fmt(0));
+
+    // Auto-fill net unless user manually edited it (we mark via dataset.userSet)
+    const netEl = $("#pcNet");
+    if (netEl && netEl.dataset.userSet !== "1" && gross > 0) {
+      netEl.value = computedNet.toFixed(2);
+    }
+    const netDisplayed = parseFloat(netEl?.value) || computedNet;
+    $("#pcNetDisplay") && ($("#pcNetDisplay").textContent = fmt(netDisplayed));
+
     updateSplitRemaining();
   }
 
@@ -7240,23 +7299,35 @@
     if (p.employer) $("#pcEmployer").value = p.employer;
     if (p.date) $("#pcDate").value = p.date;
     if (p.gross !== null) $("#pcGross").value = p.gross.toFixed(2);
-    if (p.net !== null) $("#pcNet").value = p.net.toFixed(2);
+    if (p.hours) $("#pcHours").value = String(p.hours);
+    else if (p.regularHours) $("#pcHours").value = String(p.regularHours);
+
     if (p.fedTax !== null) $("#pcFedTax").value = p.fedTax.toFixed(2);
     if (p.stateTax !== null) $("#pcStateTax").value = p.stateTax.toFixed(2);
-    if (p.fica !== null) $("#pcFica").value = p.fica.toFixed(2);
+    if (p.ssTax !== null) $("#pcSsTax").value = p.ssTax.toFixed(2);
+    if (p.medicareTax !== null) $("#pcMedicareTax").value = p.medicareTax.toFixed(2);
+    // If only combined FICA available (no SS/Medicare separately), put it on SS
+    if (p.ssTax === null && p.medicareTax === null && p.fica !== null) {
+      $("#pcSsTax").value = p.fica.toFixed(2);
+    }
 
-    // Combine health-related deductions (medical + dental + vision)
-    const healthSum = (p.health || 0) + (p.dental || 0) + (p.vision || 0);
-    if (healthSum > 0) $("#pcHealth").value = healthSum.toFixed(2);
-
+    if (p.health !== null) $("#pcMedical").value = p.health.toFixed(2);
+    if (p.dental !== null) $("#pcDental").value = p.dental.toFixed(2);
+    if (p.vision !== null) $("#pcVision").value = p.vision.toFixed(2);
     if (p.k401 !== null) $("#pc401k").value = p.k401.toFixed(2);
     if (p.hsa !== null) $("#pcHsa").value = p.hsa.toFixed(2);
 
-    // If gross + deductions known but not net, compute it
-    if (p.gross !== null && p.net === null) {
-      const totalDed = (p.fedTax || 0) + (p.stateTax || 0) + (p.fica || 0)
-        + healthSum + (p.k401 || 0) + (p.hsa || 0);
-      $("#pcNet").value = Math.max(0, p.gross - totalDed).toFixed(2);
+    // Net: only set if parser found one explicitly. Otherwise let updatePaycheckTotals compute it.
+    const netEl = $("#pcNet");
+    if (p.net !== null && netEl) {
+      netEl.value = p.net.toFixed(2);
+      // If parser-supplied net differs from computed, mark as user-set so it's preserved
+      const totalDed = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0)
+        + (p.health || 0) + (p.dental || 0) + (p.vision || 0) + (p.k401 || 0) + (p.hsa || 0);
+      const computedNet = Math.max(0, (p.gross || 0) - totalDed);
+      if (Math.abs(p.net - computedNet) > 0.5) {
+        netEl.dataset.userSet = "1"; // preserve the explicit value
+      }
     }
 
     // Stash extra metadata on the form (used at save time for richer record)
@@ -7286,10 +7357,27 @@
       });
     }
 
-    updateSplitRemaining();
+    // Refresh accordion totals + split remaining
+    updatePaycheckTotals();
+
+    // Auto-expand sections that received data so the user can review immediately
+    const expandSection = (key) => {
+      const sec = document.querySelector(`.paystub-section.section-${key}`);
+      if (!sec) return;
+      sec.classList.add("open");
+      const body = sec.querySelector(".paystub-body");
+      if (body) body.hidden = false;
+    };
+    if (p.gross !== null) expandSection("gross");
+    if (p.fedTax !== null || p.stateTax !== null || p.ssTax !== null || p.medicareTax !== null) expandSection("taxes");
+    if (p.health !== null || p.dental !== null || p.vision !== null || p.k401 !== null || p.hsa !== null) expandSection("benefits");
+    if (p.net !== null) expandSection("takehome");
   }
 
   function savePaycheck() {
+    // Make sure live totals are current before reading hidden fica/health
+    updatePaycheckTotals();
+
     const employer = $("#pcEmployer").value.trim();
     const date = $("#pcDate").value;
     const gross = parseFloat($("#pcGross").value);
@@ -7302,6 +7390,17 @@
     const health = parseFloat($("#pcHealth").value) || 0;
     const k401 = parseFloat($("#pc401k").value) || 0;
     const hsa = parseFloat($("#pcHsa").value) || 0;
+
+    // Granular breakouts from accordion
+    const ssTaxField = parseFloat($("#pcSsTax")?.value) || 0;
+    const medicareTaxField = parseFloat($("#pcMedicareTax")?.value) || 0;
+    const medical = parseFloat($("#pcMedical")?.value) || 0;
+    const dental = parseFloat($("#pcDental")?.value) || 0;
+    const vision = parseFloat($("#pcVision")?.value) || 0;
+    const otherBenefits = parseFloat($("#pcOtherBenefits")?.value) || 0;
+    const accidentIns = parseFloat($("#pcAccidentIns")?.value) || 0;
+    const otherDed = parseFloat($("#pcOtherDed")?.value) || 0;
+    const hours = parseFloat($("#pcHours")?.value) || 0;
 
     // Collect splits
     const splits = [];
@@ -7344,17 +7443,21 @@
       paycheckId,
       paycheckMeta: {
         gross, net, fedTax, stateTax, fica, health, k401, hsa,
-        // Rich metadata from paystub upload
-        ssTax: stub.ssTax ?? null,
-        medicareTax: stub.medicareTax ?? null,
-        dental: stub.dental ?? null,
-        vision: stub.vision ?? null,
+        // Rich metadata from paystub upload (parser) and accordion (form)
+        ssTax: ssTaxField || (stub.ssTax ?? null),
+        medicareTax: medicareTaxField || (stub.medicareTax ?? null),
+        medical: medical || null,
+        dental: dental || (stub.dental ?? null),
+        vision: vision || (stub.vision ?? null),
+        otherBenefits: otherBenefits || null,
+        accidentIns: accidentIns || null,
+        otherDed: otherDed || null,
+        hours: hours || (stub.hours ?? null),
         regularRate: stub.regularRate ?? null,
         regularHours: stub.regularHours ?? null,
         otHours: stub.otHours ?? null,
         holidayHours: stub.holidayHours ?? null,
         ptoHours: stub.ptoHours ?? null,
-        hours: stub.hours ?? null,
         ytdGross: stub.ytdGross ?? null,
         ytdNet: stub.ytdNet ?? null,
         ytdFedTax: stub.ytdFedTax ?? null,
@@ -8463,27 +8566,43 @@
       addSplitRow(state.accounts[0].id, "");
       updateSplitRemaining();
     });
-    $("#pcNet").addEventListener("input", updateSplitRemaining);
-    $("#pcGross").addEventListener("input", () => {
-      // Auto-fill net = gross minus deductions if user hasn't set it
-      const gross = parseFloat($("#pcGross").value) || 0;
-      const totalDed = ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"]
-        .reduce((s, id) => s + (parseFloat($(id).value) || 0), 0);
-      if (gross > 0 && !$("#pcNet").value) {
-        $("#pcNet").value = (gross - totalDed).toFixed(2);
-        updateSplitRemaining();
-      }
+    $("#pcNet").addEventListener("input", () => {
+      // Mark as user-set so updatePaycheckTotals won't overwrite
+      $("#pcNet").dataset.userSet = "1";
+      updateSplitRemaining();
+      const netVal = parseFloat($("#pcNet").value) || 0;
+      const disp = $("#pcNetDisplay");
+      if (disp) disp.textContent = fmt(netVal);
     });
-    ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
-      $(id).addEventListener("input", () => {
-        const gross = parseFloat($("#pcGross").value) || 0;
-        const totalDed = ["#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"]
-          .reduce((s, sid) => s + (parseFloat($(sid).value) || 0), 0);
-        if (gross > 0) {
-          $("#pcNet").value = Math.max(0, gross - totalDed).toFixed(2);
-          updateSplitRemaining();
+    // Wire up live totals: any field change updates the section header amounts
+    PAYCHECK_FIELD_IDS.forEach((id) => {
+      const el = $(id);
+      if (el) el.addEventListener("input", updatePaycheckTotals);
+    });
+    // Accordion: toggle each section open/closed
+    $$(".paystub-row").forEach((row) => {
+      row.addEventListener("click", () => {
+        const section = row.closest(".paystub-section");
+        const body = section.querySelector(".paystub-body");
+        const isOpen = section.classList.toggle("open");
+        if (body) body.hidden = !isOpen;
+      });
+    });
+    // Expand-all toggles all sections at once
+    $("#paystubExpandAll")?.addEventListener("click", () => {
+      const sections = $$(".paystub-section");
+      const anyClosed = sections.some((s) => !s.classList.contains("open"));
+      sections.forEach((s) => {
+        const body = s.querySelector(".paystub-body");
+        if (anyClosed) {
+          s.classList.add("open");
+          if (body) body.hidden = false;
+        } else {
+          s.classList.remove("open");
+          if (body) body.hidden = true;
         }
       });
+      $("#paystubExpandAll").textContent = anyClosed ? "⌃ Collapse All" : "⌄ Expand All";
     });
     $("#paycheckForm").addEventListener("submit", (e) => {
       e.preventDefault();

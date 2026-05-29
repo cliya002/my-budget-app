@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=88" />
+  <link rel="stylesheet" href="styles.css?v=89" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1597,55 +1597,154 @@
             <input type="date" id="pcDate" required />
           </div>
         </div>
-        <div class="form-row two-col">
-          <div>
-            <label>Gross pay</label>
-            <input type="number" id="pcGross" step="0.01" min="0" placeholder="0.00" required />
-          </div>
-          <div>
-            <label>Net (take-home)</label>
-            <input type="number" id="pcNet" step="0.01" min="0" placeholder="0.00" required />
+
+        <!-- ADP-style breakdown sections -->
+        <button type="button" class="paystub-expand-all" id="paystubExpandAll">⌄ Expand All</button>
+
+        <!-- Gross -->
+        <div class="paystub-section section-gross">
+          <button type="button" class="paystub-row" data-section="gross">
+            <span class="paystub-bar"></span>
+            <span class="paystub-label">Gross</span>
+            <span class="paystub-units" id="pcGrossUnits"></span>
+            <span class="paystub-amount" id="pcGrossDisplay">$0.00</span>
+            <span class="paystub-toggle">⌄</span>
+          </button>
+          <div class="paystub-body" data-body="gross" hidden>
+            <div class="form-row two-col">
+              <div>
+                <label>Gross pay</label>
+                <input type="number" id="pcGross" step="0.01" min="0" placeholder="0.00" required />
+              </div>
+              <div>
+                <label>Hours / Units</label>
+                <input type="number" id="pcHours" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
           </div>
         </div>
 
-        <div class="card-title" style="margin-top:0.5rem; font-size:0.9rem">Deductions (optional)</div>
-        <div class="form-row two-col">
-          <div>
-            <label>Federal tax</label>
-            <input type="number" id="pcFedTax" step="0.01" min="0" placeholder="0.00" />
-          </div>
-          <div>
-            <label>State tax</label>
-            <input type="number" id="pcStateTax" step="0.01" min="0" placeholder="0.00" />
-          </div>
-        </div>
-        <div class="form-row two-col">
-          <div>
-            <label>FICA (SS + Medicare)</label>
-            <input type="number" id="pcFica" step="0.01" min="0" placeholder="0.00" />
-          </div>
-          <div>
-            <label>Health/Dental/Vision</label>
-            <input type="number" id="pcHealth" step="0.01" min="0" placeholder="0.00" />
-          </div>
-        </div>
-        <div class="form-row two-col">
-          <div>
-            <label>401(k) contribution</label>
-            <input type="number" id="pc401k" step="0.01" min="0" placeholder="0.00" />
-          </div>
-          <div>
-            <label>HSA / FSA</label>
-            <input type="number" id="pcHsa" step="0.01" min="0" placeholder="0.00" />
+        <!-- Taxes -->
+        <div class="paystub-section section-taxes">
+          <button type="button" class="paystub-row" data-section="taxes">
+            <span class="paystub-bar"></span>
+            <span class="paystub-label">Taxes</span>
+            <span class="paystub-amount negative" id="pcTaxesDisplay">−$0.00</span>
+            <span class="paystub-toggle">⌄</span>
+          </button>
+          <div class="paystub-body" data-body="taxes" hidden>
+            <div class="form-row two-col">
+              <div>
+                <label>Federal Income Tax</label>
+                <input type="number" id="pcFedTax" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>State Income Tax</label>
+                <input type="number" id="pcStateTax" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>Social Security</label>
+                <input type="number" id="pcSsTax" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>Medicare</label>
+                <input type="number" id="pcMedicareTax" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <input type="hidden" id="pcFica" value="0" />
           </div>
         </div>
 
-        <div class="card-title" style="margin-top:0.5rem; font-size:0.9rem">Split net pay into accounts</div>
-        <div id="paycheckSplits" class="paycheck-splits"></div>
-        <button type="button" id="addSplitBtn" class="btn-secondary block">+ Add another split</button>
-        <div id="splitRemaining" class="split-remaining"></div>
+        <!-- Benefits -->
+        <div class="paystub-section section-benefits">
+          <button type="button" class="paystub-row" data-section="benefits">
+            <span class="paystub-bar"></span>
+            <span class="paystub-label">Benefits</span>
+            <span class="paystub-amount negative" id="pcBenefitsDisplay">−$0.00</span>
+            <span class="paystub-toggle">⌄</span>
+          </button>
+          <div class="paystub-body" data-body="benefits" hidden>
+            <div class="form-row two-col">
+              <div>
+                <label>Pre-Tax Medical</label>
+                <input type="number" id="pcMedical" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>Pre-Tax Dental</label>
+                <input type="number" id="pcDental" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>Pre-Tax Vision</label>
+                <input type="number" id="pcVision" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>HSA / FSA</label>
+                <input type="number" id="pcHsa" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <div class="form-row two-col">
+              <div>
+                <label>401(k) contribution</label>
+                <input type="number" id="pc401k" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>Other benefits</label>
+                <input type="number" id="pcOtherBenefits" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <input type="hidden" id="pcHealth" value="0" />
+          </div>
+        </div>
 
-        <button type="submit" class="btn-primary block" style="margin-top:0.5rem">Save Paycheck</button>
+        <!-- Other -->
+        <div class="paystub-section section-other">
+          <button type="button" class="paystub-row" data-section="other">
+            <span class="paystub-bar"></span>
+            <span class="paystub-label">Other</span>
+            <span class="paystub-amount negative" id="pcOtherDisplay">−$0.00</span>
+            <span class="paystub-toggle">⌄</span>
+          </button>
+          <div class="paystub-body" data-body="other" hidden>
+            <div class="form-row two-col">
+              <div>
+                <label>Accident / Life Ins</label>
+                <input type="number" id="pcAccidentIns" step="0.01" min="0" placeholder="0.00" />
+              </div>
+              <div>
+                <label>Other deduction</label>
+                <input type="number" id="pcOtherDed" step="0.01" min="0" placeholder="0.00" />
+              </div>
+            </div>
+            <p class="card-sub" style="margin:0.4rem 0 0 0; font-size:0.78rem">Anything that isn't a tax or benefit (e.g. wage advance, garnishment).</p>
+          </div>
+        </div>
+
+        <!-- Take Home -->
+        <div class="paystub-section section-takehome">
+          <button type="button" class="paystub-row" data-section="takehome">
+            <span class="paystub-bar"></span>
+            <span class="paystub-label">Take Home</span>
+            <span class="paystub-amount positive" id="pcNetDisplay">$0.00</span>
+            <span class="paystub-toggle">⌄</span>
+          </button>
+          <div class="paystub-body" data-body="takehome" hidden>
+            <div class="form-row">
+              <label>Net (take-home)</label>
+              <input type="number" id="pcNet" step="0.01" min="0" placeholder="0.00" required />
+              <p class="card-sub" style="margin:0.3rem 0 0 0; font-size:0.78rem">Auto-calculated from Gross − Taxes − Benefits − Other. Override if needed.</p>
+            </div>
+            <div class="card-title" style="margin-top:0.5rem; font-size:0.9rem">Split net pay into accounts</div>
+            <div id="paycheckSplits" class="paycheck-splits"></div>
+            <button type="button" id="addSplitBtn" class="btn-secondary block">+ Add another split</button>
+            <div id="splitRemaining" class="split-remaining"></div>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-primary block" style="margin-top:0.75rem">Save Paycheck</button>
       </form>
     </div>
   </div>
@@ -2049,7 +2148,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=88"></script>
+  <script src="app.js?v=89"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
