@@ -940,6 +940,66 @@ label {
   color: #fff;
 }
 
+/* ================ Accent color picker ================ */
+.accent-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.accent-swatch {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+  transition: transform 0.1s, border-color 0.15s;
+  padding: 0;
+}
+.accent-swatch:hover { transform: scale(1.1); }
+.accent-swatch.active { border-color: var(--text); transform: scale(1.1); }
+
+/* ================ Data Summary grid ================ */
+.data-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.6rem;
+}
+.data-summary-tile {
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.85rem;
+  text-align: center;
+}
+.data-summary-tile .ds-num {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--primary);
+  line-height: 1.1;
+}
+.data-summary-tile .ds-label {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* ================ Account → Category mapping rows ================ */
+.acct-cat-map-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.acct-cat-map-row:last-child { border-bottom: none; }
+.acct-cat-map-row .acm-name { font-weight: 600; }
+.acct-cat-map-row select { min-width: 180px; }
+
+
 /* ================ Card sub label ================ */
 .card-sub {
   color: var(--text-dim);

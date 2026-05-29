@@ -1023,8 +1023,23 @@
     $("#rolloverToggle").checked = !!state.settings.rollover;
     populateDefaultsSelects();
     renderBackupHealth();
+    renderAccountCategoryMap();
+    renderDataSummary();
     const skipDelTog = $("#skipDeleteConfirmToggle");
     if (skipDelTog) skipDelTog.checked = !!state.settings?.skipDeleteConfirm;
+    // Reflect notification toggles
+    [
+      ["#notifyCat80Toggle", "cat80"],
+      ["#notifyCat100Toggle", "cat100"],
+      ["#notifyTotalOverToggle", "totalOver"],
+      ["#notifyStatementToggle", "statementClose"],
+      ["#notifyStaleRecurringToggle", "staleRecurring"],
+    ].forEach(([sel, key]) => {
+      const el = $(sel);
+      if (el) el.checked = notifEnabled(key);
+    });
+    // Reflect accent color swatches
+    loadAccentFromState();
     renderTopbarSpent();
     applyDashStatOrder();
   }
@@ -2448,24 +2463,26 @@
         const diffDays = Math.round((close - today) / 86400000);
         return diffDays >= 0 && diffDays <= 5;
       });
-      if (closingSoon.length === 1) {
-        const c = closingSoon[0];
-        const lim = Number(c.limit) || 0;
-        const bal = cardCurrentBalance(c);
-        const util = lim > 0 ? (bal / lim) * 100 : 0;
-        if (util >= 10) {
+      if (notifEnabled("statementClose")) {
+        if (closingSoon.length === 1) {
+          const c = closingSoon[0];
+          const lim = Number(c.limit) || 0;
+          const bal = cardCurrentBalance(c);
+          const util = lim > 0 ? (bal / lim) * 100 : 0;
+          if (util >= 10) {
+            insights.push({
+              icon: "📅",
+              tone: util >= 30 ? "warn" : "",
+              text: `<strong>${escapeHtml(c.name)}</strong> statement closes in ${c.closeDay - today.getDate()}d at ${util.toFixed(0)}% util. Pay before close to report lower utilization.`,
+            });
+          }
+        } else if (closingSoon.length > 1) {
           insights.push({
             icon: "📅",
-            tone: util >= 30 ? "warn" : "",
-            text: `<strong>${escapeHtml(c.name)}</strong> statement closes in ${c.closeDay - today.getDate()}d at ${util.toFixed(0)}% util. Pay before close to report lower utilization.`,
+            tone: "warn",
+            text: `<strong>${closingSoon.length} statements</strong> closing in 5 days. Pay down before close to lower reported util.`,
           });
         }
-      } else if (closingSoon.length > 1) {
-        insights.push({
-          icon: "📅",
-          tone: "warn",
-          text: `<strong>${closingSoon.length} statements</strong> closing in 5 days. Pay down before close to lower reported util.`,
-        });
       }
     }
 
@@ -3205,11 +3222,15 @@
       const key80 = `${month}:${cat.id}:80`;
 
       if (pct >= 100 && !alertsShown[key100]) {
-        showAlertToast(`🚨 ${cat.name} is over budget!`, "danger");
+        if (notifEnabled("cat100")) {
+          showAlertToast(`🚨 ${cat.name} is over budget!`, "danger");
+        }
         alertsShown[key100] = true;
         changed = true;
       } else if (pct >= 80 && pct < 100 && !alertsShown[key80]) {
-        showAlertToast(`⚠️ ${cat.name} at ${Math.round(pct)}% of budget`, "warning");
+        if (notifEnabled("cat80")) {
+          showAlertToast(`⚠️ ${cat.name} at ${Math.round(pct)}% of budget`, "warning");
+        }
         alertsShown[key80] = true;
         changed = true;
       }
@@ -3657,7 +3678,9 @@
     state.settings.alertsShown[key] = true;
     setSetting("alertsShown", state.settings.alertsShown);
     saveData();
-    showToast(`⚠️ Over budget — ${fmt(totalSpent)} spent vs ${fmt(totalLimit)} budgeted`);
+    if (notifEnabled("totalOver")) {
+      showToast(`⚠️ Over budget — ${fmt(totalSpent)} spent vs ${fmt(totalLimit)} budgeted`);
+    }
   }
 
   // Drag-to-reorder for dashboard stat cards
@@ -7858,6 +7881,19 @@
     ) {
       $("#expAccount").value = state.settings.defaultAccountId;
     }
+    // Apply account → category mapping if no explicit category set yet
+    if (
+      !editingTxnId &&
+      currentModalType === "expense" &&
+      !$("#expCategory").value &&
+      $("#expAccount").value
+    ) {
+      const acctMap = (state.settings && state.settings.accountCategoryMap) || {};
+      const mappedCatId = acctMap[$("#expAccount").value];
+      if (mappedCatId && state.categories.some((c) => c.id === mappedCatId)) {
+        $("#expCategory").value = mappedCatId;
+      }
+    }
     if (prefill && prefill.personId) {
       $("#expPerson").value = prefill.personId;
     }
@@ -10637,6 +10673,19 @@
       if (familyCat) catSel.value = familyCat.id;
     });
 
+    // Account dropdown change -> apply account→category mapping when category is empty
+    $("#expAccount")?.addEventListener("change", (e) => {
+      if (currentModalType !== "expense") return;
+      if (!e.target.value) return;
+      const catSel = $("#expCategory");
+      if (!catSel || catSel.value) return; // don't override user's pick
+      const acctMap = (state.settings && state.settings.accountCategoryMap) || {};
+      const mappedCatId = acctMap[e.target.value];
+      if (mappedCatId && state.categories.some((c) => c.id === mappedCatId)) {
+        catSel.value = mappedCatId;
+      }
+    });
+
     // Event dropdown change -> clear stale line-item stash (line item belongs to the old event)
     $("#expEvent")?.addEventListener("change", () => {
       const formEl = $("#expenseForm");
@@ -11390,6 +11439,114 @@
     if (settingsSearch) {
       settingsSearch.addEventListener("input", filterSettingsCards);
     }
+
+    // Notification preference toggles
+    [
+      ["#notifyCat80Toggle", "cat80"],
+      ["#notifyCat100Toggle", "cat100"],
+      ["#notifyTotalOverToggle", "totalOver"],
+      ["#notifyStatementToggle", "statementClose"],
+      ["#notifyStaleRecurringToggle", "staleRecurring"],
+    ].forEach(([sel, key]) => {
+      const el = $(sel);
+      if (!el) return;
+      el.checked = notifEnabled(key);
+      el.addEventListener("change", (e) => {
+        setNotifPref(key, e.target.checked);
+        saveData();
+        showToast(e.target.checked ? "Notification enabled" : "Notification muted");
+      });
+    });
+
+    // Theme accent color
+    document.querySelectorAll(".accent-swatch").forEach((sw) => {
+      sw.addEventListener("click", () => {
+        const hex = sw.dataset.accent;
+        applyAccentColor(hex);
+        setSetting("accentColor", hex);
+        saveData();
+        loadAccentFromState();
+        showToast("Accent color updated");
+      });
+    });
+    $("#accentCustomInput")?.addEventListener("change", (e) => {
+      const hex = e.target.value;
+      applyAccentColor(hex);
+      setSetting("accentColor", hex);
+      saveData();
+      loadAccentFromState();
+      showToast("Custom accent saved");
+    });
+    $("#accentResetBtn")?.addEventListener("click", () => {
+      applyAccentColor(null);
+      setSetting("accentColor", null);
+      saveData();
+      loadAccentFromState();
+      showToast("Reset to default accent");
+    });
+
+    // Reset specific data
+    $("#resetTxnsBtn")?.addEventListener("click", () => {
+      const n = (state.expenses || []).length;
+      if (!n) { showToast("No transactions to clear"); return; }
+      if (!confirm(`Delete all ${n} transactions? Accounts, categories, and goals stay. This cannot be undone.`)) return;
+      state.expenses.forEach((e) => tombstoneRecord("expenses", e.id));
+      state.expenses = [];
+      saveData();
+      renderAll();
+      showToast(`Cleared ${n} transactions`);
+    });
+    $("#resetReceiptsBtn")?.addEventListener("click", () => {
+      const withReceipts = (state.expenses || []).filter((e) => e.receipt);
+      if (!withReceipts.length) { showToast("No receipts attached"); return; }
+      if (!confirm(`Strip ${withReceipts.length} receipt photo${withReceipts.length === 1 ? "" : "s"}? Transactions stay. This cannot be undone.`)) return;
+      withReceipts.forEach((e) => {
+        delete e.receipt;
+        touchRecord(e);
+      });
+      saveData();
+      renderAll();
+      showToast(`Stripped ${withReceipts.length} receipt${withReceipts.length === 1 ? "" : "s"}`);
+    });
+    $("#resetPresetsBtn")?.addEventListener("click", () => {
+      const n = (state.presets || []).length;
+      if (!n) { showToast("No presets to clear"); return; }
+      if (!confirm(`Delete all ${n} quick-add presets? This cannot be undone.`)) return;
+      state.presets.forEach((p) => tombstoneRecord("presets", p.id));
+      state.presets = [];
+      saveData();
+      renderAll();
+      showToast(`Cleared ${n} preset${n === 1 ? "" : "s"}`);
+    });
+    $("#resetEventsBtn")?.addEventListener("click", () => {
+      const n = (state.events || []).length;
+      if (!n) { showToast("No events to clear"); return; }
+      if (!confirm(`Delete all ${n} event${n === 1 ? "" : "s"}? Linked transactions stay but lose their event tag. This cannot be undone.`)) return;
+      const ids = new Set(state.events.map((ev) => ev.id));
+      state.events.forEach((ev) => tombstoneRecord("events", ev.id));
+      state.events = [];
+      // Untag transactions
+      (state.expenses || []).forEach((ex) => {
+        if (ex.eventId && ids.has(ex.eventId)) {
+          delete ex.eventId;
+          delete ex.eventLineItemId;
+          touchRecord(ex);
+        }
+      });
+      saveData();
+      renderAll();
+      showToast(`Cleared ${n} event${n === 1 ? "" : "s"}`);
+    });
+    $("#resetRecurringBtn")?.addEventListener("click", () => {
+      const n = (state.recurring || []).length;
+      if (!n) { showToast("No recurring rules to clear"); return; }
+      if (!confirm(`Delete all ${n} recurring rule${n === 1 ? "" : "s"}? Existing transactions stay. This cannot be undone.`)) return;
+      state.recurring.forEach((r) => tombstoneRecord("recurring", r.id));
+      state.recurring = [];
+      saveData();
+      renderAll();
+      showToast(`Cleared ${n} rule${n === 1 ? "" : "s"}`);
+    });
 
     // Export
     $("#exportBtn").addEventListener("click", () => {
@@ -12542,6 +12699,128 @@
   function confirmDeleteTxn(message) {
     if (state.settings?.skipDeleteConfirm) return true;
     return confirm(message || "Delete this transaction?");
+  }
+
+  /* ---------- Settings: Account → Category mapping ---------- */
+  function renderAccountCategoryMap() {
+    const list = $("#accountCatMapList");
+    if (!list) return;
+    if (!state.accounts || !state.accounts.length) {
+      list.innerHTML = '<li class="empty">Add accounts to enable mapping.</li>';
+      return;
+    }
+    const map = (state.settings && state.settings.accountCategoryMap) || {};
+    const catOptions = '<option value="">— Use default category —</option>' +
+      (state.categories || [])
+        .filter((c) => !/^income$/i.test(c.name))
+        .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+        .join("");
+    list.innerHTML = state.accounts.map((a) => `
+      <li class="acct-cat-map-row" data-acct="${a.id}">
+        <span class="acm-name">${escapeHtml(a.name)}</span>
+        <select class="acm-select" data-acct="${a.id}">${catOptions}</select>
+      </li>
+    `).join("");
+    // Set selected values
+    list.querySelectorAll(".acm-select").forEach((sel) => {
+      const acctId = sel.dataset.acct;
+      sel.value = map[acctId] || "";
+      sel.addEventListener("change", (e) => {
+        const newMap = { ...((state.settings && state.settings.accountCategoryMap) || {}) };
+        if (e.target.value) {
+          newMap[acctId] = e.target.value;
+        } else {
+          delete newMap[acctId];
+        }
+        setSetting("accountCategoryMap", newMap);
+        saveData();
+        showToast("Mapping updated");
+      });
+    });
+  }
+
+  /* ---------- Settings: Notification preferences ---------- */
+  // Returns true if the named notification is enabled (defaults to true if unset)
+  function notifEnabled(key) {
+    const prefs = state.settings && state.settings.notifications;
+    if (!prefs || typeof prefs[key] === "undefined") return true;
+    return !!prefs[key];
+  }
+  function setNotifPref(key, val) {
+    const prefs = { ...((state.settings && state.settings.notifications) || {}) };
+    prefs[key] = !!val;
+    setSetting("notifications", prefs);
+  }
+
+  /* ---------- Settings: Data Summary ---------- */
+  function renderDataSummary() {
+    const grid = $("#dataSummaryGrid");
+    if (!grid) return;
+    const tiles = [
+      { label: "Transactions", n: (state.expenses || []).length },
+      { label: "Accounts", n: (state.accounts || []).length },
+      { label: "Categories", n: (state.categories || []).length },
+      { label: "Goals", n: (state.goals || []).length },
+      { label: "Events", n: (state.events || []).length },
+      { label: "Presets", n: (state.presets || []).length },
+      { label: "People", n: (state.people || []).length },
+      { label: "Credit cards", n: (state.creditCards || []).length },
+      { label: "Recurring rules", n: (state.recurring || []).length },
+      { label: "Receipts", n: (state.expenses || []).filter((e) => e.receipt).length },
+    ];
+    grid.innerHTML = tiles.map((t) => `
+      <div class="data-summary-tile">
+        <div class="ds-num">${t.n}</div>
+        <div class="ds-label">${t.label}</div>
+      </div>
+    `).join("");
+  }
+
+  /* ---------- Settings: Theme accent color ---------- */
+  function applyAccentColor(hex) {
+    if (!hex || !/^#[0-9a-f]{6}$/i.test(hex)) {
+      // Reset
+      document.documentElement.style.removeProperty("--primary");
+      document.documentElement.style.removeProperty("--primary-hover");
+      document.documentElement.style.removeProperty("--primary-soft");
+      return;
+    }
+    const root = document.documentElement;
+    root.style.setProperty("--primary", hex);
+    // Slightly darker shade for hover
+    root.style.setProperty("--primary-hover", shadeHex(hex, -12));
+    // Soft tint for backgrounds (mix with white at ~14% opacity feel)
+    root.style.setProperty("--primary-soft", hexToSoft(hex));
+  }
+  function shadeHex(hex, percent) {
+    const num = parseInt(hex.replace("#", ""), 16);
+    let r = (num >> 16) + Math.round((255 * percent) / 100);
+    let g = ((num >> 8) & 0xff) + Math.round((255 * percent) / 100);
+    let b = (num & 0xff) + Math.round((255 * percent) / 100);
+    r = Math.max(0, Math.min(255, r));
+    g = Math.max(0, Math.min(255, g));
+    b = Math.max(0, Math.min(255, b));
+    return "#" + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
+  }
+  function hexToSoft(hex) {
+    const num = parseInt(hex.replace("#", ""), 16);
+    const r = (num >> 16) & 0xff;
+    const g = (num >> 8) & 0xff;
+    const b = num & 0xff;
+    // Mix with white at ~88%
+    const mix = (c) => Math.round(c + (255 - c) * 0.85);
+    return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+  }
+  function loadAccentFromState() {
+    const accent = state.settings && state.settings.accentColor;
+    if (accent) applyAccentColor(accent);
+    // Reflect into UI
+    const swatches = document.querySelectorAll(".accent-swatch");
+    swatches.forEach((s) => {
+      s.classList.toggle("active", s.dataset.accent.toLowerCase() === (accent || "").toLowerCase());
+    });
+    const customInput = $("#accentCustomInput");
+    if (customInput && accent) customInput.value = accent;
   }
 
   // Purge tombstones older than 90 days — anything that old is unlikely to come back from a stale device

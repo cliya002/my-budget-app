@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=129" />
+  <link rel="stylesheet" href="styles.css?v=130" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1300,6 +1300,92 @@
           </div>
 
           <div class="card">
+            <div class="card-title">🔗 Account → Category mapping</div>
+            <p class="card-sub">Auto-pick a category when you choose a specific account (e.g. credit card → Bills). Account-specific mappings override the default category.</p>
+            <ul id="accountCatMapList" class="list" style="margin-top:0.75rem">
+              <li class="empty">Add accounts to enable mapping.</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🔔 Notifications</div>
+            <p class="card-sub">Choose which alerts to show. All notifications stay on this device — nothing is sent anywhere.</p>
+            <label class="toggle-row" style="margin-top:0.5rem">
+              <span>
+                <strong>Category 80% warning</strong>
+                <br />
+                <span class="card-sub">Alert when a category hits 80% of its monthly limit.</span>
+              </span>
+              <input type="checkbox" id="notifyCat80Toggle" />
+            </label>
+            <label class="toggle-row" style="margin-top:0.5rem">
+              <span>
+                <strong>Category over-budget alert</strong>
+                <br />
+                <span class="card-sub">Alert when a category passes 100% of its limit.</span>
+              </span>
+              <input type="checkbox" id="notifyCat100Toggle" />
+            </label>
+            <label class="toggle-row" style="margin-top:0.5rem">
+              <span>
+                <strong>Total over-budget alert</strong>
+                <br />
+                <span class="card-sub">Alert when total month spend crosses your total budget.</span>
+              </span>
+              <input type="checkbox" id="notifyTotalOverToggle" />
+            </label>
+            <label class="toggle-row" style="margin-top:0.5rem">
+              <span>
+                <strong>Statement closing reminders</strong>
+                <br />
+                <span class="card-sub">Show a Smart Insight when a credit card statement closes within 5 days.</span>
+              </span>
+              <input type="checkbox" id="notifyStatementToggle" />
+            </label>
+            <label class="toggle-row" style="margin-top:0.5rem">
+              <span>
+                <strong>Stale recurring rule prompts</strong>
+                <br />
+                <span class="card-sub">Suggest cleanup of recurring rules that haven't fired in 60+ days.</span>
+              </span>
+              <input type="checkbox" id="notifyStaleRecurringToggle" />
+            </label>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📊 Data Summary</div>
+            <p class="card-sub">Snapshot of what's stored on this device.</p>
+            <div id="dataSummaryGrid" class="data-summary-grid" style="margin-top:0.75rem"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🎨 Theme Accent</div>
+            <p class="card-sub">Pick the highlight color used across buttons, charts, and the app shell.</p>
+            <div id="accentPicker" class="accent-picker" style="margin-top:0.75rem">
+              <button type="button" class="accent-swatch" data-accent="#5b3fb8" style="background:#5b3fb8" title="Iris (default)"></button>
+              <button type="button" class="accent-swatch" data-accent="#3b82f6" style="background:#3b82f6" title="Blue"></button>
+              <button type="button" class="accent-swatch" data-accent="#0ea5e9" style="background:#0ea5e9" title="Sky"></button>
+              <button type="button" class="accent-swatch" data-accent="#14b8a6" style="background:#14b8a6" title="Teal"></button>
+              <button type="button" class="accent-swatch" data-accent="#22c55e" style="background:#22c55e" title="Green"></button>
+              <button type="button" class="accent-swatch" data-accent="#f59e0b" style="background:#f59e0b" title="Amber"></button>
+              <button type="button" class="accent-swatch" data-accent="#ef4444" style="background:#ef4444" title="Red"></button>
+              <button type="button" class="accent-swatch" data-accent="#ec4899" style="background:#ec4899" title="Pink"></button>
+              <button type="button" class="accent-swatch" data-accent="#8b5cf6" style="background:#8b5cf6" title="Violet"></button>
+              <button type="button" class="accent-swatch" data-accent="#64748b" style="background:#64748b" title="Slate"></button>
+            </div>
+            <div class="form-row two-col" style="margin-top:0.85rem">
+              <div>
+                <label>Custom hex</label>
+                <input type="color" id="accentCustomInput" value="#5b3fb8" />
+              </div>
+              <div>
+                <label>&nbsp;</label>
+                <button type="button" id="accentResetBtn" class="btn-secondary block">Reset to default</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
             <div class="card-title">Currency</div>
             <select id="currencySelect" class="block">
               <option value="USD">USD ($)</option>
@@ -1365,6 +1451,19 @@
             <input type="file" id="importFile" accept="application/json" hidden />
             <button id="forceUpdateBtn" class="btn-secondary block" style="margin-top:0.5rem">🔄 Force App Update (clear cache)</button>
             <button id="clearAllBtn" class="btn-danger block" style="margin-top:0.5rem">Clear All Data</button>
+          </div>
+
+          <div class="card">
+            <div class="card-title">⚠️ Reset Specific Data</div>
+            <p class="card-sub">Surgical resets — keeps the rest of your data intact. Each one prompts before running.</p>
+            <button id="resetTxnsBtn" class="btn-danger block" style="margin-top:0.5rem">🗑️ Clear all transactions only</button>
+            <button id="resetReceiptsBtn" class="btn-secondary block" style="margin-top:0.5rem">🧹 Strip receipt photos (keep transactions)</button>
+            <button id="resetPresetsBtn" class="btn-secondary block" style="margin-top:0.5rem">🧹 Clear all quick-add presets</button>
+            <button id="resetEventsBtn" class="btn-secondary block" style="margin-top:0.5rem">🧹 Clear all events</button>
+            <button id="resetRecurringBtn" class="btn-secondary block" style="margin-top:0.5rem">🧹 Clear all recurring rules</button>
+            <p class="footer-note" style="margin-top:0.5rem; text-align:left">
+              💡 Tip: Export a backup first if you might want to undo. Resets propagate to your other devices via sync.
+            </p>
           </div>
 
           <div class="card">
@@ -2272,7 +2371,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=129"></script>
+  <script src="app.js?v=130"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
