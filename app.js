@@ -7393,6 +7393,10 @@
       .join("");
   }
 
+  // Track which preset groups are collapsed (collapsed by default for less clutter,
+  // except Favorites which expands by default).
+  const collapsedPresetGroups = new Set(["daily", "subscription", "custom"]);
+
   function renderPresets() {
     const list = $("#presetsList");
     const items = state.presets.filter((p) => p.type === currentModalType);
@@ -7403,8 +7407,8 @@
 
     // Group: favorites first, then by group key
     const groupOrder = currentModalType === "income"
-      ? [["income", "Income"]]
-      : [["favorite", "⭐ Favorites"], ["daily", "Daily"], ["subscription", "Subscriptions"], ["custom", "Custom"]];
+      ? [["income", "💼 Income"]]
+      : [["favorite", "⭐ Favorites"], ["daily", "☕ Daily"], ["subscription", "📺 Subscriptions"], ["custom", "🏷️ Custom"]];
 
     const buckets = {};
     items.forEach((p) => {
@@ -7422,7 +7426,16 @@
     groupOrder.forEach(([key, label]) => {
       const arr = buckets[key];
       if (!arr || !arr.length) return;
-      html += `<div class="preset-group-label">${label}</div><div class="preset-row">`;
+      const collapsed = collapsedPresetGroups.has(key);
+      const arrow = collapsed ? "▸" : "▾";
+      html += `
+        <div class="preset-group ${collapsed ? "collapsed" : ""}" data-group="${key}">
+          <button type="button" class="preset-group-header" data-toggle-group="${key}">
+            <span class="preset-group-arrow">${arrow}</span>
+            <span class="preset-group-title">${label}</span>
+            <span class="preset-group-count">${arr.length}</span>
+          </button>
+          <div class="preset-row">`;
       arr.forEach((p) => {
         const amt = Number(p.amount) > 0 ? `<span class="preset-amt">${fmt(p.amount)}</span>` : "";
         html += `
@@ -7432,7 +7445,7 @@
             ${amt}
           </button>`;
       });
-      html += "</div>";
+      html += `</div></div>`;
     });
     list.innerHTML = html;
   }
@@ -7801,6 +7814,16 @@
 
     // Preset chips inside modal
     $("#presetsList").addEventListener("click", (e) => {
+      // Group toggle (collapse/expand)
+      const toggle = e.target.closest("[data-toggle-group]");
+      if (toggle) {
+        const key = toggle.dataset.toggleGroup;
+        if (collapsedPresetGroups.has(key)) collapsedPresetGroups.delete(key);
+        else collapsedPresetGroups.add(key);
+        renderPresets();
+        return;
+      }
+      // Apply preset
       const btn = e.target.closest("[data-preset]");
       if (!btn) return;
       applyPreset(btn.dataset.preset);

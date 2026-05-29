@@ -3296,3 +3296,54 @@ input[type="color"] {
 @media (max-width: 480px) {
   .paystub-actions { grid-template-columns: 1fr; }
 }
+
+
+/* ---------- Collapsible preset groups in Add Transaction ---------- */
+.preset-group {
+  margin-bottom: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card-alt, var(--card));
+  overflow: hidden;
+}
+.preset-group-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.65rem 0.85rem;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.preset-group-header:hover { background: rgba(91, 63, 184, 0.05); }
+.preset-group-arrow {
+  font-size: 0.85rem;
+  color: var(--muted);
+  width: 14px;
+  display: inline-block;
+  transition: transform 0.15s;
+}
+.preset-group-title { flex: 1; }
+.preset-group-count {
+  background: rgba(91, 63, 184, 0.12);
+  color: var(--accent, #5b3fb8);
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+}
+.preset-group .preset-row {
+  padding: 0 0.65rem 0.7rem 0.65rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.preset-group.collapsed .preset-row { display: none; }
+[data-theme="dark"] .preset-group-header:hover { background: rgba(255, 255, 255, 0.04); }
