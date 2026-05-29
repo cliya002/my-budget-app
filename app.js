@@ -1334,6 +1334,26 @@
       }).join("")}</div>`;
     }
 
+    // Card usage summary (if any txns hit a credit-card account)
+    let cardSummaryHtml = "";
+    const cardTxns = state.expenses.filter((e) => {
+      if (e.eventId !== ev.id || e.type !== "expense") return false;
+      const acc = e.accountId ? state.accounts.find((a) => a.id === e.accountId) : null;
+      return acc && ((acc.type || "").toLowerCase() === "credit" || !!acc.cardId);
+    });
+    if (cardTxns.length) {
+      const byCard = {};
+      cardTxns.forEach((e) => {
+        const acc = state.accounts.find((a) => a.id === e.accountId);
+        if (!acc) return;
+        byCard[acc.name] = (byCard[acc.name] || 0) + Number(e.amount);
+      });
+      const cardEntries = Object.entries(byCard).sort((a, b) => b[1] - a[1]);
+      cardSummaryHtml = `<div class="event-card-spend">
+        <span class="card-sub">💳 On cards: ${cardEntries.map(([n, a]) => `${escapeHtml(n)} ${fmt(a)}`).join(" · ")}</span>
+      </div>`;
+    }
+
     const statusBadge = status === "active" ? '<span class="event-badge active">🟢 Active</span>'
       : status === "completed" ? '<span class="event-badge completed">✓ Completed</span>'
       : '<span class="event-badge planning">📅 Planning</span>';
@@ -1366,6 +1386,7 @@
           </div>
         `}
         ${lineItemsHtml}
+        ${cardSummaryHtml}
         ${ev.notes ? `<div class="event-notes">${escapeHtml(ev.notes)}</div>` : ""}
         <div class="event-checklist-panel" data-event-checklist="${ev.id}" hidden>
           ${renderEventChecklistRows(ev)}
@@ -12825,6 +12846,25 @@ Format your response as a numbered list of short, specific recommendations. No f
     });
     const sortedCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
 
+    // Group by account (so user sees which card/cash they used)
+    const acctTotals = {};
+    txns.forEach((e) => {
+      const acc = e.accountId ? state.accounts.find((a) => a.id === e.accountId) : null;
+      const name = acc ? acc.name : "Unassigned";
+      acctTotals[name] = (acctTotals[name] || 0) + Number(e.amount);
+    });
+    const sortedAccts = Object.entries(acctTotals).sort((a, b) => b[1] - a[1]);
+
+    // Group by person (family money during the event)
+    const personTotals = {};
+    txns.forEach((e) => {
+      if (!e.personId) return;
+      const p = state.people.find((x) => x.id === e.personId);
+      if (!p) return;
+      personTotals[p.name] = (personTotals[p.name] || 0) + Number(e.amount);
+    });
+    const sortedPeople = Object.entries(personTotals).sort((a, b) => b[1] - a[1]);
+
     const w = window.open("", "_blank");
     if (!w) {
       showToast("Please allow popups to view report");
@@ -12902,6 +12942,33 @@ ${sortedCats.length ? `
       <td>${escapeHtml(name)}</td>
       <td class="right">${fmt(amt)}</td>
       <td class="right">${totalSpent > 0 ? ((amt / totalSpent) * 100).toFixed(0) + "%" : "—"}</td>
+    </tr>`).join("")}
+  </tbody>
+</table>
+` : ""}
+
+${sortedAccts.length ? `
+<h2>By Account / Card</h2>
+<table>
+  <thead><tr><th>Account</th><th class="right">Amount</th><th class="right">% of Total</th></tr></thead>
+  <tbody>
+    ${sortedAccts.map(([name, amt]) => `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td class="right">${fmt(amt)}</td>
+      <td class="right">${totalSpent > 0 ? ((amt / totalSpent) * 100).toFixed(0) + "%" : "—"}</td>
+    </tr>`).join("")}
+  </tbody>
+</table>
+` : ""}
+
+${sortedPeople.length ? `
+<h2>By Family Member</h2>
+<table>
+  <thead><tr><th>Person</th><th class="right">Amount</th></tr></thead>
+  <tbody>
+    ${sortedPeople.map(([name, amt]) => `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td class="right">${fmt(amt)}</td>
     </tr>`).join("")}
   </tbody>
 </table>
