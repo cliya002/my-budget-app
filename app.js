@@ -6902,20 +6902,38 @@
   }
 
   function parsePaystub(rawText) {
+    // Defensive: ensure we have a string to work with
+    if (!rawText || typeof rawText !== "string") {
+      return {
+        employer: null, date: null,
+        gross: null, net: null,
+        fedTax: null, stateTax: null, fica: null,
+        ssTax: null, medicareTax: null,
+        health: null, dental: null, vision: null,
+        k401: null, hsa: null,
+        ytdGross: null, ytdFedTax: null, ytdStateTax: null,
+        ytdSs: null, ytdMedicare: null, ytdNet: null,
+        regularHours: null, regularRate: null,
+        otHours: null, holidayHours: null, ptoHours: null,
+        hours: null, payPeriodStart: null, payPeriodEnd: null,
+        checkAccountLast4: null, otherDeductions: [], earnings: [],
+      };
+    }
+
     // Pre-normalize: some PDFs render numbers as "1 746 05" instead of "1,746.05"
     // because of column spacing. Convert "X XXX XX" patterns (3 digits then 2 digits)
     // back to "X,XXX.XX" so our regexes work.
-    let normText = rawText.replace(/(\d{1,3})\s+(\d{3})\s+(\d{2})\b/g, "$1,$2.$3");
+    let normText = String(rawText).replace(/(\d{1,3})\s+(\d{3})\s+(\d{2})\b/g, "$1,$2.$3");
     // Also "XXX XX" → "XXX.XX" when the surrounding context looks like a money label.
     // Avoid lookbehind/lookahead for Safari compat.
     const moneyContext = /(tax|pay|net|gross|insurance|medical|dental|vision|fica|401|hsa|deduction|fee|tip|life|ad\/d|imputed|offset|tkn|balnce|earnings|wages)\s+\-?\$?\s*\d{1,3}\s+\d{2}\b(?!\s*\d)/gi;
     normText = normText.replace(moneyContext, (m) => {
       // Replace the trailing "X XX" with "X.XX"
-      return m.replace(/(\d{1,3})\s+(\d{2})\b\s*$/, "$1.$2");
+      return String(m || "").replace(/(\d{1,3})\s+(\d{2})\b\s*$/, "$1.$2");
     });
 
     const text = normText.replace(/\s+/g, " ").trim();
-    const lines = rawText.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
+    const lines = String(rawText).split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
     const result = {
       employer: null, date: null,
       gross: null, net: null,
@@ -6970,15 +6988,18 @@
     // --- Helper: read first dollar amount after a label, but not from YTD column.
     // ADP layouts often have "this period" in col 1 and "year to date" in col 2.
     // We prefer the FIRST number after the label.
+    // IMPORTANT: wrap labelRegex.source in a non-capturing group so alternation
+    // doesn't make the appended pattern bind to only the last alternative.
     function firstAmountAfter(labelRegex) {
-      const m = text.match(new RegExp(labelRegex.source + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
-      return m ? Number(m[1].replace(/,/g, "")) : null;
+      const m = text.match(new RegExp(`(?:${labelRegex.source})` + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
+      if (!m || !m[1]) return null;
+      return Number(String(m[1]).replace(/,/g, ""));
     }
     // For lines where we want all amounts (current + YTD), capture two
     function twoAmountsAfter(labelRegex) {
-      const m = text.match(new RegExp(labelRegex.source + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})\s*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
-      if (!m) return [null, null];
-      return [Number(m[1].replace(/,/g, "")), Number(m[2].replace(/,/g, ""))];
+      const m = text.match(new RegExp(`(?:${labelRegex.source})` + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})\s*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
+      if (!m || !m[1]) return [null, null];
+      return [Number(String(m[1]).replace(/,/g, "")), Number(String(m[2] || "0").replace(/,/g, ""))];
     }
 
     // --- Gross + YTD
@@ -7043,19 +7064,19 @@
       ["RSU", /RSU\s*(?:Vest)?\s+\$?([\d,]+\.\d{2})/i],
     ];
     earningPatterns.forEach(([name, re]) => {
-      const m = rawText.match(re);
+      const m = String(rawText).match(re);
       if (m) {
-        if (m.length >= 4) {
+        if (m.length >= 4 && m[1] && m[2] && m[3]) {
           // rate, hours, this period
-          result.earnings.push({ name, rate: Number(m[1]), hours: Number(m[2]), amount: Number(m[3].replace(/,/g, "")) });
+          result.earnings.push({ name, rate: Number(m[1]), hours: Number(m[2]), amount: Number(String(m[3]).replace(/,/g, "")) });
           if (name === "Regular") {
             result.regularRate = Number(m[1]);
             result.regularHours = Number(m[2]);
           } else if (name === "Overtime") result.otHours = Number(m[2]);
           else if (name === "Holiday") result.holidayHours = Number(m[2]);
           else if (name === "PTO") result.ptoHours = Number(m[2]);
-        } else {
-          result.earnings.push({ name, amount: Number(m[1].replace(/,/g, "")) });
+        } else if (m[1]) {
+          result.earnings.push({ name, amount: Number(String(m[1]).replace(/,/g, "")) });
         }
       }
     });
