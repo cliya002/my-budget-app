@@ -3849,3 +3849,65 @@ input[type="color"] {
   padding: 0.4rem 0.6rem;
   border-radius: 8px;
 }
+
+
+/* Line item over-budget tag */
+.li-over-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  background: rgba(220, 38, 38, 0.12);
+  color: #dc2626;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+
+/* Linked savings goal on event card */
+.event-linked-goal {
+  margin-top: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  background: rgba(34, 197, 94, 0.06);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  border-radius: 8px;
+}
+.event-linked-goal-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  margin-bottom: 0.3rem;
+}
+.event-linked-goal .progress-bar { height: 5px; }
+
+/* Empty-state event templates */
+.event-templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.85rem;
+}
+.event-template {
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 1.6rem;
+  transition: transform 0.15s, box-shadow 0.15s;
+}
+.event-template span:nth-of-type(1) {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.event-template span:nth-of-type(2) {
+  font-size: 0.75rem;
+}
+.event-template:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+}

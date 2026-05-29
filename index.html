@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=123" />
+  <link rel="stylesheet" href="styles.css?v=124" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1818,6 +1818,13 @@
           <input type="color" id="eventColor" value="#5b3fb8" style="width:60px; height:36px; padding:0; border-radius:8px; cursor:pointer" />
         </div>
         <div class="form-row">
+          <label>Linked savings goal (optional)</label>
+          <select id="eventLinkedGoal">
+            <option value="">— None —</option>
+          </select>
+          <p class="card-sub" style="margin-top:0.3rem; font-size:0.78rem">Track save-up progress alongside your event budget. Goal contributions show on the event card.</p>
+        </div>
+        <div class="form-row">
           <label>Notes (optional)</label>
           <textarea id="eventNotes" rows="2" placeholder="Trip details, who's going, etc."></textarea>
         </div>
@@ -2202,7 +2209,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=123"></script>
+  <script src="app.js?v=124"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

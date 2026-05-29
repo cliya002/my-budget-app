@@ -1260,7 +1260,15 @@
     if (!activeList || !completedList) return;
 
     if (!state.events.length) {
-      activeList.innerHTML = '<p class="empty">No events yet. Tap <strong>+ New Event</strong> to plan your first one.</p>';
+      activeList.innerHTML = `
+        <p class="empty">No events yet — get started with a template or tap <strong>+ New Event</strong>.</p>
+        <div class="event-templates">
+          <button class="event-template" data-template="vacation">🌴<span>Vacation</span><span class="card-sub">Trip with line items</span></button>
+          <button class="event-template" data-template="wedding">💍<span>Wedding</span><span class="card-sub">Big day budget</span></button>
+          <button class="event-template" data-template="move">📦<span>Moving</span><span class="card-sub">Relocation costs</span></button>
+          <button class="event-template" data-template="holidays">🎁<span>Holidays</span><span class="card-sub">Gifts + travel</span></button>
+        </div>
+      `;
       completedList.innerHTML = '<p class="empty">No completed events yet.</p>';
       if (pill) pill.textContent = "No events yet";
       return;
@@ -1346,12 +1354,16 @@
       lineItemsHtml = `<div class="event-lines">${ev.lineItems.map((li) => {
         const liSpent = eventSpentTotal(ev.id, li.id);
         const liBudget = Number(li.budget) || 0;
-        const liPct = liBudget > 0 ? Math.min(100, (liSpent / liBudget) * 100) : 0;
-        const liCls = liPct >= 100 ? "danger" : liPct >= 80 ? "warning" : "success";
+        const liPctRaw = liBudget > 0 ? (liSpent / liBudget) * 100 : 0;
+        const liPct = Math.min(100, liPctRaw);
+        const liCls = liPctRaw >= 100 ? "danger" : liPctRaw >= 80 ? "warning" : "success";
+        const overTag = liBudget > 0 && liSpent > liBudget
+          ? ` <span class="li-over-tag">+${fmt(liSpent - liBudget)} over</span>`
+          : "";
         return `
           <div class="event-line-row">
             <div class="event-line-head">
-              <span>${escapeHtml(li.label)}</span>
+              <span>${escapeHtml(li.label)}${overTag}</span>
               <span class="event-line-actions">
                 <span class="card-sub">${fmt(liSpent)}${liBudget > 0 ? ` / ${fmt(liBudget)}` : ""}</span>
                 <button class="event-line-add" data-action="quick-line-spend" data-event-id="${ev.id}" data-line-id="${li.id}" title="Add expense to ${escapeHtml(li.label)}">+</button>
@@ -1362,7 +1374,25 @@
       }).join("")}</div>`;
     }
 
-    // Card usage summary (if any txns hit a credit-card account)
+    // Linked savings goal progress (if any)
+    let linkedGoalHtml = "";
+    if (ev.linkedGoalId) {
+      const goal = state.goals.find((g) => g.id === ev.linkedGoalId);
+      if (goal) {
+        const saved = goalSavedTotal(goal);
+        const target = Number(goal.target) || 0;
+        const gpct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+        const gcls = gpct >= 100 ? "success" : gpct >= 80 ? "" : "";
+        linkedGoalHtml = `
+          <div class="event-linked-goal">
+            <div class="event-linked-goal-head">
+              <span>🎯 ${escapeHtml(goal.name)}</span>
+              <span class="card-sub">${fmt(saved)} / ${fmt(target)} (${gpct.toFixed(0)}%)</span>
+            </div>
+            <div class="progress-bar"><div class="progress-fill ${gcls}" style="width:${gpct}%; background:#22c55e"></div></div>
+          </div>`;
+      }
+    }
     let cardSummaryHtml = "";
     const cardTxns = state.expenses.filter((e) => {
       if (e.eventId !== ev.id || e.type !== "expense") return false;
@@ -1418,6 +1448,7 @@
           </div>
         `}
         ${lineItemsHtml}
+        ${linkedGoalHtml}
         ${paceHtml}
         ${cardSummaryHtml}
         ${ev.notes ? `<div class="event-notes">${escapeHtml(ev.notes)}</div>` : ""}
@@ -1563,6 +1594,13 @@
     const colorEl = $("#eventColor");
     if (colorEl) colorEl.value = isEdit && ev.color ? ev.color : "#5b3fb8";
     $("#eventNotes").value = isEdit ? (ev.notes || "") : "";
+    // Populate linked-goal dropdown
+    const goalSel = $("#eventLinkedGoal");
+    if (goalSel) {
+      goalSel.innerHTML = '<option value="">— None —</option>' +
+        state.goals.map((g) => `<option value="${g.id}">🎯 ${escapeHtml(g.name)}</option>`).join("");
+      goalSel.value = isEdit ? (ev.linkedGoalId || "") : "";
+    }
     const vmEl = $("#eventVacationMode");
     if (vmEl) vmEl.checked = isEdit ? !!ev.vacationMode : false;
     renderEventLineItemsForm(isEdit ? (ev.lineItems || []) : []);
@@ -9979,6 +10017,76 @@
       eventsSearchQuery = e.target.value;
       renderEventsTab();
     });
+
+    // Event template quick-create — picks the right preset
+    document.addEventListener("click", (e) => {
+      const tpl = e.target.closest("[data-template]");
+      if (!tpl) return;
+      const presets = {
+        vacation: {
+          name: "Vacation", icon: "🌴", color: "#06b6d4",
+          lineItems: [
+            { id: uid(), label: "Flights", budget: 0 },
+            { id: uid(), label: "Hotel", budget: 0 },
+            { id: uid(), label: "Food", budget: 0 },
+            { id: uid(), label: "Activities", budget: 0 },
+          ],
+          checklist: [
+            { id: uid(), label: "Pack passport", done: false },
+            { id: uid(), label: "Notify bank", done: false },
+            { id: uid(), label: "Confirm reservations", done: false },
+          ],
+        },
+        wedding: {
+          name: "Wedding", icon: "💍", color: "#ec4899",
+          lineItems: [
+            { id: uid(), label: "Venue", budget: 0 },
+            { id: uid(), label: "Catering", budget: 0 },
+            { id: uid(), label: "Photography", budget: 0 },
+            { id: uid(), label: "Attire", budget: 0 },
+            { id: uid(), label: "Flowers", budget: 0 },
+          ],
+        },
+        move: {
+          name: "Moving", icon: "📦", color: "#f59e0b",
+          lineItems: [
+            { id: uid(), label: "Movers", budget: 0 },
+            { id: uid(), label: "Deposit & first month", budget: 0 },
+            { id: uid(), label: "Furniture & supplies", budget: 0 },
+            { id: uid(), label: "Utility setup", budget: 0 },
+          ],
+          checklist: [
+            { id: uid(), label: "Update address with bank/IRS/DMV", done: false },
+            { id: uid(), label: "Set up utilities", done: false },
+            { id: uid(), label: "Forward mail (USPS)", done: false },
+          ],
+        },
+        holidays: {
+          name: "Holidays", icon: "🎁", color: "#22c55e",
+          lineItems: [
+            { id: uid(), label: "Gifts", budget: 0 },
+            { id: uid(), label: "Travel", budget: 0 },
+            { id: uid(), label: "Food & drinks", budget: 0 },
+          ],
+        },
+      };
+      const preset = presets[tpl.dataset.template];
+      if (preset) {
+        openEventModal({
+          id: null,
+          name: preset.name,
+          icon: preset.icon,
+          color: preset.color,
+          startDate: null,
+          endDate: null,
+          budget: 0,
+          notes: "",
+          lineItems: preset.lineItems,
+          checklist: preset.checklist || [],
+          vacationMode: false,
+        });
+      }
+    });
     $("#eventModalClose")?.addEventListener("click", closeEventModal);
     $("#eventModal")?.addEventListener("click", (e) => {
       if (e.target.id === "eventModal") closeEventModal();
@@ -10023,6 +10131,7 @@
         lineItems: readEventLineItemsFromForm(),
         // Vacation mode: auto-pause active recurring rules during the event range
         vacationMode: $("#eventVacationMode")?.checked || false,
+        linkedGoalId: $("#eventLinkedGoal")?.value || null,
         // Existing checklist preserved when editing
         checklist: editId ? (state.events.find((x) => x.id === editId)?.checklist || []) : [],
       };
