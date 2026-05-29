@@ -2711,20 +2711,37 @@
     const totalSpent = monthExpenses.reduce((s, e) => s + Number(e.amount), 0);
     const totalIncomeReal = monthIncomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
     const targetIncome = incomeForMonth(month);
-    const totalIncome = Math.max(targetIncome, totalIncomeReal);
+    // Show actual income when logged; fall back to target only when nothing's been logged.
+    // This prevents the dashboard from inflating Income by showing the target after a real
+    // smaller paycheck has already been recorded.
+    const totalIncome = totalIncomeReal > 0 ? totalIncomeReal : targetIncome;
     const totalSaved = state.goals.reduce((s, g) => s + goalSavedTotal(g), 0);
     const remaining = totalIncome - totalSpent;
 
     $("#statIncome").textContent = fmt(totalIncome);
     $("#statSpent").textContent = fmt(totalSpent);
-    $("#statRemaining").textContent = fmt(remaining);
+    const remainingEl = $("#statRemaining");
+    if (remainingEl) {
+      remainingEl.textContent = fmt(remaining);
+      remainingEl.classList.toggle("negative", remaining < 0);
+      remainingEl.classList.toggle("positive", remaining > 0);
+    }
     $("#statSaved").textContent = fmt(totalSaved);
 
-    // Family — money sent to people this month
-    const totalFamily = monthExpenses
+    // Family — net money to people this month (sent minus received from same family)
+    const sentToFamily = monthExpenses
       .filter((e) => e.personId)
       .reduce((s, e) => s + Number(e.amount), 0);
-    $("#statFamily").textContent = fmt(totalFamily);
+    const receivedFromFamily = monthIncomes
+      .filter((e) => e.personId)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    const netFamily = sentToFamily - receivedFromFamily;
+    const familyEl = $("#statFamily");
+    if (familyEl) {
+      familyEl.textContent = receivedFromFamily > 0
+        ? `${netFamily >= 0 ? "" : "+"}${fmt(Math.abs(netFamily))}`
+        : fmt(sentToFamily);
+    }
 
     // Savings rate = (income - spending) / income
     // Use real income transactions if logged, otherwise target
@@ -2757,14 +2774,16 @@
     const creditPaidHint = $("#statCreditPaidHint");
     if (creditPaidHint) {
       const cardCount = state.cards.length;
+      const debt = totalCardBalance();
       if (!cardCount) {
         creditPaidHint.textContent = "No cards tracked";
-      } else if (creditPaid === 0) {
+      } else if (creditPaid === 0 && debt > 0) {
         creditPaidHint.innerHTML = `<a href="#" data-pay-cards="1" style="color:var(--accent, #5b3fb8)">Plan payment →</a>`;
         const link = creditPaidHint.querySelector("[data-pay-cards]");
         if (link) link.addEventListener("click", (ev) => { ev.preventDefault(); openPayCardModal(); });
+      } else if (creditPaid === 0 && debt === 0) {
+        creditPaidHint.innerHTML = '<span class="positive">Cards paid off</span>';
       } else {
-        const debt = totalCardBalance();
         creditPaidHint.textContent = debt > 0 ? `${fmt(debt)} remaining` : "Cards paid off";
       }
     }
