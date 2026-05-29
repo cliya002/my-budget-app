@@ -114,11 +114,13 @@
     if (hideAmounts) {
       return `${sym}••••`;
     }
-    const formatted = value.toLocaleString(undefined, {
+    const isNeg = value < 0;
+    const abs = Math.abs(value);
+    const formatted = abs.toLocaleString(undefined, {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     });
-    return `${sym}${formatted}`;
+    return isNeg ? `-${sym}${formatted}` : `${sym}${formatted}`;
   };
 
   const todayStr = () => {
@@ -230,6 +232,7 @@
 
   function showToast(msg) {
     const toast = $("#toast");
+    if (!toast) return;
     toast.textContent = msg;
     toast.hidden = false;
     clearTimeout(showToast._t);
@@ -627,7 +630,7 @@
     // If a recurring expense's run date falls within an active vacation event range,
     // skip it (don't auto-add the expense).
     function isInVacationRange(dateStr) {
-      return state.events.some((ev) => {
+      return (state.events || []).some((ev) => {
         if (!ev.vacationMode) return false;
         if (!ev.startDate || !ev.endDate) return false;
         return dateStr >= ev.startDate && dateStr <= ev.endDate;
@@ -922,18 +925,24 @@
   /* ---------- Auto-lock ---------- */
   let autoLockTimer = null;
   let autoLockMinutes = 10;
+  const _AUTO_LOCK_EVENTS = ["click", "keydown", "mousemove", "touchstart"];
 
   function startAutoLock() {
     autoLockMinutes = parseInt(localStorage.getItem(KEYS.autoLock) || "10", 10);
     resetAutoLockTimer();
-    ["click", "keydown", "mousemove", "touchstart"].forEach((ev) =>
-      document.addEventListener(ev, resetAutoLockTimer, { passive: true })
-    );
+    // Remove first to avoid duplicate listeners on repeated start (lock/unlock cycles)
+    _AUTO_LOCK_EVENTS.forEach((ev) => {
+      document.removeEventListener(ev, resetAutoLockTimer);
+      document.addEventListener(ev, resetAutoLockTimer, { passive: true });
+    });
   }
 
   function stopAutoLock() {
     clearTimeout(autoLockTimer);
     autoLockTimer = null;
+    _AUTO_LOCK_EVENTS.forEach((ev) => {
+      document.removeEventListener(ev, resetAutoLockTimer);
+    });
   }
 
   function resetAutoLockTimer() {
@@ -1607,27 +1616,27 @@
 
   /* ---------- Event modal ---------- */
   function openEventModal(ev) {
-    const isEdit = !!ev;
+    const isEdit = !!(ev && ev.id);
     $("#eventModalTitle").textContent = isEdit ? "Edit Event" : "New Event";
     $("#eventEditId").value = isEdit ? ev.id : "";
-    $("#eventName").value = isEdit ? ev.name : "";
-    $("#eventIcon").value = isEdit ? (ev.icon || "🌴") : "🌴";
-    $("#eventStart").value = isEdit ? (ev.startDate || "") : "";
-    $("#eventEnd").value = isEdit ? (ev.endDate || "") : "";
-    $("#eventBudget").value = isEdit && ev.budget ? Number(ev.budget) : "";
+    $("#eventName").value = ev ? (ev.name || "") : "";
+    $("#eventIcon").value = ev ? (ev.icon || "🌴") : "🌴";
+    $("#eventStart").value = ev ? (ev.startDate || "") : "";
+    $("#eventEnd").value = ev ? (ev.endDate || "") : "";
+    $("#eventBudget").value = ev && ev.budget ? Number(ev.budget) : "";
     const colorEl = $("#eventColor");
-    if (colorEl) colorEl.value = isEdit && ev.color ? ev.color : "#5b3fb8";
-    $("#eventNotes").value = isEdit ? (ev.notes || "") : "";
+    if (colorEl) colorEl.value = ev && ev.color ? ev.color : "#5b3fb8";
+    $("#eventNotes").value = ev ? (ev.notes || "") : "";
     // Populate linked-goal dropdown
     const goalSel = $("#eventLinkedGoal");
     if (goalSel) {
       goalSel.innerHTML = '<option value="">— None —</option>' +
         state.goals.map((g) => `<option value="${g.id}">🎯 ${escapeHtml(g.name)}</option>`).join("");
-      goalSel.value = isEdit ? (ev.linkedGoalId || "") : "";
+      goalSel.value = ev ? (ev.linkedGoalId || "") : "";
     }
     const vmEl = $("#eventVacationMode");
-    if (vmEl) vmEl.checked = isEdit ? !!ev.vacationMode : false;
-    renderEventLineItemsForm(isEdit ? (ev.lineItems || []) : []);
+    if (vmEl) vmEl.checked = ev ? !!ev.vacationMode : false;
+    renderEventLineItemsForm(ev ? (ev.lineItems || []) : []);
     $("#eventModal").classList.add("open");
     setTimeout(() => $("#eventName")?.focus(), 50);
   }
@@ -3246,6 +3255,7 @@
 
   function showAlertToast(msg, type) {
     const toast = $("#toast");
+    if (!toast) return;
     toast.textContent = msg;
     toast.className = `toast toast-${type}`;
     toast.hidden = false;
@@ -8029,11 +8039,19 @@
   }
   function closePaycheckModal() {
     $("#paycheckModal").classList.remove("open");
-    // Clear any stashed paystub metadata so next open starts clean
+    // Reset form so a stale paycheck doesn't reappear next open
     const form = $("#paycheckForm");
-    if (form) delete form.dataset.paystubMeta;
+    if (form) {
+      try { form.reset(); } catch (e) {}
+      delete form.dataset.paystubMeta;
+    }
     const status = $("#paystubStatus");
     if (status) { status.hidden = true; status.textContent = ""; }
+    const paste = $("#paystubText");
+    if (paste) paste.value = "";
+    // Reset Net display label so totals don't carry over
+    const netDisplay = $("#pcNetDisplay");
+    if (netDisplay) netDisplay.textContent = "$0.00";
   }
 
   function initPaycheckSplits() {
@@ -10647,7 +10665,7 @@
     $("#bulkDeleteBtn").addEventListener("click", () => {
       if (!selectedTxns.size) return;
       const ids = [...selectedTxns];
-      if (!confirm(`Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}?`)) return;
+      if (!confirmDeleteTxn(`Delete ${ids.length} transaction${ids.length === 1 ? "" : "s"}?`)) return;
       const removed = state.expenses.filter((e) => ids.includes(e.id));
       ids.forEach((id) => tombstoneRecord("expenses", id));
       state.expenses = state.expenses.filter((e) => !ids.includes(e.id));
@@ -10837,11 +10855,14 @@
             });
           }
           if (linked.length > 0) {
-            const proceed = confirm(
-              `This is part of a ${txn.transferGroupId ? "transfer" : "paycheck"} group of ${linked.length + 1} linked transactions. ` +
-              `Delete the whole group?`
-            );
-            if (!proceed) return;
+            const skipConfirm = state.settings?.skipDeleteConfirm;
+            if (!skipConfirm) {
+              const proceed = confirm(
+                `This is part of a ${txn.transferGroupId ? "transfer" : "paycheck"} group of ${linked.length + 1} linked transactions. ` +
+                `Delete the whole group?`
+              );
+              if (!proceed) return;
+            }
           }
           const allRemoved = [txn, ...linked];
           // If this group is a credit-payment, restore the card balance before deleting
@@ -11241,6 +11262,15 @@
             if (!pairedHasTxns) {
               tombstoneRecord("accounts", card.accountId);
               state.accounts = state.accounts.filter((a) => a.id !== card.accountId);
+              // Clean stale settings pointing at the removed paired account
+              if (state.settings?.defaultAccountId === card.accountId) {
+                setSetting("defaultAccountId", null);
+              }
+              if (state.settings?.accountCategoryMap && state.settings.accountCategoryMap[card.accountId]) {
+                const newMap = { ...state.settings.accountCategoryMap };
+                delete newMap[card.accountId];
+                setSetting("accountCategoryMap", newMap);
+              }
             }
           }
           saveData();
@@ -11293,7 +11323,8 @@
       } else if (action === "convert-sub") {
         const idx = Number(btn.dataset.idx);
         const el = $("#subscriptionSuggestions");
-        const suggestions = JSON.parse(el.dataset.suggestionsJson || "[]");
+        let suggestions = [];
+        try { suggestions = JSON.parse(el?.dataset?.suggestionsJson || "[]"); } catch (e) { suggestions = []; }
         const s = suggestions[idx];
         if (!s) return;
         state.recurring.push(touchRecord({
@@ -11312,7 +11343,8 @@
       } else if (action === "dismiss-sub") {
         const idx = Number(btn.dataset.idx);
         const el = $("#subscriptionSuggestions");
-        const suggestions = JSON.parse(el.dataset.suggestionsJson || "[]");
+        let suggestions = [];
+        try { suggestions = JSON.parse(el?.dataset?.suggestionsJson || "[]"); } catch (e) { suggestions = []; }
         const s = suggestions[idx];
         if (s) {
           dismissedSubs.add(s.desc.toLowerCase().trim());
