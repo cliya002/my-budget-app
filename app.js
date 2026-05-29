@@ -6938,6 +6938,9 @@
       if (parsed.hsa) found.push("HSA");
       if (parsed.regularHours) found.push(`${parsed.regularHours}h regular`);
       if (parsed.ytdGross) found.push("YTD totals");
+      if (parsed._taxesTotal && parsed.fedTax === null && parsed.stateTax === null) found.push(`taxes total ${fmt(parsed._taxesTotal)}`);
+      if (parsed._benefitsTotal && !parsed.health && !parsed.dental && !parsed.vision) found.push(`benefits total ${fmt(parsed._benefitsTotal)}`);
+      if (parsed._otherTotal) found.push(`other total ${fmt(parsed._otherTotal)}`);
 
       if (found.length === 0) {
         status.className = "paystub-status warn";
@@ -7194,6 +7197,21 @@
       result.health = r.value;
     }
 
+    // --- Section totals (the collapsed ADP web view shows just headers like
+    // "Taxes -$3,086.95" with no individual line items underneath). When that
+    // happens we use these totals as fallbacks.
+    function findSectionTotal(headerRegex) {
+      for (let i = 0; i < lines.length; i++) {
+        if (!headerRegex.test(lines[i])) continue;
+        const amts = moneyAmountsIn(lines[i]);
+        if (amts.length) return amts[0];
+      }
+      return null;
+    }
+    result._taxesTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Taxes\b(?!.*Calculator)/i);
+    result._benefitsTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Benefits\b(?!\s*and\s*Information)/i);
+    result._otherTotal = findSectionTotal(/^\s*(?:Show\s*content\s*)?Other\b(?!\s*Benefits\s*and\s*Information)/i);
+
     // --- 401k / HSA
     {
       const r = findOnLine(/401\s*\(?k\)?|\bRetirement\b|Pension|\bTSP\b|403\s*\(?b\)?/i);
@@ -7317,6 +7335,24 @@
     if (p.k401 !== null) $("#pc401k").value = p.k401.toFixed(2);
     if (p.hsa !== null) $("#pcHsa").value = p.hsa.toFixed(2);
 
+    // Fallbacks: when the user pasted only the COLLAPSED ADP view, individual line items
+    // are missing but section totals are available. Drop the totals into the bucket so
+    // the form still adds up correctly.
+    const taxesItemized = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0);
+    if (taxesItemized < 0.01 && p._taxesTotal && p._taxesTotal > 0) {
+      // Whole tax bucket as a single Federal Income Tax fallback (most common)
+      $("#pcFedTax").value = p._taxesTotal.toFixed(2);
+    }
+    const benefitsItemized = (p.health || 0) + (p.dental || 0) + (p.vision || 0)
+      + (p.k401 || 0) + (p.hsa || 0);
+    if (benefitsItemized < 0.01 && p._benefitsTotal && p._benefitsTotal > 0) {
+      // Drop the whole benefits bucket onto Other Benefits so totals still match
+      $("#pcOtherBenefits").value = p._benefitsTotal.toFixed(2);
+    }
+    if (p._otherTotal && p._otherTotal > 0) {
+      $("#pcOtherDed").value = p._otherTotal.toFixed(2);
+    }
+
     // Net: only set if parser found one explicitly. Otherwise let updatePaycheckTotals compute it.
     const netEl = $("#pcNet");
     if (p.net !== null && netEl) {
@@ -7369,8 +7405,9 @@
       if (body) body.hidden = false;
     };
     if (p.gross !== null) expandSection("gross");
-    if (p.fedTax !== null || p.stateTax !== null || p.ssTax !== null || p.medicareTax !== null) expandSection("taxes");
-    if (p.health !== null || p.dental !== null || p.vision !== null || p.k401 !== null || p.hsa !== null) expandSection("benefits");
+    if (p.fedTax !== null || p.stateTax !== null || p.ssTax !== null || p.medicareTax !== null || (p._taxesTotal && p._taxesTotal > 0)) expandSection("taxes");
+    if (p.health !== null || p.dental !== null || p.vision !== null || p.k401 !== null || p.hsa !== null || (p._benefitsTotal && p._benefitsTotal > 0)) expandSection("benefits");
+    if (p._otherTotal && p._otherTotal > 0) expandSection("other");
     if (p.net !== null) expandSection("takehome");
   }
 
@@ -8641,6 +8678,9 @@
         if (parsed.medicareTax !== null) found.push("Medicare");
         if (parsed.health || parsed.dental || parsed.vision) found.push("health");
         if (parsed.k401) found.push("401k");
+        if (parsed._taxesTotal && parsed.fedTax === null && parsed.stateTax === null) found.push(`taxes total ${fmt(parsed._taxesTotal)}`);
+        if (parsed._benefitsTotal && !parsed.health && !parsed.dental && !parsed.vision) found.push(`benefits total ${fmt(parsed._benefitsTotal)}`);
+        if (parsed._otherTotal) found.push(`other total ${fmt(parsed._otherTotal)}`);
         if (status) {
           if (!found.length) {
             status.className = "paystub-status warn";
