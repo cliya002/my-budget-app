@@ -1268,17 +1268,29 @@
     const year = currentMonth().slice(0, 4);
     return state.expenses
       .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
-      .reduce((s, e) => s + incomeReportingAmount(e), 0);
+      .reduce((s, e) => s + Number(e.amount), 0);
   }
 
-  // Return the "reportable" amount for an income transaction. For paychecks this is the
-  // GROSS pay (deductions are tracked in paycheckMeta but not as separate transactions),
-  // so income totals, savings rate, and tax estimates all reflect what was earned, not
-  // just what was deposited.
-  function incomeReportingAmount(e) {
+  // Returns the GROSS amount for income (used only by the tax estimator).
+  // For paychecks, gross is stored in paycheckMeta; otherwise the recorded amount IS gross.
+  function incomeGrossAmount(e) {
     if (!e) return 0;
     if (e.paycheckMeta && Number(e.paycheckMeta.gross) > 0) return Number(e.paycheckMeta.gross);
     return Number(e.amount) || 0;
+  }
+
+  function ytdGrossIncomeTotal() {
+    const year = currentMonth().slice(0, 4);
+    return state.expenses
+      .filter((e) => e.type === "income" && (e.date || "").startsWith(year))
+      .reduce((s, e) => s + incomeGrossAmount(e), 0);
+  }
+
+  // Helper kept for back-compat — now returns the recorded amount (net for paychecks).
+  // Income totals on the dashboard/insights/etc use the on-record amount so the math
+  // matches what hit your accounts. The tax estimator uses incomeGrossAmount instead.
+  function incomeReportingAmount(e) {
+    return Number(e?.amount) || 0;
   }
 
   function ytdIncomeBySource() {
@@ -1909,7 +1921,8 @@
     if (!el) return;
     const status = $("#taxFilingStatus").value || "single";
     const stateRate = parseFloat($("#taxStateRate").value) || 0;
-    const ytd = ytdIncomeTotal();
+    // Use GROSS income for tax math — bracket calculations are meaningless on net.
+    const ytd = ytdGrossIncomeTotal();
 
     if (ytd === 0) {
       el.innerHTML = `<p class="empty">Add income to see tax estimate.</p>`;
