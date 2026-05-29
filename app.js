@@ -81,6 +81,7 @@
     search: "",
     sort: "date-desc",      // 'date-desc' | 'date-asc' | 'amount-desc' | 'amount-asc'
     groupByDay: true,
+    hideTransfers: false,
   };
 
   // Bulk-select & undo state
@@ -1315,14 +1316,33 @@
   function renderMonthIncomeList() {
     const list = $("#monthIncomeList");
     if (!list) return;
+
+    // Show actual income this month vs current target at the top
+    const month = currentMonth();
+    const monthIncomeTxns = state.expenses.filter(
+      (e) => e.type === "income" && monthKey(e.date) === month
+    );
+    const actual = monthIncomeTxns.reduce((s, e) => s + Number(e.amount), 0);
+    const target = incomeForMonth(month);
+    let actualHtml = "";
+    if (target > 0 || actual > 0) {
+      const pct = target > 0 ? (actual / target) * 100 : 0;
+      const cls = target > 0 ? (pct >= 95 ? "positive" : pct >= 50 ? "" : "negative") : "";
+      actualHtml = `
+        <li class="cat-summary-row">
+          <span><strong>${fmt(actual)}</strong> earned${target > 0 ? ` of <strong>${fmt(target)}</strong> target` : ""}</span>
+          <span class="${cls}">${target > 0 ? `${pct.toFixed(0)}%` : monthLabel(month).split(" ")[0]}</span>
+        </li>`;
+    }
+
     const entries = Object.entries(state.monthlyIncome || {})
       .filter(([_, v]) => Number(v) > 0)
       .sort(([a], [b]) => b.localeCompare(a)); // newest first
     if (!entries.length) {
-      list.innerHTML = '<li class="empty">No monthly overrides yet. Default will be used.</li>';
+      list.innerHTML = actualHtml + '<li class="empty">No monthly overrides yet. Default will be used.</li>';
       return;
     }
-    list.innerHTML = entries
+    list.innerHTML = actualHtml + entries
       .map(([m, amount]) => {
         return `
           <li class="list-item">
@@ -2102,6 +2122,7 @@
       list.innerHTML = '<li class="empty">No accounts yet.</li>';
       return;
     }
+    const month = currentMonth();
     list.innerHTML = state.accounts
       .map((a) => {
         const bal = accountBalance(a.id);
@@ -2112,15 +2133,31 @@
         const subText = isCredit
           ? `Credit card${linkedCard ? ` · linked to ${escapeHtml(linkedCard.name)}` : ""}`
           : escapeHtml(a.type);
+
+        // Monthly activity: net change to this account this month
+        let inflow = 0, outflow = 0;
+        state.expenses.forEach((e) => {
+          if (e.accountId !== a.id) return;
+          if (monthKey(e.date) !== month) return;
+          if (e.type === "income" || e.type === "transfer-in") inflow += Number(e.amount) || 0;
+          else if (e.type === "expense" || e.type === "transfer-out") outflow += Number(e.amount) || 0;
+        });
+        const monthlyDelta = inflow - outflow;
+        const monthlyClass = monthlyDelta > 0 ? "positive" : monthlyDelta < 0 ? "negative" : "";
+        const monthlyText = (inflow > 0 || outflow > 0)
+          ? `<span class="${monthlyClass}">${monthlyDelta >= 0 ? "+" : ""}${fmt(monthlyDelta)}</span> this month`
+          : `<span class="card-sub">No activity this month</span>`;
+
         return `
           <li class="list-item account-item" style="border-left: 4px solid ${a.color || "#5b3fb8"}">
             <div class="list-item-main">
               <div class="list-item-title">${icon}${escapeHtml(a.name)}</div>
               <div class="list-item-sub">${subText}</div>
+              <div class="acc-monthly">${monthlyText}</div>
             </div>
             <div class="list-item-amount ${balClass}">${fmt(bal)}</div>
             <div class="list-item-actions">
-              ${isCredit && linkedCard && Number(linkedCard.balance) > 0 ? `<button data-action="quick-pay-card" data-id="${linkedCard.id}" title="Pay this card">Pay</button>` : ""}
+              ${isCredit && linkedCard && cardCurrentBalance(linkedCard) > 0 ? `<button data-action="quick-pay-card" data-id="${linkedCard.id}" title="Pay this card">Pay</button>` : ""}
               <button data-action="edit-acc" data-id="${a.id}" title="Edit">✏️</button>
               <button data-action="del-acc" data-id="${a.id}" title="Delete">🗑️</button>
             </div>
@@ -3304,6 +3341,10 @@
   function renderTransactions() {
     let items = [...state.expenses];
 
+    if (filters.hideTransfers) {
+      items = items.filter((e) => e.type !== "transfer-in" && e.type !== "transfer-out");
+    }
+
     if (filters.start) items = items.filter((e) => e.date >= filters.start);
     if (filters.end) items = items.filter((e) => e.date <= filters.end);
     if (filters.categories.size > 0) {
@@ -3366,7 +3407,17 @@
       const to = filters.end || "today";
       range.textContent = `From ${from} to ${to}`;
     } else {
-      range.textContent = `${items.length} transaction${items.length === 1 ? "" : "s"}`;
+      // Show summary: count + spent + earned (excluding internal transfers)
+      let earned = 0, spent = 0;
+      items.forEach((t) => {
+        if (t.type === "transfer-in" || t.type === "transfer-out") return;
+        if (t.type === "income") earned += Number(t.amount);
+        else spent += Number(t.amount);
+      });
+      const parts = [`${items.length} txn${items.length === 1 ? "" : "s"}`];
+      if (spent > 0) parts.push(`<span class="negative">−${fmt(spent)}</span>`);
+      if (earned > 0) parts.push(`<span class="positive">+${fmt(earned)}</span>`);
+      range.innerHTML = parts.join(" · ");
     }
 
     updateBulkBar();
@@ -3380,16 +3431,26 @@
     });
     let html = "";
     for (const [date, list] of groups) {
-      const total = list.reduce(
-        (sum, t) => sum + (t.type === "income" ? Number(t.amount) : -Number(t.amount)),
-        0
-      );
-      const totalStr = total >= 0 ? `+${fmt(total)}` : `-${fmt(Math.abs(total))}`;
-      const totalCls = total >= 0 ? "positive" : "negative";
+      // Day total: only count REAL income/spending, not internal transfers (credit
+      // payments, account-to-account moves) which would double-count or inflate.
+      let earned = 0, spent = 0;
+      list.forEach((t) => {
+        if (t.type === "transfer-in" || t.type === "transfer-out") return;
+        if (t.type === "income") earned += Number(t.amount);
+        else spent += Number(t.amount);
+      });
+      const net = earned - spent;
+      const totalCls = net >= 0 ? "positive" : "negative";
+      const totalStr = net === 0
+        ? `${fmt(0)}`
+        : (net > 0 ? `+${fmt(net)}` : `-${fmt(Math.abs(net))}`);
+      const breakdown = (earned > 0 && spent > 0)
+        ? ` <span class="card-sub">(+${fmt(earned)} / −${fmt(spent)})</span>`
+        : "";
       html += `
         <li class="txn-day-header">
           <span>${formatLongDate(date)}</span>
-          <span class="${totalCls}">${totalStr}</span>
+          <span class="${totalCls}">${totalStr}${breakdown}</span>
         </li>`;
       html += list.map(renderTxnItem).join("");
     }
@@ -7866,6 +7927,12 @@
       const name = $("#catName").value.trim();
       const limit = parseFloat($("#catLimit").value);
       if (!name || isNaN(limit)) return;
+      // Prevent duplicates (case-insensitive)
+      const dup = state.categories.find((c) => (c.name || "").toLowerCase() === name.toLowerCase());
+      if (dup) {
+        showToast(`"${dup.name}" already exists`);
+        return;
+      }
       state.categories.push(touchRecord({ id: uid(), name, limit }));
       saveData();
       $("#catName").value = "";
@@ -9145,6 +9212,12 @@
       const type = $("#accType").value;
       const balance = parseFloat($("#accBalance").value) || 0;
       if (!name) return;
+      // Prevent duplicates (case-insensitive)
+      const dup = state.accounts.find((a) => (a.name || "").toLowerCase() === name.toLowerCase());
+      if (dup) {
+        showToast(`"${dup.name}" already exists`);
+        return;
+      }
       const colors = ["#22c55e", "#3b82f6", "#ec4899", "#f59e0b", "#8b5cf6", "#14b8a6", "#06b6d4", "#ef4444"];
       const color = colors[state.accounts.length % colors.length];
       state.accounts.push(touchRecord({ id: uid(), name, type, balance, color }));
@@ -9477,9 +9550,11 @@
       filters.people.clear();
       filters.tags.clear();
       filters.search = "";
+      filters.hideTransfers = false;
       $("#filterStart").value = "";
       $("#filterEnd").value = "";
       $("#txnSearch").value = "";
+      const ht = $("#hideTransfersToggle"); if (ht) ht.checked = false;
       renderFilterChips();
       renderPersonFilterChips();
       renderTagFilterChips();
@@ -9493,6 +9568,10 @@
     });
     $("#groupByDayToggle").addEventListener("change", (e) => {
       filters.groupByDay = e.target.checked;
+      renderTransactions();
+    });
+    $("#hideTransfersToggle")?.addEventListener("change", (e) => {
+      filters.hideTransfers = e.target.checked;
       renderTransactions();
     });
 
@@ -9614,7 +9693,13 @@
       const id = btn.dataset.id;
 
       if (action === "del-cat") {
-        if (confirm("Delete this category? Transactions will show 'Uncategorized'.")) {
+        const cat = state.categories.find((c) => c.id === id);
+        // Warn extra-strong if this is a system-managed category that auto-routes txns
+        const isSystem = cat && /^(family|credit\s*payment)$/i.test(cat.name);
+        const promptMsg = isSystem
+          ? `Delete "${cat.name}"? This category auto-categorizes ${cat.name === "Family" ? "transactions tagged with a person" : "credit card payments"}. They'll show as Uncategorized after.`
+          : "Delete this category? Transactions will show 'Uncategorized'.";
+        if (confirm(promptMsg)) {
           tombstoneRecord("categories", id);
           state.categories = state.categories.filter((c) => c.id !== id);
           // Clear orphan references on transactions and recurring rules, then remove from filter chip set

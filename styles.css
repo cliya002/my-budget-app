@@ -3453,3 +3453,12 @@ input[type="color"] {
 }
 .goal-pace.positive { color: #16a34a; font-weight: 600; }
 .goal-pace.negative { color: #dc2626; font-weight: 600; }
+
+
+/* Account row monthly activity hint */
+.acc-monthly {
+  font-size: 0.78rem;
+  margin-top: 0.25rem;
+}
+.acc-monthly .positive { color: #16a34a; font-weight: 600; }
+.acc-monthly .negative { color: #dc2626; font-weight: 600; }
