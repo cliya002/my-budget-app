@@ -1063,6 +1063,7 @@
                 <div class="list-item-sub">${fmt(r.amount)} on day ${r.dayOfMonth} · ${escapeHtml(catName)} · ${status}</div>
               </div>
               <div class="list-item-actions">
+                <button data-action="edit-rec" data-id="${r.id}" title="Edit">✏️</button>
                 <button data-action="toggle-rec" data-id="${r.id}" title="${r.active ? "Pause" : "Resume"}">${r.active ? "⏸️" : "▶️"}</button>
                 <button data-action="del-rec" data-id="${r.id}" title="Delete">🗑️</button>
               </div>
@@ -2119,6 +2120,104 @@
     const s = String(value ?? "");
     if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
     return s;
+  }
+
+  // Tax-friendly export: current year transactions plus per-category totals
+  // and totals by month, in a single CSV suitable for filing or accountant.
+  function exportTaxCsv() {
+    const year = currentMonth().slice(0, 4);
+    const yearTxns = state.expenses.filter(
+      (e) => (e.date || "").startsWith(year) &&
+             e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    if (!yearTxns.length) {
+      showToast(`No ${year} transactions to export`);
+      return;
+    }
+
+    const headers = ["Date", "Type", "Description", "Category", "Person", "Tags", "Amount", "Currency", "Source", "Pre-Tax", "Receipt"];
+    const txnRows = [...yearTxns]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map((e) => {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
+        return [
+          e.date,
+          e.type === "income" ? "Income" : "Expense",
+          e.desc || "",
+          cat ? cat.name : "",
+          person ? person.name : "",
+          (e.tags || []).join("; "),
+          (e.type === "income" ? "" : "-") + Number(e.amount).toFixed(2),
+          currency,
+          e.source || "",
+          e.preTax ? "Yes" : "",
+          e.receipt ? "Yes" : "",
+        ];
+      });
+
+    // Category totals
+    const catTotals = {};
+    let totalIncome = 0;
+    let totalExpenses = 0;
+    yearTxns.forEach((e) => {
+      const amt = Number(e.amount) || 0;
+      if (e.type === "income") {
+        totalIncome += amt;
+      } else {
+        totalExpenses += amt;
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        const name = cat ? cat.name : "Uncategorized";
+        catTotals[name] = (catTotals[name] || 0) + amt;
+      }
+    });
+
+    // Monthly totals
+    const monthTotals = {};
+    yearTxns.forEach((e) => {
+      const m = monthKey(e.date);
+      if (!monthTotals[m]) monthTotals[m] = { income: 0, expense: 0 };
+      const amt = Number(e.amount) || 0;
+      if (e.type === "income") monthTotals[m].income += amt;
+      else monthTotals[m].expense += amt;
+    });
+
+    const lines = [];
+    lines.push(`Tax-Friendly Export · ${year}`);
+    lines.push(`Generated ${new Date().toLocaleString()}`);
+    lines.push("");
+    lines.push("=== SUMMARY ===");
+    lines.push(`Total Income,${totalIncome.toFixed(2)}`);
+    lines.push(`Total Expenses,${totalExpenses.toFixed(2)}`);
+    lines.push(`Net,${(totalIncome - totalExpenses).toFixed(2)}`);
+    lines.push(`Currency,${currency}`);
+    lines.push("");
+    lines.push("=== CATEGORY TOTALS ===");
+    lines.push("Category,Total");
+    Object.entries(catTotals).sort((a, b) => b[1] - a[1]).forEach(([cat, total]) => {
+      lines.push([csvEscape(cat), total.toFixed(2)].join(","));
+    });
+    lines.push("");
+    lines.push("=== MONTHLY TOTALS ===");
+    lines.push("Month,Income,Expense,Net");
+    Object.keys(monthTotals).sort().forEach((m) => {
+      const t = monthTotals[m];
+      lines.push([m, t.income.toFixed(2), t.expense.toFixed(2), (t.income - t.expense).toFixed(2)].join(","));
+    });
+    lines.push("");
+    lines.push("=== TRANSACTIONS ===");
+    lines.push(headers.map(csvEscape).join(","));
+    txnRows.forEach((row) => lines.push(row.map(csvEscape).join(",")));
+
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pocket-budget-tax-${year}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${yearTxns.length} ${year} transactions`);
   }
 
   /* ---------- Rollover & alerts ---------- */
@@ -4048,13 +4147,55 @@
     }
   }
 
+  // Card list filter state — persists across renders within a session
+  const cardListFilters = { search: "", filter: "all" };
+
   function renderCardList() {
     const list = $("#cardList");
     if (!state.cards.length) {
       list.innerHTML = '<li class="empty">No cards yet. Tap <strong>+ Add Card</strong>.</li>';
       return;
     }
-    list.innerHTML = state.cards
+
+    // Apply filter + search
+    const q = cardListFilters.search.toLowerCase().trim();
+    const filtered = state.cards.filter((c) => {
+      // Filter mode
+      if (cardListFilters.filter === "open") {
+        if (c.accountStatus && c.accountStatus.toLowerCase() !== "open") return false;
+        if (c.closedDate) return false;
+      } else if (cardListFilters.filter === "closed") {
+        const isClosed = (c.accountStatus && c.accountStatus.toLowerCase() !== "open") || c.closedDate;
+        if (!isClosed) return false;
+      } else if (cardListFilters.filter === "high-util") {
+        const lim = Number(c.limit) || 0;
+        const bal = Number(c.balance) || 0;
+        const util = lim > 0 ? (bal / lim) * 100 : 0;
+        if (util < 80) return false;
+      } else if (cardListFilters.filter === "autopay") {
+        if (!c.autopay) return false;
+      }
+      // Search
+      if (q) {
+        const haystack = [c.name, c.issuer, c.last4].filter(Boolean).join(" ").toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+
+    if (!filtered.length) {
+      list.innerHTML = `<li class="empty">No cards match. <button class="link" id="cardClearFilters">Clear filters</button></li>`;
+      $("#cardClearFilters")?.addEventListener("click", () => {
+        cardListFilters.search = "";
+        cardListFilters.filter = "all";
+        const search = $("#cardSearch"); if (search) search.value = "";
+        const filter = $("#cardFilter"); if (filter) filter.value = "all";
+        renderCardList();
+      });
+      return;
+    }
+
+    list.innerHTML = filtered
       .map((c) => {
         const lim = Number(c.limit) || 0;
         const bal = Number(c.balance) || 0;
@@ -4095,6 +4236,16 @@
           </li>`;
       })
       .join("");
+
+    // Show count if filter is active
+    const filterIsActive = q || cardListFilters.filter !== "all";
+    if (filterIsActive) {
+      const summary = document.createElement("li");
+      summary.className = "empty";
+      summary.style.fontSize = "0.8rem";
+      summary.textContent = `Showing ${filtered.length} of ${state.cards.length} cards`;
+      list.appendChild(summary);
+    }
   }
 
   function renderScoreList() {
@@ -6570,6 +6721,10 @@
     // CSV export
     $("#exportCsvBtn").addEventListener("click", exportCsv);
 
+    // Tax-friendly CSV export — full year, with totals per category, suitable
+    // for handing to an accountant or pasting into a spreadsheet.
+    $("#exportTaxCsvBtn")?.addEventListener("click", exportTaxCsv);
+
     // FAB and modal close
     $("#fab").addEventListener("click", () => {
       // If menu is open, close it; otherwise open expense modal directly
@@ -6981,6 +7136,27 @@
     $("#addTxnBtn").addEventListener("click", () => {
       openExpenseModal();
     });
+
+    // Repeat last expense — opens the modal pre-filled with the most recent
+    // non-transfer expense's fields. Date defaults to today, amount to the
+    // last amount; user just taps Add to confirm.
+    $("#repeatLastBtn")?.addEventListener("click", () => {
+      const lastExpense = [...state.expenses]
+        .filter((e) => e.type === "expense")
+        .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id))[0];
+      if (!lastExpense) {
+        showToast("No previous expense to repeat");
+        return;
+      }
+      // Open modal pre-filled with last expense's fields, but with today's
+      // date and a fresh ID so it creates a new transaction
+      openExpenseModal({
+        ...lastExpense,
+        id: null,
+        date: todayStr(),
+        receipt: null, // don't carry over receipt — that's per-transaction
+      });
+    });
     $("#addIncomeBtn").addEventListener("click", () => {
       openExpenseModal({ type: "income" });
     });
@@ -7152,6 +7328,16 @@
     $("#addCardBtn").addEventListener("click", () => openCardModal(null));
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
     $("#importCreditBtn").addEventListener("click", openImportCreditModal);
+
+    // Card list search & filter
+    $("#cardSearch")?.addEventListener("input", (e) => {
+      cardListFilters.search = e.target.value;
+      renderCardList();
+    });
+    $("#cardFilter")?.addEventListener("change", (e) => {
+      cardListFilters.filter = e.target.value;
+      renderCardList();
+    });
     $("#cardModalClose").addEventListener("click", closeCardModal);
     $("#cardModal").addEventListener("click", (e) => {
       if (e.target.id === "cardModal") closeCardModal();
@@ -7506,6 +7692,37 @@
       selectedTxns.clear();
       renderTransactions();
     });
+    $("#bulkRecategorizeBtn")?.addEventListener("click", () => {
+      if (!selectedTxns.size) return;
+      if (!state.categories.length) {
+        showToast("Add a category first");
+        return;
+      }
+      const ids = [...selectedTxns];
+      // Build a numbered prompt so user picks a category
+      const list = state.categories.map((c, i) => `${i + 1}. ${c.name}`).join("\n");
+      const choice = prompt(`Recategorize ${ids.length} transaction${ids.length === 1 ? "" : "s"} to which category?\n\n${list}\n\nEnter the number:`);
+      if (choice === null) return;
+      const idx = parseInt(choice, 10) - 1;
+      if (isNaN(idx) || idx < 0 || idx >= state.categories.length) {
+        showToast("Invalid selection");
+        return;
+      }
+      const targetCatId = state.categories[idx].id;
+      const targetCatName = state.categories[idx].name;
+      let updated = 0;
+      state.expenses.forEach((e) => {
+        if (ids.includes(e.id)) {
+          e.categoryId = targetCatId;
+          touchRecord(e);
+          updated += 1;
+        }
+      });
+      selectedTxns.clear();
+      saveData();
+      renderAll();
+      showToast(`Moved ${updated} to ${targetCatName}`);
+    });
     $("#bulkDeleteBtn").addEventListener("click", () => {
       if (!selectedTxns.size) return;
       const ids = [...selectedTxns];
@@ -7699,6 +7916,26 @@
           renderRecurringList();
           showToast(r.active ? "Recurring resumed" : "Recurring paused");
         }
+      } else if (action === "edit-rec") {
+        const r = state.recurring.find((x) => x.id === id);
+        if (!r) return;
+        const newDesc = prompt("Description:", r.desc);
+        if (newDesc === null) return;
+        const newAmt = prompt("Amount:", r.amount);
+        if (newAmt === null) return;
+        const newDay = prompt("Day of month (1-31):", r.dayOfMonth);
+        if (newDay === null) return;
+        const desc = newDesc.trim() || r.desc;
+        const amount = parseFloat(newAmt);
+        const dayOfMonth = Math.min(31, Math.max(1, parseInt(newDay, 10) || r.dayOfMonth));
+        if (isNaN(amount)) return;
+        r.desc = desc;
+        r.amount = amount;
+        r.dayOfMonth = dayOfMonth;
+        touchRecord(r);
+        saveData();
+        renderRecurringList();
+        showToast("Recurring updated");
       } else if (action === "del-rec") {
         if (confirm("Delete this recurring transaction? Existing transactions stay.")) {
           tombstoneRecord("recurring", id);
