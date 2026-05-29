@@ -6782,7 +6782,21 @@
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const content = await page.getTextContent();
-          text += content.items.map((it) => it.str).join(" ") + "\n";
+          // Use position info to add newlines when y-coordinate changes,
+          // so labels stay on their own lines for the regex parser.
+          let lastY = null;
+          let pageText = "";
+          for (const it of content.items) {
+            const y = it.transform ? it.transform[5] : null;
+            if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+              pageText += "\n";
+            } else if (pageText && !pageText.endsWith(" ") && !pageText.endsWith("\n")) {
+              pageText += " ";
+            }
+            pageText += it.str || "";
+            if (y !== null) lastY = y;
+          }
+          text += pageText + "\n";
         }
         // If PDF text is empty (image-only PDF), fall back to OCR by rendering each page
         if (text.replace(/\s+/g, "").length < 50) {
@@ -8319,6 +8333,55 @@
       const file = e.target.files[0];
       if (file) handlePaystubUpload(file);
       e.target.value = ""; // allow re-uploading same file
+    });
+    // Paste-text fallback
+    $("#pastePaystubBtn")?.addEventListener("click", () => {
+      const box = $("#pastePaystubBox");
+      if (box) box.hidden = !box.hidden;
+      if (box && !box.hidden) setTimeout(() => $("#pastePaystubText")?.focus(), 50);
+    });
+    $("#pastePaystubParse")?.addEventListener("click", () => {
+      const text = $("#pastePaystubText")?.value || "";
+      if (!text.trim()) {
+        showToast("Paste some paystub text first");
+        return;
+      }
+      const status = $("#paystubStatus");
+      if (status) {
+        status.hidden = false;
+        status.className = "paystub-status";
+        status.textContent = "Parsing paystub data…";
+      }
+      try {
+        const parsed = parsePaystub(text);
+        applyPaystubToForm(parsed);
+        const found = [];
+        if (parsed.employer) found.push("employer");
+        if (parsed.date) found.push("pay date");
+        if (parsed.gross !== null) found.push(`gross ${fmt(parsed.gross)}`);
+        if (parsed.net !== null) found.push(`net ${fmt(parsed.net)}`);
+        if (parsed.fedTax !== null) found.push("fed tax");
+        if (parsed.stateTax !== null) found.push("state tax");
+        if (parsed.ssTax !== null) found.push("SS");
+        if (parsed.medicareTax !== null) found.push("Medicare");
+        if (parsed.health || parsed.dental || parsed.vision) found.push("health");
+        if (parsed.k401) found.push("401k");
+        if (status) {
+          if (!found.length) {
+            status.className = "paystub-status warn";
+            status.textContent = "Couldn't auto-detect fields. Fill them in manually.";
+          } else {
+            status.className = "paystub-status success";
+            status.innerHTML = `✓ Found: ${found.join(", ")}.<br><small>Review the values below before saving.</small>`;
+          }
+        }
+      } catch (err) {
+        console.error("Paste parse failed:", err);
+        if (status) {
+          status.className = "paystub-status warn";
+          status.textContent = `Parse error: ${err.message || err.name}`;
+        }
+      }
     });
     $("#expenseModalClose").addEventListener("click", closeExpenseModal);
     $("#expenseModal").addEventListener("click", (e) => {
