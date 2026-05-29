@@ -6782,21 +6782,24 @@
         for (let i = 1; i <= pdf.numPages; i++) {
           const page = await pdf.getPage(i);
           const content = await page.getTextContent();
-          // Use position info to add newlines when y-coordinate changes,
-          // so labels stay on their own lines for the regex parser.
-          let lastY = null;
-          let pageText = "";
+          // Group items by their Y-coordinate (row), then sort by X (column) within
+          // each row so multi-column layouts like ADP paystubs read correctly.
+          const rows = new Map();
+          const ROW_TOLERANCE = 3; // pixels — items within this Y-band are same row
           for (const it of content.items) {
-            const y = it.transform ? it.transform[5] : null;
-            if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
-              pageText += "\n";
-            } else if (pageText && !pageText.endsWith(" ") && !pageText.endsWith("\n")) {
-              pageText += " ";
-            }
-            pageText += it.str || "";
-            if (y !== null) lastY = y;
+            if (!it.str || !it.transform) continue;
+            const x = it.transform[4];
+            const y = Math.round(it.transform[5] / ROW_TOLERANCE) * ROW_TOLERANCE;
+            if (!rows.has(y)) rows.set(y, []);
+            rows.get(y).push({ x, str: it.str });
           }
-          text += pageText + "\n";
+          // Sort rows top-to-bottom (PDF y is bottom-up so descending), then left-to-right within
+          const sortedRows = [...rows.entries()].sort((a, b) => b[0] - a[0]);
+          for (const [, items] of sortedRows) {
+            items.sort((a, b) => a.x - b.x);
+            const rowText = items.map((it) => it.str).join(" ").replace(/\s+/g, " ").trim();
+            if (rowText) text += rowText + "\n";
+          }
         }
         // If PDF text is empty (image-only PDF), fall back to OCR by rendering each page
         if (text.replace(/\s+/g, "").length < 50) {
@@ -6904,56 +6907,39 @@
   function parsePaystub(rawText) {
     // Defensive: ensure we have a string to work with
     if (!rawText || typeof rawText !== "string") {
-      return {
-        employer: null, date: null,
-        gross: null, net: null,
-        fedTax: null, stateTax: null, fica: null,
-        ssTax: null, medicareTax: null,
-        health: null, dental: null, vision: null,
-        k401: null, hsa: null,
-        ytdGross: null, ytdFedTax: null, ytdStateTax: null,
-        ytdSs: null, ytdMedicare: null, ytdNet: null,
-        regularHours: null, regularRate: null,
-        otHours: null, holidayHours: null, ptoHours: null,
-        hours: null, payPeriodStart: null, payPeriodEnd: null,
-        checkAccountLast4: null, otherDeductions: [], earnings: [],
-      };
+      return makeEmptyPaystubResult();
     }
 
-    // Pre-normalize: some PDFs render numbers as "1 746 05" instead of "1,746.05"
-    // because of column spacing. Convert "X XXX XX" patterns (3 digits then 2 digits)
-    // back to "X,XXX.XX" so our regexes work.
-    let normText = String(rawText).replace(/(\d{1,3})\s+(\d{3})\s+(\d{2})\b/g, "$1,$2.$3");
-    // Also "XXX XX" → "XXX.XX" when the surrounding context looks like a money label.
-    // Avoid lookbehind/lookahead for Safari compat.
-    const moneyContext = /(tax|pay|net|gross|insurance|medical|dental|vision|fica|401|hsa|deduction|fee|tip|life|ad\/d|imputed|offset|tkn|balnce|earnings|wages)\s+\-?\$?\s*\d{1,3}\s+\d{2}\b(?!\s*\d)/gi;
-    normText = normText.replace(moneyContext, (m) => {
-      // Replace the trailing "X XX" with "X.XX"
-      return String(m || "").replace(/(\d{1,3})\s+(\d{2})\b\s*$/, "$1.$2");
-    });
-
-    const text = normText.replace(/\s+/g, " ").trim();
     const lines = String(rawText).split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
-    const result = {
-      employer: null, date: null,
-      gross: null, net: null,
-      fedTax: null, stateTax: null, fica: null,
-      ssTax: null, medicareTax: null,
-      health: null, dental: null, vision: null,
-      k401: null, hsa: null,
-      ytdGross: null, ytdFedTax: null, ytdStateTax: null,
-      ytdSs: null, ytdMedicare: null, ytdNet: null,
-      regularHours: null, regularRate: null,
-      otHours: null, holidayHours: null, ptoHours: null,
-      hours: null, payPeriodStart: null, payPeriodEnd: null,
-      checkAccountLast4: null, otherDeductions: [], earnings: [],
-    };
+    const text = lines.join(" ");
+    const result = makeEmptyPaystubResult();
+
+    // --- Helper: extract amounts from a line. Handles "1,746.05", "-650.17", "$1,902.12", "5.00*"
+    function amountsIn(line) {
+      const matches = String(line || "").match(/\-?\$?\s*[\d]{1,3}(?:,\d{3})*\.\d{2}\*?/g);
+      if (!matches) return [];
+      return matches.map((m) => {
+        const cleaned = m.replace(/[\$,\s\*]/g, "");
+        const n = Number(cleaned);
+        return isNaN(n) ? null : Math.abs(n); // store as positive — sign indicates direction in context
+      }).filter((n) => n !== null);
+    }
+
+    // Find the FIRST amount on a line that contains the label
+    function findOnLine(labelRegex) {
+      for (const line of lines) {
+        if (labelRegex.test(line)) {
+          const amts = amountsIn(line);
+          if (amts.length) return { value: amts[0], ytd: amts[1] || null };
+        }
+      }
+      return { value: null, ytd: null };
+    }
 
     // --- Employer
     const companyKeywords = /(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings|Services\b)/;
-    for (const line of lines.slice(0, 15)) {
-      // Skip the ADP header / pay statement labels
-      if (/^(Earnings\s*Statement|Pay\s*Stub|Pay\s*Statement|ADP)/i.test(line)) continue;
+    for (const line of lines.slice(0, 20)) {
+      if (/^(Earnings\s*Statement|Pay\s*Stub|Pay\s*Statement|ADP|Deposited|Period|Pay\s*Date|ATTN)/i.test(line)) continue;
       if (companyKeywords.test(line) && line.length < 100 && line.length > 4) {
         result.employer = line.replace(/Pay\s*stub/i, "").replace(/ATTN:.*$/i, "").trim();
         break;
@@ -6978,115 +6964,138 @@
         if (result.date) break;
       }
     }
-    // Fallback: pay period end
     if (!result.date && result.payPeriodEnd) result.date = result.payPeriodEnd;
-    if (!result.date) {
-      const fb = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
-      if (fb) result.date = normalizeDate(fb[1]);
-    }
-
-    // --- Helper: read first dollar amount after a label, but not from YTD column.
-    // ADP layouts often have "this period" in col 1 and "year to date" in col 2.
-    // We prefer the FIRST number after the label.
-    // IMPORTANT: wrap labelRegex.source in a non-capturing group so alternation
-    // doesn't make the appended pattern bind to only the last alternative.
-    function firstAmountAfter(labelRegex) {
-      const m = text.match(new RegExp(`(?:${labelRegex.source})` + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
-      if (!m || !m[1]) return null;
-      return Number(String(m[1]).replace(/,/g, ""));
-    }
-    // For lines where we want all amounts (current + YTD), capture two
-    function twoAmountsAfter(labelRegex) {
-      const m = text.match(new RegExp(`(?:${labelRegex.source})` + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})\s*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
-      if (!m || !m[1]) return [null, null];
-      return [Number(String(m[1]).replace(/,/g, "")), Number(String(m[2] || "0").replace(/,/g, ""))];
-    }
 
     // --- Gross + YTD
-    [result.gross, result.ytdGross] = twoAmountsAfter(/Gross\s*Pay/i);
-    if (result.gross === null) result.gross = firstAmountAfter(/Gross\s*(?:Pay|Earnings|Wages|Income)/i);
-
-    // --- Net + YTD
-    [result.net, result.ytdNet] = twoAmountsAfter(/Net\s*Pay/i);
-    if (result.net === null) {
-      result.net = firstAmountAfter(/Net\s*(?:Pay|Check|Wages|Take[\s\-]?Home)/i);
+    {
+      const r = findOnLine(/Gross\s*Pay/i);
+      result.gross = r.value;
+      result.ytdGross = r.ytd;
+      if (result.gross === null) {
+        const r2 = findOnLine(/Gross\s*(?:Earnings|Wages|Income)/i);
+        result.gross = r2.value;
+        result.ytdGross = r2.ytd;
+      }
     }
 
-    // --- Federal income tax
-    [result.fedTax, result.ytdFedTax] = twoAmountsAfter(/Federal\s*Income\s*Tax|Federal\s*W\/?H|FIT|Fed\.?\s*Tax/i);
-    if (result.fedTax === null) result.fedTax = firstAmountAfter(/Federal\s*Income\s*Tax|Federal\s*W\/?H|FIT|Fed\.?\s*Tax/i);
+    // --- Net Pay (single amount usually)
+    {
+      const r = findOnLine(/Net\s*Pay/i);
+      result.net = r.value;
+      result.ytdNet = r.ytd;
+      if (result.net === null) {
+        const r2 = findOnLine(/Net\s*(?:Check|Wages|Take[\s\-]?Home)/i);
+        result.net = r2.value;
+      }
+    }
 
-    // --- State tax (works for "VA State Income Tax", "CA State Tax", "State Income Tax", etc.)
-    [result.stateTax, result.ytdStateTax] = twoAmountsAfter(/(?:[A-Z]{2}\s*)?State\s*(?:Income\s*)?Tax|State\s*W\/?H|SIT/i);
-    if (result.stateTax === null) result.stateTax = firstAmountAfter(/(?:[A-Z]{2}\s*)?State\s*(?:Income\s*)?Tax|State\s*W\/?H|SIT/i);
+    // --- Federal Income Tax
+    {
+      const r = findOnLine(/Federal\s*Income\s*Tax|Federal\s*W\/?H|\bFIT\b|Fed\.?\s*Tax/i);
+      result.fedTax = r.value;
+      result.ytdFedTax = r.ytd;
+    }
 
-    // --- Social Security & Medicare separately
-    [result.ssTax, result.ytdSs] = twoAmountsAfter(/Social\s*Security\s*Tax|OASDI/i);
-    if (result.ssTax === null) result.ssTax = firstAmountAfter(/Social\s*Security\s*Tax|OASDI/i);
-    [result.medicareTax, result.ytdMedicare] = twoAmountsAfter(/Medicare\s*Tax/i);
-    if (result.medicareTax === null) result.medicareTax = firstAmountAfter(/Medicare\s*Tax/i);
+    // --- State Income Tax (handles "VA State Income Tax", etc.)
+    {
+      const r = findOnLine(/State\s*(?:Income\s*)?Tax|State\s*W\/?H|\bSIT\b/i);
+      result.stateTax = r.value;
+      result.ytdStateTax = r.ytd;
+    }
 
-    // FICA combined
+    // --- Social Security & Medicare
+    {
+      const r = findOnLine(/Social\s*Security\s*Tax|OASDI/i);
+      result.ssTax = r.value;
+      result.ytdSs = r.ytd;
+    }
+    {
+      const r = findOnLine(/Medicare\s*Tax/i);
+      result.medicareTax = r.value;
+      result.ytdMedicare = r.ytd;
+    }
     if (result.ssTax !== null || result.medicareTax !== null) {
       result.fica = (result.ssTax || 0) + (result.medicareTax || 0);
     } else {
-      result.fica = firstAmountAfter(/FICA/i);
+      const r = findOnLine(/\bFICA\b/i);
+      result.fica = r.value;
     }
 
-    // --- Health/Dental/Vision (Pre-Tax variants too)
-    result.dental = firstAmountAfter(/(?:Pre-?Tax\s*)?Dental(?:\s*Insurance)?/i);
-    result.vision = firstAmountAfter(/(?:Pre-?Tax\s*)?Vision(?:\s*Insurance)?/i);
-    result.health = firstAmountAfter(/(?:Pre-?Tax\s*)?(?:Medical|Health\s*Insurance|Health\s*Plan)/i);
-    // Sanity: if "Pre-Tax Medical" parsed huge (looks like YTD got mushed into current period),
-    // discard if value > 50% of gross.
-    if (result.health !== null && result.gross !== null && result.health > result.gross * 0.5) {
-      result.health = null;
+    // --- Health/Dental/Vision (can be Pre-Tax variants)
+    {
+      const r = findOnLine(/(?:Pre-?Tax\s*)?Dental(?:\s*Insurance)?/i);
+      result.dental = r.value;
     }
-    if (result.dental !== null && result.gross !== null && result.dental > result.gross * 0.2) {
-      result.dental = null;
+    {
+      const r = findOnLine(/(?:Pre-?Tax\s*)?Vision(?:\s*Insurance)?/i);
+      result.vision = r.value;
     }
-    if (result.vision !== null && result.gross !== null && result.vision > result.gross * 0.2) {
-      result.vision = null;
+    {
+      const r = findOnLine(/(?:Pre-?Tax\s*)?(?:Medical|Health\s*Insurance|Health\s*Plan)/i);
+      result.health = r.value;
     }
 
     // --- 401k / HSA
-    result.k401 = firstAmountAfter(/401\s*\(?k\)?|Retirement|Pension|TSP|403\s*\(?b\)?/i);
-    result.hsa = firstAmountAfter(/HSA|FSA|Health\s*Savings|Flex\s*Spend/i);
+    {
+      const r = findOnLine(/401\s*\(?k\)?|\bRetirement\b|Pension|\bTSP\b|403\s*\(?b\)?/i);
+      result.k401 = r.value;
+    }
+    {
+      const r = findOnLine(/\bHSA\b|\bFSA\b|Health\s*Savings|Flex\s*Spend/i);
+      result.hsa = r.value;
+    }
 
-    // --- Earnings line items (Regular, Holiday, OT, etc.)
-    // Match pattern: "Regular 61.2031 153.33 9,384.27 45,758.50"
+    // --- Earnings line items + hours. ADP rows look like:
+    // "Regular 61.2031 153.33 9,384.27 45,758.50"
     const earningPatterns = [
-      ["Regular", /Regular\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/i],
-      ["Overtime", /Overtime|O\.?T\.?\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
-      ["Holiday", /Holiday(?:\s*Pay)?\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
-      ["PTO", /(?:Flex\/?Pto|PTO|Vacation|Stnd\s*Pto\s*Pay)\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
-      ["Bonus", /Bonus\s+\$?([\d,]+\.\d{2})/i],
-      ["RSU", /RSU\s*(?:Vest)?\s+\$?([\d,]+\.\d{2})/i],
+      ["Regular", /^Regular\b/i],
+      ["Overtime", /^(?:Overtime|O\.?T\.?)\b/i],
+      ["Holiday", /^Holiday(?:\s*Pay)?\b/i],
+      ["PTO", /^(?:Flex\/?Pto|PTO|Vacation|Stnd\s*Pto\s*Pay)\b/i],
+      ["Bonus", /^Bonus\b/i],
+      ["RSU", /^RSU(?:\s*Vest)?/i],
     ];
-    earningPatterns.forEach(([name, re]) => {
-      const m = String(rawText).match(re);
-      if (m) {
-        if (m.length >= 4 && m[1] && m[2] && m[3]) {
-          // rate, hours, this period
-          result.earnings.push({ name, rate: Number(m[1]), hours: Number(m[2]), amount: Number(String(m[3]).replace(/,/g, "")) });
-          if (name === "Regular") {
-            result.regularRate = Number(m[1]);
-            result.regularHours = Number(m[2]);
-          } else if (name === "Overtime") result.otHours = Number(m[2]);
-          else if (name === "Holiday") result.holidayHours = Number(m[2]);
-          else if (name === "PTO") result.ptoHours = Number(m[2]);
-        } else if (m[1]) {
-          result.earnings.push({ name, amount: Number(String(m[1]).replace(/,/g, "")) });
+    for (const line of lines) {
+      for (const [name, re] of earningPatterns) {
+        if (re.test(line)) {
+          // Try to extract rate (X.XXXX), hours (X.XX), and amount(s)
+          const rateM = line.match(/\b(\d{1,3}\.\d{3,4})\b/);
+          const hoursM = line.match(/\b(\d{1,3}\.\d{1,2})\b(?!\d|\.)/g);
+          const amts = amountsIn(line);
+          const rate = rateM ? Number(rateM[1]) : null;
+          let hours = null;
+          if (hoursM && hoursM.length) {
+            // The first decimal-2 number after the rate is hours
+            for (const h of hoursM) {
+              const v = Number(h);
+              if (v < 200 && v !== rate) { hours = v; break; }
+            }
+          }
+          if (amts.length) {
+            const entry = { name };
+            if (rate) entry.rate = rate;
+            if (hours) entry.hours = hours;
+            entry.amount = amts[0];
+            result.earnings.push(entry);
+            if (name === "Regular") {
+              result.regularRate = rate;
+              result.regularHours = hours;
+            } else if (name === "Overtime") result.otHours = hours;
+            else if (name === "Holiday") result.holidayHours = hours;
+            else if (name === "PTO") result.ptoHours = hours;
+          }
+          break;
         }
       }
-    });
+    }
 
-    // Total work hours (some paystubs report this directly)
-    const totH = text.match(/Tot\s*Work\s*Hours\s+([\d.]+)/i);
+    // Total work hours
+    const totH = text.match(/Tot(?:al)?\s*Work\s*Hours?\s+(\d{1,3}\.?\d{0,2})/i);
     if (totH) result.hours = Number(totH[1]);
-    else if (result.regularHours) {
-      result.hours = (result.regularHours || 0) + (result.otHours || 0)
+    else {
+      const sum = (result.regularHours || 0) + (result.otHours || 0)
         + (result.holidayHours || 0) + (result.ptoHours || 0);
+      if (sum > 0) result.hours = sum;
     }
 
     // Account last 4 (for ADP "xxxxxxx4110")
@@ -7094,6 +7103,23 @@
     if (acct) result.checkAccountLast4 = acct[1];
 
     return result;
+  }
+
+  function makeEmptyPaystubResult() {
+    return {
+      employer: null, date: null,
+      gross: null, net: null,
+      fedTax: null, stateTax: null, fica: null,
+      ssTax: null, medicareTax: null,
+      health: null, dental: null, vision: null,
+      k401: null, hsa: null,
+      ytdGross: null, ytdFedTax: null, ytdStateTax: null,
+      ytdSs: null, ytdMedicare: null, ytdNet: null,
+      regularHours: null, regularRate: null,
+      otHours: null, holidayHours: null, ptoHours: null,
+      hours: null, payPeriodStart: null, payPeriodEnd: null,
+      checkAccountLast4: null, otherDeductions: [], earnings: [],
+    };
   }
 
   function normalizeDate(d) {
