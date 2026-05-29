@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=125" />
+  <link rel="stylesheet" href="styles.css?v=126" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -575,6 +575,10 @@
                   <input type="checkbox" id="hideTransfersToggle" />
                   Hide transfers
                 </label>
+              </div>
+              <div class="txn-toolbar-aux">
+                <button id="bulkSelectAllBtn" class="btn-secondary" type="button">Select all visible</button>
+                <span id="filterCountPill" class="filter-count-pill" hidden></span>
               </div>
               <div id="bulkBar" class="bulk-bar" hidden>
                 <span id="bulkCount">0 selected</span>
@@ -2209,7 +2213,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=125"></script>
+  <script src="app.js?v=126"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

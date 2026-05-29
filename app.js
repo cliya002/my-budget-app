@@ -4014,6 +4014,26 @@
       range.innerHTML = parts.join(" · ");
     }
 
+    // Filter count pill — show how many filters are active
+    const filterPill = $("#filterCountPill");
+    if (filterPill) {
+      let count = 0;
+      if (filters.start) count++;
+      if (filters.end) count++;
+      if (filters.categories.size) count += filters.categories.size;
+      if (filters.people.size) count += filters.people.size;
+      if (filters.tags.size) count += filters.tags.size;
+      if (filters.search) count++;
+      if (filters.hideTransfers) count++;
+      if (filters.eventId) count++;
+      if (count > 0) {
+        filterPill.hidden = false;
+        filterPill.textContent = `${count} filter${count === 1 ? "" : "s"} active`;
+      } else {
+        filterPill.hidden = true;
+      }
+    }
+
     updateBulkBar();
   }
 
@@ -10463,6 +10483,15 @@
       selectedTxns.clear();
       renderTransactions();
     });
+    $("#bulkSelectAllBtn")?.addEventListener("click", () => {
+      // Select every txn currently rendered (matches active filters)
+      const visible = document.querySelectorAll("[data-txn-row]");
+      visible.forEach((el) => {
+        const id = el.dataset.txnRow;
+        if (id) selectedTxns.add(id);
+      });
+      renderTransactions();
+    });
     $("#bulkRecategorizeBtn")?.addEventListener("click", () => {
       if (!selectedTxns.size) return;
       if (!state.categories.length) {
@@ -10527,6 +10556,12 @@
       if (!catSel || catSel.value) return; // don't override user's pick
       const familyCat = state.categories.find((c) => /^family$/i.test(c.name));
       if (familyCat) catSel.value = familyCat.id;
+    });
+
+    // Event dropdown change -> clear stale line-item stash (line item belongs to the old event)
+    $("#expEvent")?.addEventListener("change", () => {
+      const formEl = $("#expenseForm");
+      if (formEl) delete formEl.dataset.eventLineItemId;
     });
 
     // Insights period selector

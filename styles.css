@@ -3911,3 +3911,25 @@ input[type="color"] {
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
 }
+
+
+/* Transactions toolbar aux row (Select all + filter pill) */
+.txn-toolbar-aux {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.55rem 0;
+}
+.txn-toolbar-aux .btn-secondary {
+  font-size: 0.78rem;
+  padding: 0.35rem 0.7rem;
+}
+.filter-count-pill {
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(91, 63, 184, 0.12);
+  color: var(--accent, #5b3fb8);
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+}
