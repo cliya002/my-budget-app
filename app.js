@@ -9633,6 +9633,7 @@
         presets: [], recurring: [], cards: [], creditScores: [], accounts: [], people: [],
         netWorthHistory: [], creditInquiries: [], negativeItems: [], limitIncreases: [],
         creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {}, mapTimestamps: {},
+        billNegotiations: [], incomeSources: [], events: [],
         settingsTimestamps: {},
         settings: { rollover: false, alertsShown: {} },
       };
@@ -11721,6 +11722,9 @@
           negativeItems: state.negativeItems,
           limitIncreases: state.limitIncreases,
           creditGoals: state.creditGoals,
+          billNegotiations: state.billNegotiations,
+          incomeSources: state.incomeSources,
+          events: state.events,
         };
         Object.keys(collectionMap).forEach((key) => {
           if (!newDeletions[key]) newDeletions[key] = {};
@@ -11756,6 +11760,9 @@
           utilHistory: [],
           creditFreezes: {},
           annualReports: {},
+          billNegotiations: [],
+          incomeSources: [],
+          events: [],
           deletions: newDeletions,
           mapTimestamps: {},
           settingsTimestamps: {},

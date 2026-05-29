@@ -1,5 +1,5 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v131";
+const CACHE = "pocket-budget-v132";
 const ASSETS = [
   "./",
   "./index.html",
