@@ -1018,6 +1018,7 @@
     renderEventsTab();
     populateEventSelect();
     populateEventFilterSelect();
+    populateInsightsEventFilter();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
     renderTopbarSpent();
@@ -1468,6 +1469,27 @@
       return (a.startDate || "").localeCompare(b.startDate || "");
     });
     sel.innerHTML = '<option value="">All events</option>' +
+      sorted.map((ev) => {
+        const status = eventStatus(ev);
+        const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
+        return `<option value="${ev.id}">${tag} ${escapeHtml(ev.name)}</option>`;
+      }).join("");
+    sel.value = cur;
+  }
+
+  // Same dropdown for the Insights tab
+  function populateInsightsEventFilter() {
+    const sel = $("#insightsEventFilter");
+    if (!sel) return;
+    const cur = insightsEventFilterId || "";
+    const today = todayStr();
+    const sorted = [...state.events].sort((a, b) => {
+      const ax = (a.endDate || "9999") < today ? 1 : 0;
+      const bx = (b.endDate || "9999") < today ? 1 : 0;
+      if (ax !== bx) return ax - bx;
+      return (a.startDate || "").localeCompare(b.startDate || "");
+    });
+    sel.innerHTML = '<option value="">All transactions</option>' +
       sorted.map((ev) => {
         const status = eventStatus(ev);
         const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
@@ -4254,6 +4276,8 @@
     el.innerHTML = html;
   }
 
+  let insightsEventFilterId = ""; // empty = all transactions
+
   function filterExpensesForInsights() {
     let exps = state.expenses.filter(
       (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
@@ -4267,6 +4291,9 @@
     } else if (insightsPeriod === "12mo") {
       const cutoff = monthOffset(m, -11);
       exps = exps.filter((e) => monthKey(e.date) >= cutoff);
+    }
+    if (insightsEventFilterId) {
+      exps = exps.filter((e) => e.eventId === insightsEventFilterId);
     }
     return exps;
   }
@@ -10347,6 +10374,12 @@
       });
     });
 
+    // Insights event filter
+    $("#insightsEventFilter")?.addEventListener("change", (e) => {
+      insightsEventFilterId = e.target.value;
+      renderInsights();
+    });
+
     // Delegated clicks
     document.addEventListener("click", (e) => {
       // Filter chips
@@ -11029,13 +11062,25 @@
 
     // Export
     $("#exportBtn").addEventListener("click", () => {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+      const payload = {
+        _meta: {
+          app: "pocket-budget",
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          txnCount: (state.expenses || []).length,
+          categoriesCount: (state.categories || []).length,
+          accountsCount: (state.accounts || []).length,
+        },
+        ...state,
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `pocket-budget-${todayStr()}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      showToast(`Exported ${payload._meta.txnCount} transaction${payload._meta.txnCount === 1 ? "" : "s"}`);
     });
 
     // Import
@@ -11047,7 +11092,22 @@
       reader.onload = (ev) => {
         try {
           const data = JSON.parse(ev.target.result);
-          if (!confirm("This will replace all current data. Continue?")) return;
+          // Validate: must look like a budget app export (has at least one expected key)
+          const hasShape = data && typeof data === "object" && !Array.isArray(data) && (
+            Array.isArray(data.expenses) ||
+            Array.isArray(data.categories) ||
+            Array.isArray(data.accounts) ||
+            (data._meta && data._meta.app === "pocket-budget")
+          );
+          if (!hasShape) {
+            alert("This doesn't look like a Pocket Budget export. Cancelled.");
+            return;
+          }
+          const txnCount = Array.isArray(data.expenses) ? data.expenses.length : 0;
+          const exportedAt = data._meta?.exportedAt
+            ? new Date(data._meta.exportedAt).toLocaleString()
+            : "unknown date";
+          if (!confirm(`Replace ALL current data with imported file?\n\nFile contains: ${txnCount} transactions\nExported: ${exportedAt}\n\nThis cannot be undone.`)) return;
           state = {
             income: data.income || 0,
             monthlyIncome: data.monthlyIncome || {},
@@ -11070,6 +11130,9 @@
             limitIncreases: data.limitIncreases || [],
             creditGoals: data.creditGoals || [],
             utilHistory: data.utilHistory || [],
+            billNegotiations: data.billNegotiations || [],
+            incomeSources: data.incomeSources || [],
+            events: data.events || [],
             creditFreezes: data.creditFreezes || {},
             annualReports: data.annualReports || {},
             deletions: data.deletions || {},

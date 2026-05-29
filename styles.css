@@ -3765,3 +3765,27 @@ input[type="color"] {
 .event-line-add:hover {
   background: rgba(91, 63, 184, 0.2);
 }
+
+
+/* Insights tab event filter row */
+.insights-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.55rem 0 1rem 0;
+  font-size: 0.85rem;
+}
+.insights-filter-row label {
+  color: var(--muted);
+  font-weight: 600;
+}
+.insights-filter-row select {
+  flex: 1;
+  max-width: 280px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}
