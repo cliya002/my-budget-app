@@ -9610,6 +9610,29 @@
       e.target.value = "";
     });
 
+    // Force app update — unregister SW, delete caches, hard reload
+    $("#forceUpdateBtn")?.addEventListener("click", async () => {
+      if (!confirm("This will clear the app's cache and reload with the latest code. Your data is safe. Continue?")) return;
+      try {
+        showToast("Clearing cache…");
+        // Unregister all service workers
+        if ("serviceWorker" in navigator) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(regs.map((r) => r.unregister()));
+        }
+        // Delete all caches
+        if (window.caches) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map((k) => caches.delete(k)));
+        }
+        showToast("Cache cleared. Reloading…");
+        setTimeout(() => location.reload(true), 500);
+      } catch (e) {
+        console.error("Force update failed:", e);
+        alert("Failed: " + (e.message || e.name));
+      }
+    });
+
     // Clear all
     $("#clearAllBtn").addEventListener("click", () => {
       if (confirm("Delete ALL budget data? This cannot be undone.")) {
