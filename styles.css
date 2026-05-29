@@ -3640,3 +3640,65 @@ input[type="color"] {
   font-size: 1rem;
   line-height: 1;
 }
+
+
+/* Event vacation mode badge + checklist */
+.event-badge.vacation {
+  background: rgba(6, 182, 212, 0.15);
+  color: #0891b2;
+}
+.event-checklist-panel {
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+}
+.event-checklist-panel[hidden] { display: none; }
+.event-checklist-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  margin-bottom: 0.5rem;
+}
+.event-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.55rem;
+}
+.event-check-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.event-check-row.done .event-check-label {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+.event-check-label { flex: 1; }
+.event-check-row .link {
+  color: var(--muted);
+  font-size: 1rem;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  padding: 0 0.3rem;
+}
+.event-check-add {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.4rem;
+}
+.event-check-input {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 0.85rem;
+}

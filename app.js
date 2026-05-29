@@ -617,6 +617,17 @@
     // (sync merges can introduce two recurring entries for the same rule + month).
     dedupeRecurringTransactions();
 
+    // Vacation mode: collect active vacation-mode events that overlap a given date.
+    // If a recurring expense's run date falls within an active vacation event range,
+    // skip it (don't auto-add the expense).
+    function isInVacationRange(dateStr) {
+      return state.events.some((ev) => {
+        if (!ev.vacationMode) return false;
+        if (!ev.startDate || !ev.endDate) return false;
+        return dateStr >= ev.startDate && dateStr <= ev.endDate;
+      });
+    }
+
     state.recurring.forEach((r) => {
       if (!r.active) return;
 
@@ -647,6 +658,14 @@
 
         // Skip dates that are still in the future
         if (dateStr > todayStr()) return;
+
+        // Vacation mode: skip expense recurring rules whose date is inside an active vacation event
+        if (r.type === "expense" && isInVacationRange(dateStr)) {
+          // Mark as run so we don't keep checking; bookkeeping only
+          r.lastRunMonth = m;
+          touchRecord(r);
+          return;
+        }
 
         state.expenses.push(touchRecord({
           id: uid(),
@@ -1325,11 +1344,13 @@
           <h3>${ev.icon || "🌴"} ${escapeHtml(ev.name)}</h3>
           <div class="list-item-actions">
             <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
+            <button data-action="event-checklist" data-id="${ev.id}" title="Checklist">📋</button>
+            <button data-action="event-report" data-id="${ev.id}" title="Generate report">📄</button>
             <button data-action="edit-event" data-id="${ev.id}" title="Edit">✏️</button>
             <button data-action="del-event" data-id="${ev.id}" title="Delete">🗑️</button>
           </div>
         </div>
-        <div class="event-meta">${statusBadge}${overTag}<span class="card-sub">${timing} · ${dateRange}</span></div>
+        <div class="event-meta">${statusBadge}${overTag}${ev.vacationMode ? '<span class="event-badge vacation">🏖️ Vacation mode</span>' : ""}<span class="card-sub">${timing} · ${dateRange}</span></div>
         ${budget > 0 ? `
           <div class="event-amounts">
             <div><strong>${fmt(spent)}</strong> of ${fmt(budget)}</div>
@@ -1344,7 +1365,36 @@
         `}
         ${lineItemsHtml}
         ${ev.notes ? `<div class="event-notes">${escapeHtml(ev.notes)}</div>` : ""}
+        <div class="event-checklist-panel" data-event-checklist="${ev.id}" hidden>
+          ${renderEventChecklistRows(ev)}
+        </div>
       </div>`;
+  }
+
+  // Render the checklist HTML for an event
+  function renderEventChecklistRows(ev) {
+    const items = Array.isArray(ev.checklist) ? ev.checklist : [];
+    const completed = items.filter((it) => it.done).length;
+    const checklistRows = items.map((it) => `
+      <div class="event-check-row ${it.done ? "done" : ""}" data-check-id="${it.id}">
+        <input type="checkbox" data-action="toggle-event-check" data-event-id="${ev.id}" data-check-id="${it.id}" ${it.done ? "checked" : ""} />
+        <span class="event-check-label">${escapeHtml(it.label)}</span>
+        <button class="link" data-action="del-event-check" data-event-id="${ev.id}" data-check-id="${it.id}" title="Remove">×</button>
+      </div>
+    `).join("");
+    return `
+      <div class="event-checklist-head">
+        <strong>📋 Checklist</strong>
+        ${items.length > 0 ? `<span class="card-sub">${completed} / ${items.length} done</span>` : ""}
+      </div>
+      <div class="event-check-list">
+        ${checklistRows || '<div class="card-sub">No items yet — add tasks below.</div>'}
+      </div>
+      <div class="event-check-add">
+        <input type="text" class="event-check-input" data-event-id="${ev.id}" placeholder="Add a task (e.g. Pack passport)" />
+        <button class="btn-secondary" data-action="add-event-check" data-event-id="${ev.id}">Add</button>
+      </div>
+    `;
   }
 
   function populateEventSelect() {
@@ -1377,6 +1427,8 @@
     $("#eventEnd").value = isEdit ? (ev.endDate || "") : "";
     $("#eventBudget").value = isEdit && ev.budget ? Number(ev.budget) : "";
     $("#eventNotes").value = isEdit ? (ev.notes || "") : "";
+    const vmEl = $("#eventVacationMode");
+    if (vmEl) vmEl.checked = isEdit ? !!ev.vacationMode : false;
     renderEventLineItemsForm(isEdit ? (ev.lineItems || []) : []);
     $("#eventModal").classList.add("open");
     setTimeout(() => $("#eventName")?.focus(), 50);
@@ -9706,6 +9758,30 @@
       if (e.target.id === "eventModal") closeEventModal();
     });
     $("#addEventLineItemBtn")?.addEventListener("click", () => addEventLineItemRow(null));
+
+    // Enter-to-add for checklist inputs (delegated since they're rendered dynamically)
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      const input = e.target.closest(".event-check-input");
+      if (!input) return;
+      e.preventDefault();
+      const evId = input.dataset.eventId;
+      const label = (input.value || "").trim();
+      if (!label) return;
+      const ev = state.events.find((x) => x.id === evId);
+      if (!ev) return;
+      if (!Array.isArray(ev.checklist)) ev.checklist = [];
+      ev.checklist.push({ id: uid(), label, done: false });
+      touchRecord(ev);
+      saveData();
+      renderEventsTab();
+      setTimeout(() => {
+        const panel = document.querySelector(`[data-event-checklist="${evId}"]`);
+        if (panel) panel.hidden = false;
+        const newInput = document.querySelector(`.event-check-input[data-event-id="${evId}"]`);
+        if (newInput) newInput.focus();
+      }, 0);
+    });
     $("#eventForm")?.addEventListener("submit", (e) => {
       e.preventDefault();
       const editId = $("#eventEditId").value;
@@ -9718,6 +9794,10 @@
         budget: parseFloat($("#eventBudget").value) || 0,
         notes: $("#eventNotes").value.trim(),
         lineItems: readEventLineItemsFromForm(),
+        // Vacation mode: auto-pause active recurring rules during the event range
+        vacationMode: $("#eventVacationMode")?.checked || false,
+        // Existing checklist preserved when editing
+        checklist: editId ? (state.events.find((x) => x.id === editId)?.checklist || []) : [],
       };
       if (!ev.name) return;
       if (editId) {
@@ -10450,6 +10530,59 @@
           eventId: ev.id,
           date: todayStr(),
         });
+      } else if (action === "event-checklist") {
+        const panel = document.querySelector(`[data-event-checklist="${id}"]`);
+        if (panel) panel.hidden = !panel.hidden;
+      } else if (action === "event-report") {
+        const ev = state.events.find((x) => x.id === id);
+        if (ev) openEventReport(ev);
+      } else if (action === "add-event-check") {
+        const evId = btn.dataset.eventId;
+        const input = document.querySelector(`.event-check-input[data-event-id="${evId}"]`);
+        const label = (input?.value || "").trim();
+        if (!label) return;
+        const ev = state.events.find((x) => x.id === evId);
+        if (!ev) return;
+        if (!Array.isArray(ev.checklist)) ev.checklist = [];
+        ev.checklist.push({ id: uid(), label, done: false });
+        touchRecord(ev);
+        saveData();
+        renderEventsTab();
+        // Re-open the panel after re-render
+        setTimeout(() => {
+          const panel = document.querySelector(`[data-event-checklist="${evId}"]`);
+          if (panel) panel.hidden = false;
+          const newInput = document.querySelector(`.event-check-input[data-event-id="${evId}"]`);
+          if (newInput) newInput.focus();
+        }, 0);
+      } else if (action === "toggle-event-check") {
+        const evId = btn.dataset.eventId;
+        const checkId = btn.dataset.checkId;
+        const ev = state.events.find((x) => x.id === evId);
+        if (!ev || !Array.isArray(ev.checklist)) return;
+        const it = ev.checklist.find((x) => x.id === checkId);
+        if (!it) return;
+        it.done = !!btn.checked;
+        touchRecord(ev);
+        saveData();
+        renderEventsTab();
+        setTimeout(() => {
+          const panel = document.querySelector(`[data-event-checklist="${evId}"]`);
+          if (panel) panel.hidden = false;
+        }, 0);
+      } else if (action === "del-event-check") {
+        const evId = btn.dataset.eventId;
+        const checkId = btn.dataset.checkId;
+        const ev = state.events.find((x) => x.id === evId);
+        if (!ev || !Array.isArray(ev.checklist)) return;
+        ev.checklist = ev.checklist.filter((x) => x.id !== checkId);
+        touchRecord(ev);
+        saveData();
+        renderEventsTab();
+        setTimeout(() => {
+          const panel = document.querySelector(`[data-event-checklist="${evId}"]`);
+          if (panel) panel.hidden = false;
+        }, 0);
       } else if (action === "quick-send-person") {
         // Open Add Transaction modal pre-filled with this person and Family category
         const p = state.people.find((x) => x.id === id);
@@ -12577,6 +12710,143 @@ Format your response as a numbered list of short, specific recommendations. No f
       responseEl.className = "ai-response warn";
       responseEl.textContent = `❌ ${err.message || "Request failed"}`;
     }
+  }
+
+  /* ---------- Event report (printable) ---------- */
+  function openEventReport(ev) {
+    const status = eventStatus(ev);
+    const txns = state.expenses
+      .filter((e) => e.eventId === ev.id && e.type === "expense")
+      .sort((a, b) => (a.date + a.id).localeCompare(b.date + b.id));
+    const totalSpent = txns.reduce((s, e) => s + Number(e.amount), 0);
+    const budget = Number(ev.budget) || 0;
+    const remaining = budget - totalSpent;
+    const lineItems = Array.isArray(ev.lineItems) ? ev.lineItems : [];
+
+    // Group by category
+    const catTotals = {};
+    txns.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      catTotals[name] = (catTotals[name] || 0) + Number(e.amount);
+    });
+    const sortedCats = Object.entries(catTotals).sort((a, b) => b[1] - a[1]);
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      showToast("Please allow popups to view report");
+      return;
+    }
+    w.document.write(`
+<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<title>${escapeHtml(ev.name)} — Event Report</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: #2a2a3a; padding: 40px; max-width: 800px; margin: auto; line-height: 1.5; }
+  h1 { color: #5b3fb8; margin: 0 0 0.5rem 0; font-size: 1.85rem; }
+  .meta { color: #7a7a8a; font-size: 0.9rem; margin-bottom: 1.5rem; }
+  h2 { color: #5b3fb8; font-size: 1.2rem; border-bottom: 2px solid #ede9fb; padding-bottom: 0.3rem; margin-top: 1.5rem; }
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.75rem; margin: 1rem 0; }
+  .stat { background: #faf7f1; padding: 0.85rem; border-radius: 8px; border-left: 4px solid #5b3fb8; }
+  .stat-label { font-size: 0.7rem; color: #7a7a8a; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .stat-value { font-size: 1.3rem; font-weight: 700; margin-top: 0.2rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; }
+  th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid #e6e1d5; font-size: 0.9rem; }
+  th { background: #f5f1ea; font-weight: 600; color: #5b3fb8; }
+  td.right { text-align: right; }
+  .negative { color: #dc2626; }
+  .positive { color: #16a34a; }
+  .footer { margin-top: 2rem; font-size: 0.8rem; color: #7a7a8a; text-align: center; border-top: 1px solid #e6e1d5; padding-top: 1rem; }
+  .notes { background: #faf7f1; padding: 0.75rem; border-radius: 8px; white-space: pre-wrap; font-size: 0.9rem; }
+  .progress { background: #e6e1d5; height: 8px; border-radius: 4px; overflow: hidden; margin-top: 0.3rem; }
+  .progress-fill { height: 100%; background: #5b3fb8; }
+  @media print { body { padding: 20px; } .no-print { display: none; } }
+</style>
+</head><body>
+<button class="no-print" onclick="window.print()" style="float:right;padding:0.5rem 1rem;background:#5b3fb8;color:#fff;border:0;border-radius:6px;cursor:pointer">🖨 Print / Save PDF</button>
+<h1>${ev.icon || "🌴"} ${escapeHtml(ev.name)}</h1>
+<div class="meta">
+  ${ev.startDate || "—"} → ${ev.endDate || "—"} ·
+  Status: ${status.charAt(0).toUpperCase() + status.slice(1)} ·
+  Generated ${new Date().toLocaleString()}
+</div>
+
+<div class="stats-grid">
+  <div class="stat"><div class="stat-label">Budget</div><div class="stat-value">${fmt(budget)}</div></div>
+  <div class="stat"><div class="stat-label">Spent</div><div class="stat-value">${fmt(totalSpent)}</div></div>
+  <div class="stat"><div class="stat-label">${remaining >= 0 ? "Remaining" : "Over"}</div><div class="stat-value ${remaining < 0 ? "negative" : "positive"}">${fmt(Math.abs(remaining))}</div></div>
+  <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">${txns.length}</div></div>
+</div>
+
+${lineItems.length ? `
+<h2>Line Items</h2>
+<table>
+  <thead><tr><th>Item</th><th class="right">Spent</th><th class="right">Budget</th><th class="right">% Used</th></tr></thead>
+  <tbody>
+    ${lineItems.map((li) => {
+      const liSpent = eventSpentTotal(ev.id, li.id);
+      const liBudget = Number(li.budget) || 0;
+      const liPct = liBudget > 0 ? (liSpent / liBudget) * 100 : 0;
+      return `<tr>
+        <td>${escapeHtml(li.label)}</td>
+        <td class="right">${fmt(liSpent)}</td>
+        <td class="right">${fmt(liBudget)}</td>
+        <td class="right ${liPct > 100 ? "negative" : ""}">${liBudget > 0 ? liPct.toFixed(0) + "%" : "—"}</td>
+      </tr>`;
+    }).join("")}
+  </tbody>
+</table>
+` : ""}
+
+${sortedCats.length ? `
+<h2>By Category</h2>
+<table>
+  <thead><tr><th>Category</th><th class="right">Amount</th><th class="right">% of Total</th></tr></thead>
+  <tbody>
+    ${sortedCats.map(([name, amt]) => `<tr>
+      <td>${escapeHtml(name)}</td>
+      <td class="right">${fmt(amt)}</td>
+      <td class="right">${totalSpent > 0 ? ((amt / totalSpent) * 100).toFixed(0) + "%" : "—"}</td>
+    </tr>`).join("")}
+  </tbody>
+</table>
+` : ""}
+
+${txns.length ? `
+<h2>All Transactions (${txns.length})</h2>
+<table>
+  <thead><tr><th>Date</th><th>Description</th><th>Category</th><th class="right">Amount</th></tr></thead>
+  <tbody>
+    ${txns.map((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      return `<tr>
+        <td>${e.date}</td>
+        <td>${escapeHtml(e.desc)}</td>
+        <td>${escapeHtml(cat ? cat.name : "Uncategorized")}</td>
+        <td class="right">${fmt(e.amount)}</td>
+      </tr>`;
+    }).join("")}
+  </tbody>
+</table>
+` : '<p>No transactions tagged to this event yet.</p>'}
+
+${ev.notes ? `<h2>Notes</h2><div class="notes">${escapeHtml(ev.notes)}</div>` : ""}
+
+${Array.isArray(ev.checklist) && ev.checklist.length ? `
+<h2>Checklist</h2>
+<ul>
+  ${ev.checklist.map((it) => `<li>${it.done ? "✓" : "☐"} ${escapeHtml(it.label)}</li>`).join("")}
+</ul>
+` : ""}
+
+<div class="footer">
+  Generated by Pocket Budget App
+</div>
+</body></html>
+    `);
+    w.document.close();
   }
 
   /* ---------- Monthly print report ---------- */

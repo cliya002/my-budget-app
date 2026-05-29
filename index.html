@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=114" />
+  <link rel="stylesheet" href="styles.css?v=115" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1798,6 +1798,16 @@
           <textarea id="eventNotes" rows="2" placeholder="Trip details, who's going, etc."></textarea>
         </div>
 
+        <div class="form-row">
+          <label class="toggle-row">
+            <span>
+              <strong>🏖️ Vacation mode</strong><br />
+              <span class="card-sub">Auto-pause active recurring expenses during the event date range. Resume after.</span>
+            </span>
+            <input type="checkbox" id="eventVacationMode" />
+          </label>
+        </div>
+
         <div class="card-title" style="margin-top:0.5rem; font-size:0.9rem">Line items (optional)</div>
         <p class="card-sub" style="margin:0 0 0.4rem 0; font-size:0.78rem">Break the budget into pieces (Flights, Hotel, Food). Spend gets distributed automatically based on tagged transactions.</p>
         <div id="eventLineItems" class="event-line-items"></div>
@@ -2168,7 +2178,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=114"></script>
+  <script src="app.js?v=115"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {
