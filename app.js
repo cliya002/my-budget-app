@@ -1763,10 +1763,11 @@
     const starting = Number(acc.balance) || 0;
     const txns = state.expenses.filter((e) => e.accountId === accId);
     const delta = txns.reduce((s, t) => {
-      if (t.type === "income") return s + Number(t.amount);
-      if (t.type === "transfer-out") return s - Number(t.amount);
-      if (t.type === "transfer-in") return s + Number(t.amount);
-      return s - Number(t.amount); // expense
+      const amt = Number(t.amount) || 0;
+      if (t.type === "income") return s + amt;
+      if (t.type === "transfer-out") return s - amt;
+      if (t.type === "transfer-in") return s + amt;
+      return s - amt; // expense
     }, 0);
     return starting + delta;
   }
@@ -3046,17 +3047,17 @@
     }
     const headers = ["Date", "Type", "Description", "Category", "Person", "Amount", "Currency"];
     const rows = [...state.expenses]
-      .sort((a, b) => a.date.localeCompare(b.date))
+      .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
       .map((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
         const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
         return [
-          e.date,
+          e.date || "",
           e.type === "income" ? "Income" : "Expense",
-          e.desc,
+          e.desc || "",
           cat ? cat.name : "",
           person ? person.name : "",
-          (e.type === "income" ? "" : "-") + Number(e.amount).toFixed(2),
+          (e.type === "income" ? "" : "-") + (Number(e.amount) || 0).toFixed(2),
           currency,
         ];
       });
@@ -4019,7 +4020,7 @@
         const catName = cat ? cat.name.toLowerCase() : "";
         const tagsStr = (e.tags || []).join(" ").toLowerCase();
         const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
-        const personName = person ? person.name.toLowerCase() : "";
+        const personName = person ? String(person.name || "").toLowerCase() : "";
         const desc = String(e.desc || "").toLowerCase();
         return (
           desc.includes(q) ||
@@ -6587,10 +6588,12 @@
 
   async function handlePdfImport(file) {
     const status = $("#importStatus");
-    status.textContent = "Reading PDF…";
-    status.hidden = false;
+    if (status) {
+      status.textContent = "Reading PDF…";
+      status.hidden = false;
+    }
     if (!window.pdfjsLib) {
-      status.textContent = "PDF library failed to load. Try pasting text instead.";
+      if (status) status.textContent = "PDF library failed to load. Try pasting text instead.";
       return;
     }
     try {
@@ -6603,11 +6606,11 @@
         const pageText = content.items.map((it) => it.str).join(" ");
         fullText += pageText + "\n";
       }
-      status.textContent = `Read ${pdf.numPages} page${pdf.numPages === 1 ? "" : "s"} (${fullText.length} chars). Parsing…`;
+      if (status) status.textContent = `Read ${pdf.numPages} page${pdf.numPages === 1 ? "" : "s"} (${fullText.length} chars). Parsing…`;
       parseCreditReport(fullText);
     } catch (e) {
       console.error(e);
-      status.textContent = "Could not read this PDF. Try pasting the text instead.";
+      if (status) status.textContent = "Could not read this PDF. Try pasting the text instead.";
     }
   }
 
@@ -7771,9 +7774,9 @@
     const totals = {};
     const counts = {};
     expenses.forEach((e) => {
-      const key = e.desc.trim();
+      const key = String(e.desc || "").trim();
       if (!key) return;
-      totals[key] = (totals[key] || 0) + Number(e.amount);
+      totals[key] = (totals[key] || 0) + (Number(e.amount) || 0);
       counts[key] = (counts[key] || 0) + 1;
     });
     const sorted = Object.entries(totals).sort((a, b) => b[1] - a[1]).slice(0, 10);
@@ -8460,12 +8463,19 @@
 
   function normalizeDate(d) {
     // d like "12/31/2024" or "12/31/24"
+    if (!d || typeof d !== "string") return null;
     const parts = d.split("/");
     if (parts.length !== 3) return null;
     let [mm, dd, yy] = parts;
+    if (!mm || !dd || !yy) return null;
     if (yy.length === 2) yy = "20" + yy;
     if (mm.length === 1) mm = "0" + mm;
     if (dd.length === 1) dd = "0" + dd;
+    // Validate component ranges
+    const mNum = Number(mm), dNum = Number(dd), yNum = Number(yy);
+    if (isNaN(mNum) || mNum < 1 || mNum > 12) return null;
+    if (isNaN(dNum) || dNum < 1 || dNum > 31) return null;
+    if (isNaN(yNum) || yNum < 1900 || yNum > 2200) return null;
     const result = `${yy}-${mm}-${dd}`;
     // Sanity: must be parseable
     if (isNaN(new Date(result).getTime())) return null;
@@ -8473,23 +8483,24 @@
   }
 
   function applyPaystubToForm(p) {
-    if (p.employer) $("#pcEmployer").value = p.employer;
-    if (p.date) $("#pcDate").value = p.date;
-    if (p.gross !== null) $("#pcGross").value = p.gross.toFixed(2);
+    const setVal = (sel, val) => { const el = $(sel); if (el) el.value = val; };
+    if (p.employer) setVal("#pcEmployer", p.employer);
+    if (p.date) setVal("#pcDate", p.date);
+    if (p.gross !== null && p.gross !== undefined) setVal("#pcGross", p.gross.toFixed(2));
 
     // SIMPLIFIED: collapse parsed details into the 3 buckets the form actually shows
     let taxesItemized = (p.fedTax || 0) + (p.stateTax || 0) + (p.ssTax || 0) + (p.medicareTax || 0);
     if (taxesItemized < 0.01 && p.fica) taxesItemized = p.fica;
     const taxesTotal = taxesItemized > 0 ? taxesItemized : (p._taxesTotal || 0);
-    if (taxesTotal > 0) $("#pcTaxes").value = taxesTotal.toFixed(2);
+    if (taxesTotal > 0) setVal("#pcTaxes", taxesTotal.toFixed(2));
 
     const benefitsItemized = (p.health || 0) + (p.dental || 0) + (p.vision || 0)
       + (p.k401 || 0) + (p.hsa || 0);
     const benefitsTotal = benefitsItemized > 0 ? benefitsItemized : (p._benefitsTotal || 0);
-    if (benefitsTotal > 0) $("#pcBenefits").value = benefitsTotal.toFixed(2);
+    if (benefitsTotal > 0) setVal("#pcBenefits", benefitsTotal.toFixed(2));
 
     if (p._otherTotal && p._otherTotal > 0) {
-      $("#pcOther").value = p._otherTotal.toFixed(2);
+      setVal("#pcOther", p._otherTotal.toFixed(2));
     }
 
     // Stash all parsed metadata onto the form for the eventual save record
@@ -11971,12 +11982,15 @@
         };
       });
 
-    const cardHits = state.cards.filter((c) => matches(c.name) || matches(c.issuer)).map((c) => ({
-      icon: "💳",
-      title: c.name,
-      sub: c.issuer ? `${c.issuer} · Balance ${fmt(c.balance || 0)}` : `Balance ${fmt(c.balance || 0)}`,
-      action: () => { closeGlobalSearch(); $('[data-tab="credit"]').click(); },
-    }));
+    const cardHits = state.cards.filter((c) => matches(c.name) || matches(c.issuer)).map((c) => {
+      const bal = cardCurrentBalance(c);
+      return {
+        icon: "💳",
+        title: c.name,
+        sub: c.issuer ? `${c.issuer} · Balance ${fmt(bal)}` : `Balance ${fmt(bal)}`,
+        action: () => { closeGlobalSearch(); $('[data-tab="credit"]').click(); },
+      };
+    });
 
     const peopleHits = state.people.filter((p) => matches(p.name) || matches(p.relation)).map((p) => ({
       icon: "👤",
@@ -13958,7 +13972,7 @@
     const top10 = [...monthExpenses]
       .sort((a, b) => Number(b.amount) - Number(a.amount))
       .slice(0, 10)
-      .map((e) => `${e.desc}: ${currencySymbols[currency] || "$"}${Number(e.amount).toFixed(2)}`);
+      .map((e) => `${e.desc || "(no description)"}: ${currencySymbols[currency] || "$"}${(Number(e.amount) || 0).toFixed(2)}`);
 
     const cardSummary = state.cards.map((c) =>
       `${c.name}: balance ${currencySymbols[currency] || "$"}${cardCurrentBalance(c).toFixed(0)} of ${(c.limit || 0).toFixed(0)} limit`
@@ -14282,9 +14296,9 @@ ${Array.isArray(ev.checklist) && ev.checklist.length ? `
     // Top vendors
     const vendorTotals = {};
     monthExpenses.forEach((e) => {
-      const v = e.desc.trim();
+      const v = String(e.desc || "").trim();
       if (!v) return;
-      vendorTotals[v] = (vendorTotals[v] || 0) + Number(e.amount);
+      vendorTotals[v] = (vendorTotals[v] || 0) + (Number(e.amount) || 0);
     });
     const topVendors = Object.entries(vendorTotals).sort((a, b) => b[1] - a[1]).slice(0, 10);
 
