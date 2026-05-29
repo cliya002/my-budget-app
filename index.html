@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=104" />
+  <link rel="stylesheet" href="styles.css?v=105" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -157,29 +157,49 @@
             <div class="stat-card stat-income">
               <div class="stat-label">Income</div>
               <div class="stat-value" id="statIncome">$0</div>
+              <div class="stat-meta" id="statIncomeMeta"></div>
             </div>
             <div class="stat-card stat-spent">
               <div class="stat-label">Spent</div>
               <div class="stat-value" id="statSpent">$0</div>
+              <div class="stat-meta" id="statSpentMeta"></div>
             </div>
             <div class="stat-card stat-remaining">
               <div class="stat-label">Remaining</div>
               <div class="stat-value" id="statRemaining">$0</div>
             </div>
             <div class="stat-card stat-saved">
-              <div class="stat-label">Saved</div>
+              <div class="stat-label">Saved this month</div>
               <div class="stat-value" id="statSaved">$0</div>
             </div>
-            <div class="stat-card stat-family">
+            <div class="stat-card stat-income" data-stat-jump="balances">
+              <div class="stat-label">Income</div>
+              <div class="stat-value" id="statIncome">$0</div>
+              <div class="stat-meta" id="statIncomeMeta"></div>
+            </div>
+            <div class="stat-card stat-spent" data-stat-jump="transactions">
+              <div class="stat-label">Spent</div>
+              <div class="stat-value" id="statSpent">$0</div>
+              <div class="stat-meta" id="statSpentMeta"></div>
+            </div>
+            <div class="stat-card stat-remaining" data-stat-jump="balances">
+              <div class="stat-label">Remaining</div>
+              <div class="stat-value" id="statRemaining">$0</div>
+            </div>
+            <div class="stat-card stat-saved" data-stat-jump="goals">
+              <div class="stat-label">Saved this month</div>
+              <div class="stat-value" id="statSaved">$0</div>
+            </div>
+            <div class="stat-card stat-family" data-stat-jump="family">
               <div class="stat-label">Sent to Family</div>
               <div class="stat-value" id="statFamily">$0</div>
             </div>
-            <div class="stat-card stat-savings-rate">
+            <div class="stat-card stat-savings-rate" data-stat-jump="insights">
               <div class="stat-label">Savings Rate</div>
               <div class="stat-value" id="statSavingsRate">0%</div>
               <div class="stat-meta" id="statSavingsRateHint"></div>
             </div>
-            <div class="stat-card stat-credit-paid">
+            <div class="stat-card stat-credit-paid" data-stat-jump="credit">
               <div class="stat-label">Credit Paid</div>
               <div class="stat-value" id="statCreditPaid">$0</div>
               <div class="stat-meta" id="statCreditPaidHint"></div>
@@ -2066,7 +2086,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=104"></script>
+  <script src="app.js?v=105"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

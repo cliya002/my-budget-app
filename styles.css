@@ -3357,3 +3357,24 @@ input[type="color"] {
 .progress-bar.progress-bar-stack .progress-fill {
   height: 100%;
 }
+
+
+/* Tappable stat cards on dashboard — visual cue */
+.stat-card[data-stat-jump] {
+  cursor: pointer;
+  transition: transform 0.12s, box-shadow 0.12s;
+}
+.stat-card[data-stat-jump]:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
+.stat-card[data-stat-jump]:active {
+  transform: translateY(0);
+}
+.stat-meta {
+  font-size: 0.72rem;
+  margin-top: 0.2rem;
+  opacity: 0.85;
+}
+.stat-meta .positive { color: #16a34a; font-weight: 600; }
+.stat-meta .negative { color: #dc2626; font-weight: 600; }

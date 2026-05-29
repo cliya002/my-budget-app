@@ -949,6 +949,18 @@
       $("#sidebar").classList.remove("open");
       $("#sidebarBackdrop").classList.remove("open");
     });
+
+    // Tappable dashboard stat cards — jump to relevant tab
+    document.addEventListener("click", (e) => {
+      const card = e.target.closest("[data-stat-jump]");
+      if (!card) return;
+      // Don't intercept the inline link inside Credit Paid hint
+      if (e.target.closest("[data-pay-cards]")) return;
+      const tab = card.dataset.statJump;
+      if (!tab) return;
+      const navBtn = document.querySelector(`.nav-item[data-tab="${tab}"]`);
+      if (navBtn) navBtn.click();
+    });
   }
 
   /* ---------- Renderers ---------- */
@@ -2715,7 +2727,23 @@
     // This prevents the dashboard from inflating Income by showing the target after a real
     // smaller paycheck has already been recorded.
     const totalIncome = totalIncomeReal > 0 ? totalIncomeReal : targetIncome;
-    const totalSaved = state.goals.reduce((s, g) => s + goalSavedTotal(g), 0);
+
+    // Last month for trend comparison
+    const lastMonth = prevMonth(month);
+    const lastMonthExp = state.expenses.filter(
+      (e) => monthKey(e.date) === lastMonth && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    const lastMonthInc = state.expenses.filter(
+      (e) => monthKey(e.date) === lastMonth && e.type === "income"
+    );
+    const lastSpent = lastMonthExp.reduce((s, e) => s + Number(e.amount), 0);
+    const lastIncomeReal = lastMonthInc.reduce((s, e) => s + incomeReportingAmount(e), 0);
+
+    // Saved this month: goal contributions where the txn date is this month
+    const totalSaved = state.expenses
+      .filter((e) => e.goalId && e.type === "expense" && monthKey(e.date) === month)
+      .reduce((s, e) => s + Number(e.amount), 0);
+
     const remaining = totalIncome - totalSpent;
 
     $("#statIncome").textContent = fmt(totalIncome);
@@ -2727,6 +2755,24 @@
       remainingEl.classList.toggle("positive", remaining > 0);
     }
     $("#statSaved").textContent = fmt(totalSaved);
+
+    // MoM trend arrows under Income / Spent
+    function renderTrendMeta(elId, current, previous, lowerIsBetter) {
+      const el = document.getElementById(elId);
+      if (!el) return;
+      if (previous <= 0) { el.innerHTML = ""; return; }
+      const diff = current - previous;
+      const pct = (diff / previous) * 100;
+      const goingUp = diff > 0;
+      const isGood = lowerIsBetter ? !goingUp : goingUp;
+      const arrow = goingUp ? "▲" : (diff < 0 ? "▼" : "■");
+      const cls = Math.abs(pct) < 1 ? "" : (isGood ? "positive" : "negative");
+      el.innerHTML = Math.abs(pct) < 1
+        ? `<span class="card-sub">vs last month</span>`
+        : `<span class="${cls}">${arrow} ${Math.abs(pct).toFixed(0)}%</span> <span class="card-sub">vs last month</span>`;
+    }
+    renderTrendMeta("statIncomeMeta", totalIncome, lastIncomeReal, false);
+    renderTrendMeta("statSpentMeta", totalSpent, lastSpent, true);
 
     // Family — net money to people this month (sent minus received from same family)
     const sentToFamily = monthExpenses
