@@ -6773,6 +6773,7 @@
       let text = "";
       if (file.type === "application/pdf") {
         if (!window.pdfjsLib) {
+          status.className = "paystub-status warn";
           status.textContent = "PDF library not loaded. Try image instead.";
           return;
         }
@@ -6783,13 +6784,27 @@
           const content = await page.getTextContent();
           text += content.items.map((it) => it.str).join(" ") + "\n";
         }
+        // If PDF text is empty (image-only PDF), fall back to OCR by rendering each page
+        if (text.replace(/\s+/g, "").length < 50) {
+          status.textContent = "PDF has no text layer. Loading OCR…";
+          text = await ocrPdf(buf, (progress, page, pages) => {
+            status.textContent = `OCR scanning page ${page}/${pages}… ${Math.round(progress * 100)}%`;
+          });
+        }
       } else if (file.type.startsWith("image/")) {
         status.textContent = "Loading OCR engine (one-time, ~10MB)…";
         text = await ocrImage(file, (progress) => {
           status.textContent = `OCR scanning… ${Math.round(progress * 100)}%`;
         });
       } else {
+        status.className = "paystub-status warn";
         status.textContent = "Unsupported file type. Use PDF or image.";
+        return;
+      }
+
+      if (!text || text.replace(/\s+/g, "").length < 20) {
+        status.className = "paystub-status warn";
+        status.textContent = "Couldn't extract any text. Try a clearer file or fill manually.";
         return;
       }
 
@@ -6821,10 +6836,32 @@
         status.innerHTML = `✓ Found: ${found.join(", ")}.<br><small>Review the values below before saving.</small>`;
       }
     } catch (e) {
-      console.error(e);
+      console.error("Paystub upload failed:", e);
       status.className = "paystub-status warn";
-      status.textContent = "Failed to read this file. Try a different one or fill manually.";
+      status.textContent = `Failed: ${e.message || e.name || "unknown error"}. Try a different file or fill manually.`;
     }
+  }
+
+  // Render each PDF page to a canvas and run Tesseract OCR on the result
+  async function ocrPdf(arrayBuffer, progressCb) {
+    if (!window.pdfjsLib) throw new Error("PDF library not loaded");
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    let allText = "";
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext("2d");
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+      const text = await ocrImage(blob, (p) => {
+        if (progressCb) progressCb(p, i, pdf.numPages);
+      });
+      allText += text + "\n";
+    }
+    return allText;
   }
 
   // Lazy-load Tesseract.js for image OCR
@@ -6855,14 +6892,12 @@
     // because of column spacing. Convert "X XXX XX" patterns (3 digits then 2 digits)
     // back to "X,XXX.XX" so our regexes work.
     let normText = rawText.replace(/(\d{1,3})\s+(\d{3})\s+(\d{2})\b/g, "$1,$2.$3");
-    // Also the simpler "XXX XX" → "XXX.XX" (only when amount-like context)
-    normText = normText.replace(/(?<![\d,])(\d{1,3})\s+(\d{2})\b(?!\s*\d)/g, (m, a, b, off, str) => {
-      // Only convert if preceded by a $, a label keyword, or hyphen — avoid corrupting hours
-      const before = str.slice(Math.max(0, off - 30), off).toLowerCase();
-      if (/(?:tax|pay|net|gross|insurance|medical|dental|vision|fica|401|hsa|deduction|fee|tip|life|ad\/d|imputed|offset|tkn|balnce)/.test(before) || before.endsWith("$") || before.endsWith("-")) {
-        return `${a}.${b}`;
-      }
-      return m;
+    // Also "XXX XX" → "XXX.XX" when the surrounding context looks like a money label.
+    // Avoid lookbehind/lookahead for Safari compat.
+    const moneyContext = /(tax|pay|net|gross|insurance|medical|dental|vision|fica|401|hsa|deduction|fee|tip|life|ad\/d|imputed|offset|tkn|balnce|earnings|wages)\s+\-?\$?\s*\d{1,3}\s+\d{2}\b(?!\s*\d)/gi;
+    normText = normText.replace(moneyContext, (m) => {
+      // Replace the trailing "X XX" with "X.XX"
+      return m.replace(/(\d{1,3})\s+(\d{2})\b\s*$/, "$1.$2");
     });
 
     const text = normText.replace(/\s+/g, " ").trim();
