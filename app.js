@@ -6689,6 +6689,9 @@
     ["#pcGross", "#pcNet", "#pcFedTax", "#pcStateTax", "#pcFica", "#pcHealth", "#pc401k", "#pcHsa"].forEach((id) => {
       const el = $(id); if (el) el.value = "";
     });
+    // Reset any stashed paystub metadata
+    const form = $("#paycheckForm");
+    if (form) delete form.dataset.paystubMeta;
     const status = $("#paystubStatus");
     if (status) {
       status.hidden = true;
@@ -6702,6 +6705,11 @@
   }
   function closePaycheckModal() {
     $("#paycheckModal").classList.remove("open");
+    // Clear any stashed paystub metadata so next open starts clean
+    const form = $("#paycheckForm");
+    if (form) delete form.dataset.paystubMeta;
+    const status = $("#paystubStatus");
+    if (status) { status.hidden = true; status.textContent = ""; }
   }
 
   function initPaycheckSplits() {
@@ -6791,18 +6799,26 @@
 
       const found = [];
       if (parsed.employer) found.push("employer");
-      if (parsed.date) found.push("date");
-      if (parsed.gross) found.push("gross");
-      if (parsed.net) found.push("net");
-      if (parsed.fedTax || parsed.stateTax || parsed.fica) found.push("taxes");
-      if (parsed.k401 || parsed.hsa) found.push("retirement");
+      if (parsed.date) found.push("pay date");
+      if (parsed.payPeriodStart || parsed.payPeriodEnd) found.push("period");
+      if (parsed.gross !== null) found.push(`gross ${fmt(parsed.gross)}`);
+      if (parsed.net !== null) found.push(`net ${fmt(parsed.net)}`);
+      if (parsed.fedTax !== null) found.push("fed tax");
+      if (parsed.stateTax !== null) found.push("state tax");
+      if (parsed.ssTax !== null) found.push("SS");
+      if (parsed.medicareTax !== null) found.push("Medicare");
+      if (parsed.health || parsed.dental || parsed.vision) found.push("health/dental/vision");
+      if (parsed.k401) found.push("401k");
+      if (parsed.hsa) found.push("HSA");
+      if (parsed.regularHours) found.push(`${parsed.regularHours}h regular`);
+      if (parsed.ytdGross) found.push("YTD totals");
 
       if (found.length === 0) {
         status.className = "paystub-status warn";
         status.textContent = "Couldn't auto-detect fields. Fill them in manually.";
       } else {
         status.className = "paystub-status success";
-        status.textContent = `✓ Found: ${found.join(", ")}. Review and adjust before saving.`;
+        status.innerHTML = `✓ Found: ${found.join(", ")}.<br><small>Review the values below before saving.</small>`;
       }
     } catch (e) {
       console.error(e);
@@ -6835,32 +6851,58 @@
   }
 
   function parsePaystub(rawText) {
-    const text = rawText.replace(/\s+/g, " ").trim();
+    // Pre-normalize: some PDFs render numbers as "1 746 05" instead of "1,746.05"
+    // because of column spacing. Convert "X XXX XX" patterns (3 digits then 2 digits)
+    // back to "X,XXX.XX" so our regexes work.
+    let normText = rawText.replace(/(\d{1,3})\s+(\d{3})\s+(\d{2})\b/g, "$1,$2.$3");
+    // Also the simpler "XXX XX" → "XXX.XX" (only when amount-like context)
+    normText = normText.replace(/(?<![\d,])(\d{1,3})\s+(\d{2})\b(?!\s*\d)/g, (m, a, b, off, str) => {
+      // Only convert if preceded by a $, a label keyword, or hyphen — avoid corrupting hours
+      const before = str.slice(Math.max(0, off - 30), off).toLowerCase();
+      if (/(?:tax|pay|net|gross|insurance|medical|dental|vision|fica|401|hsa|deduction|fee|tip|life|ad\/d|imputed|offset|tkn|balnce)/.test(before) || before.endsWith("$") || before.endsWith("-")) {
+        return `${a}.${b}`;
+      }
+      return m;
+    });
+
+    const text = normText.replace(/\s+/g, " ").trim();
     const lines = rawText.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
     const result = {
       employer: null, date: null,
       gross: null, net: null,
       fedTax: null, stateTax: null, fica: null,
-      health: null, k401: null, hsa: null,
+      ssTax: null, medicareTax: null,
+      health: null, dental: null, vision: null,
+      k401: null, hsa: null,
+      ytdGross: null, ytdFedTax: null, ytdStateTax: null,
+      ytdSs: null, ytdMedicare: null, ytdNet: null,
+      regularHours: null, regularRate: null,
+      otHours: null, holidayHours: null, ptoHours: null,
+      hours: null, payPeriodStart: null, payPeriodEnd: null,
+      checkAccountLast4: null, otherDeductions: [], earnings: [],
     };
 
-    // --- Employer: look for Company Name pattern, often at top of document
-    // Heuristic: first line that has "Inc", "LLC", "Corp", "Co.", "Company", "Group", "Ltd"
-    // Otherwise, the first line that's all caps or title-case 2+ words and not "Pay Stub" etc.
-    const companyKeywords = /(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings)/;
-    for (const line of lines.slice(0, 10)) {
-      if (companyKeywords.test(line) && line.length < 100) {
-        result.employer = line.replace(/Pay\s*stub/i, "").trim();
+    // --- Employer
+    const companyKeywords = /(Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Company|Ltd\.?|Group|Holdings|Services\b)/;
+    for (const line of lines.slice(0, 15)) {
+      // Skip the ADP header / pay statement labels
+      if (/^(Earnings\s*Statement|Pay\s*Stub|Pay\s*Statement|ADP)/i.test(line)) continue;
+      if (companyKeywords.test(line) && line.length < 100 && line.length > 4) {
+        result.employer = line.replace(/Pay\s*stub/i, "").replace(/ATTN:.*$/i, "").trim();
         break;
       }
     }
 
-    // Date: Pay date / Period end / Check date
+    // --- Pay period
+    const ppStart = text.match(/Period\s*Beginning\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+    if (ppStart) result.payPeriodStart = normalizeDate(ppStart[1]);
+    const ppEnd = text.match(/Period\s*End(?:ing)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
+    if (ppEnd) result.payPeriodEnd = normalizeDate(ppEnd[1]);
+
+    // --- Pay date
     const dateRegexes = [
       /Pay\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
       /Check\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-      /Period\s*End(?:ing)?\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i,
-      /(\d{1,2}\/\d{1,2}\/\d{2,4})/, // fallback
     ];
     for (const re of dateRegexes) {
       const m = text.match(re);
@@ -6869,33 +6911,117 @@
         if (result.date) break;
       }
     }
+    // Fallback: pay period end
+    if (!result.date && result.payPeriodEnd) result.date = result.payPeriodEnd;
+    if (!result.date) {
+      const fb = text.match(/(\d{1,2}\/\d{1,2}\/\d{2,4})/);
+      if (fb) result.date = normalizeDate(fb[1]);
+    }
 
-    // Field amounts — match common labels then the next dollar amount
-    const fieldPatterns = [
-      ["gross", /(?:Gross\s*(?:Pay|Earnings|Wages))\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["net", /(?:Net\s*(?:Pay|Wages|Check)|Take[\s\-]?Home)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["fedTax", /(?:Federal\s*(?:Income\s*)?Tax|Fed\.?\s*W\/H|FIT)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["stateTax", /(?:State\s*(?:Income\s*)?Tax|State\s*W\/H|SIT)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["fica", /(?:FICA|Social\s*Security|OASDI)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["health", /(?:Health\s*(?:Insurance)?|Medical|Dental|Vision)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["k401", /(?:401\s*\(?k\)?|Retirement|Pension)\s*\$?\s*([\d,]+\.\d{2})/i],
-      ["hsa", /(?:HSA|FSA|Health\s*Savings)\s*\$?\s*([\d,]+\.\d{2})/i],
+    // --- Helper: read first dollar amount after a label, but not from YTD column.
+    // ADP layouts often have "this period" in col 1 and "year to date" in col 2.
+    // We prefer the FIRST number after the label.
+    function firstAmountAfter(labelRegex) {
+      const m = text.match(new RegExp(labelRegex.source + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
+      return m ? Number(m[1].replace(/,/g, "")) : null;
+    }
+    // For lines where we want all amounts (current + YTD), capture two
+    function twoAmountsAfter(labelRegex) {
+      const m = text.match(new RegExp(labelRegex.source + String.raw`[^\d\-\$]*\-?\$?\s*([\d,]+\.\d{2})\s*\-?\$?\s*([\d,]+\.\d{2})`, labelRegex.flags));
+      if (!m) return [null, null];
+      return [Number(m[1].replace(/,/g, "")), Number(m[2].replace(/,/g, ""))];
+    }
+
+    // --- Gross + YTD
+    [result.gross, result.ytdGross] = twoAmountsAfter(/Gross\s*Pay/i);
+    if (result.gross === null) result.gross = firstAmountAfter(/Gross\s*(?:Pay|Earnings|Wages|Income)/i);
+
+    // --- Net + YTD
+    [result.net, result.ytdNet] = twoAmountsAfter(/Net\s*Pay/i);
+    if (result.net === null) {
+      result.net = firstAmountAfter(/Net\s*(?:Pay|Check|Wages|Take[\s\-]?Home)/i);
+    }
+
+    // --- Federal income tax
+    [result.fedTax, result.ytdFedTax] = twoAmountsAfter(/Federal\s*Income\s*Tax|Federal\s*W\/?H|FIT|Fed\.?\s*Tax/i);
+    if (result.fedTax === null) result.fedTax = firstAmountAfter(/Federal\s*Income\s*Tax|Federal\s*W\/?H|FIT|Fed\.?\s*Tax/i);
+
+    // --- State tax (works for "VA State Income Tax", "CA State Tax", "State Income Tax", etc.)
+    [result.stateTax, result.ytdStateTax] = twoAmountsAfter(/(?:[A-Z]{2}\s*)?State\s*(?:Income\s*)?Tax|State\s*W\/?H|SIT/i);
+    if (result.stateTax === null) result.stateTax = firstAmountAfter(/(?:[A-Z]{2}\s*)?State\s*(?:Income\s*)?Tax|State\s*W\/?H|SIT/i);
+
+    // --- Social Security & Medicare separately
+    [result.ssTax, result.ytdSs] = twoAmountsAfter(/Social\s*Security\s*Tax|OASDI/i);
+    if (result.ssTax === null) result.ssTax = firstAmountAfter(/Social\s*Security\s*Tax|OASDI/i);
+    [result.medicareTax, result.ytdMedicare] = twoAmountsAfter(/Medicare\s*Tax/i);
+    if (result.medicareTax === null) result.medicareTax = firstAmountAfter(/Medicare\s*Tax/i);
+
+    // FICA combined
+    if (result.ssTax !== null || result.medicareTax !== null) {
+      result.fica = (result.ssTax || 0) + (result.medicareTax || 0);
+    } else {
+      result.fica = firstAmountAfter(/FICA/i);
+    }
+
+    // --- Health/Dental/Vision (Pre-Tax variants too)
+    result.dental = firstAmountAfter(/(?:Pre-?Tax\s*)?Dental(?:\s*Insurance)?/i);
+    result.vision = firstAmountAfter(/(?:Pre-?Tax\s*)?Vision(?:\s*Insurance)?/i);
+    result.health = firstAmountAfter(/(?:Pre-?Tax\s*)?(?:Medical|Health\s*Insurance|Health\s*Plan)/i);
+    // Sanity: if "Pre-Tax Medical" parsed huge (looks like YTD got mushed into current period),
+    // discard if value > 50% of gross.
+    if (result.health !== null && result.gross !== null && result.health > result.gross * 0.5) {
+      result.health = null;
+    }
+    if (result.dental !== null && result.gross !== null && result.dental > result.gross * 0.2) {
+      result.dental = null;
+    }
+    if (result.vision !== null && result.gross !== null && result.vision > result.gross * 0.2) {
+      result.vision = null;
+    }
+
+    // --- 401k / HSA
+    result.k401 = firstAmountAfter(/401\s*\(?k\)?|Retirement|Pension|TSP|403\s*\(?b\)?/i);
+    result.hsa = firstAmountAfter(/HSA|FSA|Health\s*Savings|Flex\s*Spend/i);
+
+    // --- Earnings line items (Regular, Holiday, OT, etc.)
+    // Match pattern: "Regular 61.2031 153.33 9,384.27 45,758.50"
+    const earningPatterns = [
+      ["Regular", /Regular\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})\s+([\d,]+\.\d{2})/i],
+      ["Overtime", /Overtime|O\.?T\.?\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
+      ["Holiday", /Holiday(?:\s*Pay)?\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
+      ["PTO", /(?:Flex\/?Pto|PTO|Vacation|Stnd\s*Pto\s*Pay)\s+([\d.]+)\s+([\d.]+)\s+([\d,]+\.\d{2})/i],
+      ["Bonus", /Bonus\s+\$?([\d,]+\.\d{2})/i],
+      ["RSU", /RSU\s*(?:Vest)?\s+\$?([\d,]+\.\d{2})/i],
     ];
-
-    fieldPatterns.forEach(([key, re]) => {
-      const m = text.match(re);
+    earningPatterns.forEach(([name, re]) => {
+      const m = rawText.match(re);
       if (m) {
-        result[key] = Number(m[1].replace(/,/g, ""));
+        if (m.length >= 4) {
+          // rate, hours, this period
+          result.earnings.push({ name, rate: Number(m[1]), hours: Number(m[2]), amount: Number(m[3].replace(/,/g, "")) });
+          if (name === "Regular") {
+            result.regularRate = Number(m[1]);
+            result.regularHours = Number(m[2]);
+          } else if (name === "Overtime") result.otHours = Number(m[2]);
+          else if (name === "Holiday") result.holidayHours = Number(m[2]);
+          else if (name === "PTO") result.ptoHours = Number(m[2]);
+        } else {
+          result.earnings.push({ name, amount: Number(m[1].replace(/,/g, "")) });
+        }
       }
     });
 
-    // If we found Medicare separately and FICA missed, add Medicare to FICA
-    const med = text.match(/Medicare\s*\$?\s*([\d,]+\.\d{2})/i);
-    if (med && result.fica !== null) {
-      result.fica += Number(med[1].replace(/,/g, ""));
-    } else if (med && result.fica === null) {
-      result.fica = Number(med[1].replace(/,/g, ""));
+    // Total work hours (some paystubs report this directly)
+    const totH = text.match(/Tot\s*Work\s*Hours\s+([\d.]+)/i);
+    if (totH) result.hours = Number(totH[1]);
+    else if (result.regularHours) {
+      result.hours = (result.regularHours || 0) + (result.otHours || 0)
+        + (result.holidayHours || 0) + (result.ptoHours || 0);
     }
+
+    // Account last 4 (for ADP "xxxxxxx4110")
+    const acct = text.match(/x{4,}(\d{3,4})/i);
+    if (acct) result.checkAccountLast4 = acct[1];
 
     return result;
   }
@@ -6922,15 +7048,46 @@
     if (p.fedTax !== null) $("#pcFedTax").value = p.fedTax.toFixed(2);
     if (p.stateTax !== null) $("#pcStateTax").value = p.stateTax.toFixed(2);
     if (p.fica !== null) $("#pcFica").value = p.fica.toFixed(2);
-    if (p.health !== null) $("#pcHealth").value = p.health.toFixed(2);
+
+    // Combine health-related deductions (medical + dental + vision)
+    const healthSum = (p.health || 0) + (p.dental || 0) + (p.vision || 0);
+    if (healthSum > 0) $("#pcHealth").value = healthSum.toFixed(2);
+
     if (p.k401 !== null) $("#pc401k").value = p.k401.toFixed(2);
     if (p.hsa !== null) $("#pcHsa").value = p.hsa.toFixed(2);
 
     // If gross + deductions known but not net, compute it
     if (p.gross !== null && p.net === null) {
       const totalDed = (p.fedTax || 0) + (p.stateTax || 0) + (p.fica || 0)
-        + (p.health || 0) + (p.k401 || 0) + (p.hsa || 0);
+        + healthSum + (p.k401 || 0) + (p.hsa || 0);
       $("#pcNet").value = Math.max(0, p.gross - totalDed).toFixed(2);
+    }
+
+    // Stash extra metadata on the form (used at save time for richer record)
+    const form = $("#paycheckForm");
+    if (form) {
+      form.dataset.paystubMeta = JSON.stringify({
+        ssTax: p.ssTax,
+        medicareTax: p.medicareTax,
+        dental: p.dental,
+        vision: p.vision,
+        regularRate: p.regularRate,
+        regularHours: p.regularHours,
+        otHours: p.otHours,
+        holidayHours: p.holidayHours,
+        ptoHours: p.ptoHours,
+        hours: p.hours,
+        ytdGross: p.ytdGross,
+        ytdNet: p.ytdNet,
+        ytdFedTax: p.ytdFedTax,
+        ytdStateTax: p.ytdStateTax,
+        ytdSs: p.ytdSs,
+        ytdMedicare: p.ytdMedicare,
+        payPeriodStart: p.payPeriodStart,
+        payPeriodEnd: p.payPeriodEnd,
+        checkAccountLast4: p.checkAccountLast4,
+        earnings: p.earnings,
+      });
     }
 
     updateSplitRemaining();
@@ -6966,6 +7123,13 @@
 
     const paycheckId = uid();
 
+    // Read any uploaded paystub metadata stashed on the form
+    let stub = {};
+    try {
+      const raw = $("#paycheckForm")?.dataset?.paystubMeta;
+      if (raw) stub = JSON.parse(raw) || {};
+    } catch (e) { /* ignore */ }
+
     // Create the income transaction (gross amount, pre-tax flag true)
     state.expenses.push(touchRecord({
       id: uid(),
@@ -6984,6 +7148,27 @@
       paycheckId,
       paycheckMeta: {
         gross, net, fedTax, stateTax, fica, health, k401, hsa,
+        // Rich metadata from paystub upload
+        ssTax: stub.ssTax ?? null,
+        medicareTax: stub.medicareTax ?? null,
+        dental: stub.dental ?? null,
+        vision: stub.vision ?? null,
+        regularRate: stub.regularRate ?? null,
+        regularHours: stub.regularHours ?? null,
+        otHours: stub.otHours ?? null,
+        holidayHours: stub.holidayHours ?? null,
+        ptoHours: stub.ptoHours ?? null,
+        hours: stub.hours ?? null,
+        ytdGross: stub.ytdGross ?? null,
+        ytdNet: stub.ytdNet ?? null,
+        ytdFedTax: stub.ytdFedTax ?? null,
+        ytdStateTax: stub.ytdStateTax ?? null,
+        ytdSs: stub.ytdSs ?? null,
+        ytdMedicare: stub.ytdMedicare ?? null,
+        payPeriodStart: stub.payPeriodStart ?? null,
+        payPeriodEnd: stub.payPeriodEnd ?? null,
+        checkAccountLast4: stub.checkAccountLast4 ?? null,
+        earnings: stub.earnings ?? null,
       },
     }));
 
