@@ -1368,6 +1368,7 @@
             <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
             <button data-action="event-checklist" data-id="${ev.id}" title="Checklist">📋</button>
             <button data-action="event-report" data-id="${ev.id}" title="Generate report">📄</button>
+            ${status !== "completed" ? `<button data-action="event-complete" data-id="${ev.id}" title="Mark as completed">✓</button>` : `<button data-action="event-reopen" data-id="${ev.id}" title="Reopen event">↻</button>`}
             <button data-action="edit-event" data-id="${ev.id}" title="Edit">✏️</button>
             <button data-action="del-event" data-id="${ev.id}" title="Delete">🗑️</button>
           </div>
@@ -7621,6 +7622,7 @@
     populateAccountSelect("#expAccount", true);
     populatePersonSelect();
     populateGoalSelect();
+    populateEventSelect();
     if (prefill && prefill.categoryId) {
       $("#expCategory").value = prefill.categoryId;
     }
@@ -10650,6 +10652,23 @@
       } else if (action === "event-report") {
         const ev = state.events.find((x) => x.id === id);
         if (ev) openEventReport(ev);
+      } else if (action === "event-complete") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        ev.status = "completed";
+        if (!ev.endDate) ev.endDate = todayStr();
+        touchRecord(ev);
+        saveData();
+        renderAll();
+        showToast(`"${ev.name}" marked completed`);
+      } else if (action === "event-reopen") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        ev.status = null; // let derived status pick up from dates
+        touchRecord(ev);
+        saveData();
+        renderAll();
+        showToast(`"${ev.name}" reopened`);
       } else if (action === "add-event-check") {
         const evId = btn.dataset.eventId;
         const input = document.querySelector(`.event-check-input[data-event-id="${evId}"]`);
