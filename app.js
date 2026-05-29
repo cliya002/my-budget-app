@@ -6948,13 +6948,22 @@
     // Normalize the input:
     // - Convert Unicode minus (U+2212), en-dash, em-dash to ASCII hyphen
     // - Convert non-breaking spaces to regular spaces
-    // - Insert a space between glued label-amount pairs like "Net Pay$1,902.12"
-    //   or "Federal Income Tax-$1,746.05"
+    // - Insert spaces between glued label-amount pairs ("Tax-$1,746.05") and amount-label
+    //   pairs ("$10,608.33Hide content")
+    // - Insert newlines after each dollar amount so each label/amount pair becomes its own line
     let cleaned = String(rawText)
       .replace(/[\u2212\u2013\u2014]/g, "-") // unicode minus, en-dash, em-dash → "-"
       .replace(/\u00a0/g, " ") // nbsp → space
-      .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2") // "TaxX" or "Tax$" or "Tax-$" → space before amount
+      .replace(/([A-Za-z\)])(-?\$?\d)/g, "$1 $2") // "TaxX" / "Tax-$X" → space before
+      .replace(/(\d)([A-Za-z])/g, "$1 $2") // "Hide" after "$10.00Hide" → "$10.00 Hide"
       .replace(/\$\s+/g, "$"); // "$ 1,234.56" → "$1,234.56"
+
+    // After spaces are normalized, break the text into one line per label/amount pair.
+    // Match a dollar amount (with optional sign) and add a newline immediately after it.
+    cleaned = cleaned.replace(/(-?\$\d{1,3}(?:,\d{3})*\.\d{2}\*?)/g, "$1\n");
+    // Also break after standalone amounts not prefixed with $ (e.g. "153.33 9,384.27 45,758.50")
+    // — separate consecutive amounts so each becomes its own anchor.
+    cleaned = cleaned.replace(/(\d{1,3}(?:,\d{3})*\.\d{2}\*?)\s+(?=\d{1,3}(?:,\d{3})*\.\d{2})/g, "$1\n");
 
     const lines = cleaned.split(/\n|\r/).map((l) => l.trim()).filter(Boolean);
     const text = lines.join(" ");
@@ -6978,17 +6987,26 @@
       if (dollared && dollared.length) {
         return dollared.map((m) => Math.abs(Number(m.replace(/[\$,\s\*]/g, "")))).filter((n) => !isNaN(n));
       }
-      // Fall back to any decimal-2 number, but skip values < 1 to avoid "5.00*" footnote markers in odd cases
+      return [];
+    }
+    // Looser version: any decimal-2 number, used as a fallback
+    function anyAmountsIn(line) {
       return amountsIn(line);
     }
 
-    // Find the FIRST amount on a line that contains the label
+    // Find the FIRST amount on a line that contains the label.
+    // Strategy:
+    //   1. Look at the matching line for $-marked amounts
+    //   2. If none, look at the next 1-2 lines for $-marked amounts (web layouts wrap)
+    //   3. As a last resort, look at the matching line for any decimal amount
     function findOnLine(labelRegex) {
-      for (const line of lines) {
-        if (labelRegex.test(line)) {
-          const amts = moneyAmountsIn(line);
-          if (amts.length) return { value: amts[0], ytd: amts[1] || null };
-        }
+      for (let i = 0; i < lines.length; i++) {
+        if (!labelRegex.test(lines[i])) continue;
+        let amts = moneyAmountsIn(lines[i]);
+        if (!amts.length && i + 1 < lines.length) amts = moneyAmountsIn(lines[i + 1]);
+        if (!amts.length && i + 2 < lines.length) amts = moneyAmountsIn(lines[i + 2]);
+        if (!amts.length) amts = anyAmountsIn(lines[i]);
+        if (amts.length) return { value: amts[0], ytd: amts[1] || null };
       }
       return { value: null, ytd: null };
     }
