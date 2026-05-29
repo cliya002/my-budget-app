@@ -401,9 +401,28 @@
         { id: uid(), name: "Entertainment", limit: 100 },
         { id: uid(), name: "Shopping", limit: 200 },
         { id: uid(), name: "Personal Care", limit: 75 },
+        { id: uid(), name: "Family", limit: 0 },
         { id: uid(), name: "Other", limit: 200 },
       ];
       migrated = true;
+    }
+
+    // Migration: ensure a "Family" category exists (added in a later release)
+    // unless the user explicitly deleted one.
+    if (state.categories.length
+        && !state.categories.some((c) => /^family$/i.test(c.name))
+        && !(state.deletions?.categories
+             && Object.keys(state.deletions.categories).some((id) => true))) {
+      // Be lenient — only add if no category with similar name exists
+      const familyish = state.categories.find((c) => /family|relative|sent\s*to/i.test(c.name));
+      if (!familyish) {
+        state.categories.push(touchRecord({
+          id: uid(),
+          name: "Family",
+          limit: 0,
+        }));
+        migrated = true;
+      }
     }
 
     // Seed quick-add presets only on a brand-new install (presets are easy to
@@ -7567,6 +7586,7 @@
         { name: "Entertainment", limit: 100 },
         { name: "Shopping", limit: 200 },
         { name: "Personal Care", limit: 75 },
+        { name: "Family", limit: 0 },
         { name: "Other", limit: 200 },
       ];
       const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
@@ -7726,13 +7746,28 @@
       if (!desc || isNaN(amount) || !date) return;
       if (type === "expense" && !categoryId) return;
 
+      // If a person is tagged on an expense and no category is set (or "Other" was picked),
+      // auto-route to the Family category. Lets the family money flow stay separate from
+      // generic spending in charts / budgets.
+      let finalCategoryId = categoryId || null;
+      if (type === "expense" && personId) {
+        const familyCat = state.categories.find((c) => /^family$/i.test(c.name));
+        if (familyCat) {
+          const currentCat = state.categories.find((c) => c.id === finalCategoryId);
+          // Only override if no category was set, or current is "Other"
+          if (!finalCategoryId || (currentCat && /^other$/i.test(currentCat.name))) {
+            finalCategoryId = familyCat.id;
+          }
+        }
+      }
+
       if (editId) {
         const idx = state.expenses.findIndex((x) => x.id === editId);
         if (idx >= 0) {
           state.expenses[idx] = touchRecord({
             ...state.expenses[idx],
             type, desc, amount, date,
-            categoryId: categoryId || null,
+            categoryId: finalCategoryId,
             accountId: accountId || null,
             personId: personId || null,
             goalId: goalId || null,
@@ -7746,7 +7781,7 @@
       } else {
         state.expenses.push(touchRecord({
           id: uid(), type, desc, amount, date,
-          categoryId: categoryId || null,
+          categoryId: finalCategoryId,
           accountId: accountId || null,
           personId: personId || null,
           goalId: goalId || null,
@@ -9169,6 +9204,16 @@
       const personId = suggestPerson(e.target.value);
       const personSel = $("#expPerson");
       if (personId && personSel.value === "") personSel.value = personId;
+    });
+
+    // Person dropdown -> if a person is picked and no category set yet, auto-pick Family
+    $("#expPerson")?.addEventListener("change", (e) => {
+      if (!e.target.value) return;
+      if (currentModalType !== "expense") return;
+      const catSel = $("#expCategory");
+      if (!catSel || catSel.value) return; // don't override user's pick
+      const familyCat = state.categories.find((c) => /^family$/i.test(c.name));
+      if (familyCat) catSel.value = familyCat.id;
     });
 
     // Insights period selector
