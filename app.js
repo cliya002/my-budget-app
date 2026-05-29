@@ -1337,7 +1337,10 @@
           <div class="event-line-row">
             <div class="event-line-head">
               <span>${escapeHtml(li.label)}</span>
-              <span class="card-sub">${fmt(liSpent)}${liBudget > 0 ? ` / ${fmt(liBudget)}` : ""}</span>
+              <span class="event-line-actions">
+                <span class="card-sub">${fmt(liSpent)}${liBudget > 0 ? ` / ${fmt(liBudget)}` : ""}</span>
+                <button class="event-line-add" data-action="quick-line-spend" data-event-id="${ev.id}" data-line-id="${li.id}" title="Add expense to ${escapeHtml(li.label)}">+</button>
+              </span>
             </div>
             ${liBudget > 0 ? `<div class="progress-bar"><div class="progress-fill ${liCls}" style="width:${liPct}%"></div></div>` : ""}
           </div>`;
@@ -1378,6 +1381,7 @@
             <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
             <button data-action="event-checklist" data-id="${ev.id}" title="Checklist">📋</button>
             <button data-action="event-report" data-id="${ev.id}" title="Generate report">📄</button>
+            <button data-action="event-csv" data-id="${ev.id}" title="Export CSV">⤓</button>
             <button data-action="dup-event" data-id="${ev.id}" title="Duplicate">⎘</button>
             ${status !== "completed" ? `<button data-action="event-complete" data-id="${ev.id}" title="Mark as completed">✓</button>` : `<button data-action="event-reopen" data-id="${ev.id}" title="Reopen event">↻</button>`}
             <button data-action="edit-event" data-id="${ev.id}" title="Edit">✏️</button>
@@ -7651,6 +7655,15 @@
     if (prefill && prefill.eventId) {
       $("#expEvent") && ($("#expEvent").value = prefill.eventId);
     }
+    // Stash eventLineItemId on form so save handler can read it (no UI for it)
+    const formEl = $("#expenseForm");
+    if (formEl) {
+      if (prefill && prefill.eventLineItemId) {
+        formEl.dataset.eventLineItemId = prefill.eventLineItemId;
+      } else {
+        delete formEl.dataset.eventLineItemId;
+      }
+    }
 
     // Income-specific prefill
     if (prefill && prefill.type === "income") {
@@ -8733,6 +8746,7 @@
       const personId = $("#expPerson").value;
       const goalId = $("#expGoal").value;
       const eventId = $("#expEvent")?.value || "";
+      const eventLineItemId = $("#expenseForm")?.dataset?.eventLineItemId || null;
       const tagsRaw = $("#expTags").value.trim();
       const tags = tagsRaw
         ? tagsRaw.split(",").map((t) => t.trim()).filter(Boolean)
@@ -8775,6 +8789,7 @@
             personId: personId || null,
             goalId: goalId || null,
             eventId: eventId || null,
+            eventLineItemId: eventLineItemId || null,
             tags,
             receipt,
             incomeType,
@@ -8790,6 +8805,7 @@
           personId: personId || null,
           goalId: goalId || null,
           eventId: eventId || null,
+          eventLineItemId: eventLineItemId || null,
           tags,
           receipt,
           incomeType,
@@ -10674,12 +10690,29 @@
           eventId: ev.id,
           date: todayStr(),
         });
+      } else if (action === "quick-line-spend") {
+        const evId = btn.dataset.eventId;
+        const lineId = btn.dataset.lineId;
+        const ev = state.events.find((x) => x.id === evId);
+        if (!ev) return;
+        const li = (ev.lineItems || []).find((x) => x.id === lineId);
+        openExpenseModal({
+          type: "expense",
+          desc: `${ev.name} · ${li?.label || ""}`,
+          eventId: ev.id,
+          eventLineItemId: lineId,
+          date: todayStr(),
+        });
       } else if (action === "event-checklist") {
         const panel = document.querySelector(`[data-event-checklist="${id}"]`);
         if (panel) panel.hidden = !panel.hidden;
       } else if (action === "event-report") {
         const ev = state.events.find((x) => x.id === id);
         if (ev) openEventReport(ev);
+      } else if (action === "event-csv") {
+        const ev = state.events.find((x) => x.id === id);
+        if (!ev) return;
+        exportEventCsv(ev);
       } else if (action === "event-complete") {
         const ev = state.events.find((x) => x.id === id);
         if (!ev) return;
@@ -12890,6 +12923,42 @@ Format your response as a numbered list of short, specific recommendations. No f
       responseEl.className = "ai-response warn";
       responseEl.textContent = `❌ ${err.message || "Request failed"}`;
     }
+  }
+
+  /* ---------- Event CSV export ---------- */
+  function exportEventCsv(ev) {
+    const txns = state.expenses
+      .filter((e) => e.eventId === ev.id && e.type === "expense")
+      .sort((a, b) => (a.date + a.id).localeCompare(b.date + b.id));
+    const headers = ["Date", "Description", "Category", "Account", "Line Item", "Person", "Amount", "Tags"];
+    const rows = txns.map((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const acc = e.accountId ? state.accounts.find((a) => a.id === e.accountId) : null;
+      const li = e.eventLineItemId ? (ev.lineItems || []).find((x) => x.id === e.eventLineItemId) : null;
+      const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
+      return [
+        e.date,
+        e.desc,
+        cat ? cat.name : "Uncategorized",
+        acc ? acc.name : "",
+        li ? li.label : "",
+        person ? person.name : "",
+        Number(e.amount).toFixed(2),
+        Array.isArray(e.tags) ? e.tags.join("; ") : "",
+      ].map(csvEscape).join(",");
+    });
+    const csv = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const safe = (ev.name || "event").replace(/[^a-z0-9]+/gi, "_");
+    a.href = url;
+    a.download = `event_${safe}_${todayStr()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast(`Exported ${txns.length} txn${txns.length === 1 ? "" : "s"}`);
   }
 
   /* ---------- Event report (printable) ---------- */
