@@ -392,6 +392,11 @@
     if (typeof state.settings.roundUpEnabled !== "boolean") state.settings.roundUpEnabled = false;
     if (typeof state.settings.roundUpGoalId === "undefined") state.settings.roundUpGoalId = null;
 
+    // Apply persisted accent color early to avoid theme flicker
+    if (state.settings.accentColor) {
+      try { applyAccentColor(state.settings.accentColor); } catch (e) {}
+    }
+
     // Seed default categories when empty and never deleted from
     if (!state.categories.length && !collectionHasTombstones("categories")) {
       state.categories = [
@@ -10773,6 +10778,22 @@
               touchRecord(p);
             }
           });
+          // Clear default-category setting if it pointed here
+          if (state.settings?.defaultCategoryId === id) {
+            setSetting("defaultCategoryId", null);
+          }
+          // Drop any account → category mappings that pointed to this category
+          if (state.settings?.accountCategoryMap) {
+            const newMap = { ...state.settings.accountCategoryMap };
+            let mapChanged = false;
+            Object.keys(newMap).forEach((acctId) => {
+              if (newMap[acctId] === id) {
+                delete newMap[acctId];
+                mapChanged = true;
+              }
+            });
+            if (mapChanged) setSetting("accountCategoryMap", newMap);
+          }
           filters.categories.delete(id);
           saveData();
           renderAll();
@@ -11012,6 +11033,16 @@
               touchRecord(e);
             }
           });
+          // Clear default-account setting if it pointed here
+          if (state.settings?.defaultAccountId === id) {
+            setSetting("defaultAccountId", null);
+          }
+          // Drop account-category mapping for this account
+          if (state.settings?.accountCategoryMap && state.settings.accountCategoryMap[id]) {
+            const newMap = { ...state.settings.accountCategoryMap };
+            delete newMap[id];
+            setSetting("accountCategoryMap", newMap);
+          }
           saveData();
           renderAll();
         }
@@ -12764,7 +12795,7 @@
       { label: "Events", n: (state.events || []).length },
       { label: "Presets", n: (state.presets || []).length },
       { label: "People", n: (state.people || []).length },
-      { label: "Credit cards", n: (state.creditCards || []).length },
+      { label: "Credit cards", n: (state.cards || []).length },
       { label: "Recurring rules", n: (state.recurring || []).length },
       { label: "Receipts", n: (state.expenses || []).filter((e) => e.receipt).length },
     ];
