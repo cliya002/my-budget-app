@@ -994,6 +994,39 @@
     renderIncomeSourcesManage();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
+    renderTopbarSpent();
+    applyDashStatOrder();
+  }
+
+  // Topbar mini: spent today (visible on every tab)
+  function renderTopbarSpent() {
+    const el = document.getElementById("topSpentToday");
+    if (!el) return;
+    const today = todayStr();
+    const total = state.expenses
+      .filter((e) => e.date === today && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+      .reduce((s, e) => s + Number(e.amount), 0);
+    el.textContent = `Today ${fmt(total)}`;
+    el.classList.toggle("has-spend", total > 0);
+  }
+
+  // Read saved stat-card order from localStorage and re-arrange the grid
+  function applyDashStatOrder() {
+    const grid = document.getElementById("statGrid");
+    if (!grid) return;
+    let order = [];
+    try { order = JSON.parse(localStorage.getItem("mb_stat_order") || "[]"); } catch (_) { /* ignore */ }
+    if (!Array.isArray(order) || !order.length) return;
+    const cards = Array.from(grid.querySelectorAll("[data-stat-id]"));
+    const byId = new Map(cards.map((c) => [c.dataset.statId, c]));
+    order.forEach((id) => {
+      const c = byId.get(id);
+      if (c) grid.appendChild(c);
+    });
+    // Append any new cards (not in saved order) at the end
+    cards.forEach((c) => {
+      if (!order.includes(c.dataset.statId)) grid.appendChild(c);
+    });
   }
 
   function renderGoalsTab() {
@@ -2774,6 +2807,12 @@
     renderTrendMeta("statIncomeMeta", totalIncome, lastIncomeReal, false);
     renderTrendMeta("statSpentMeta", totalSpent, lastSpent, true);
 
+    // 7-day spending sparkline under the Spent stat
+    renderSpentSparkline();
+
+    // One-shot over-budget alert per month: if you cross 100% of total budget
+    checkOverBudgetAlert(totalSpent, month);
+
     // Family — net money to people this month (sent minus received from same family)
     const sentToFamily = monthExpenses
       .filter((e) => e.personId)
@@ -2946,6 +2985,85 @@
     renderSmartInsights();
     renderDashSyncCard();
     renderToday();
+  }
+
+  // 7-day spending mini-sparkline rendered into the Spent stat card
+  function renderSpentSparkline() {
+    const svg = document.getElementById("statSpentSpark");
+    if (!svg) return;
+    const today = new Date();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const ds = d.toISOString().slice(0, 10);
+      const total = state.expenses
+        .filter((e) => e.date === ds && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+        .reduce((s, e) => s + Number(e.amount), 0);
+      days.push(total);
+    }
+    const max = Math.max(1, ...days);
+    const W = 100, H = 24;
+    const stepX = W / Math.max(1, days.length - 1);
+    const points = days.map((v, i) => {
+      const x = i * stepX;
+      const y = H - (v / max) * (H - 2) - 1;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    const lastVal = days[days.length - 1];
+    const fillPath = `M0,${H} L${points.split(" ").join(" L")} L${W},${H} Z`;
+    svg.innerHTML = `
+      <path d="${fillPath}" fill="rgba(236, 72, 153, 0.15)" />
+      <polyline points="${points}" fill="none" stroke="#ec4899" stroke-width="1.5" stroke-linejoin="round" />
+      ${lastVal > 0 ? `<circle cx="${W}" cy="${H - (lastVal / max) * (H - 2) - 1}" r="2" fill="#ec4899" />` : ""}
+    `;
+  }
+
+  // Over-budget alert: fires once per month when total spend crosses 100% of total budget.
+  function checkOverBudgetAlert(totalSpent, month) {
+    const totalLimit = state.categories.reduce((s, c) => s + (Number(c.limit) || 0), 0);
+    if (totalLimit <= 0) return;
+    if (totalSpent < totalLimit) return;
+    if (!state.settings.alertsShown) state.settings.alertsShown = {};
+    const key = `overbudget_${month}`;
+    if (state.settings.alertsShown[key]) return;
+    state.settings.alertsShown[key] = true;
+    setSetting("alertsShown", state.settings.alertsShown);
+    saveData();
+    showToast(`⚠️ Over budget — ${fmt(totalSpent)} spent vs ${fmt(totalLimit)} budgeted`);
+  }
+
+  // Drag-to-reorder for dashboard stat cards
+  function initStatCardDrag() {
+    const grid = document.getElementById("statGrid");
+    if (!grid) return;
+    let dragId = null;
+    grid.addEventListener("dragstart", (e) => {
+      const card = e.target.closest("[data-stat-id]");
+      if (!card) return;
+      dragId = card.dataset.statId;
+      card.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+      try { e.dataTransfer.setData("text/plain", dragId); } catch (_) { /* Safari */ }
+    });
+    grid.addEventListener("dragend", (e) => {
+      const card = e.target.closest("[data-stat-id]");
+      if (card) card.classList.remove("dragging");
+      dragId = null;
+      // Save new order
+      const order = Array.from(grid.querySelectorAll("[data-stat-id]")).map((c) => c.dataset.statId);
+      localStorage.setItem("mb_stat_order", JSON.stringify(order));
+    });
+    grid.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      const target = e.target.closest("[data-stat-id]");
+      if (!target || target.dataset.statId === dragId) return;
+      const dragging = grid.querySelector(".dragging");
+      if (!dragging) return;
+      const rect = target.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      grid.insertBefore(dragging, before ? target : target.nextSibling);
+    });
   }
 
   // Today card: quick summary of just today's spending and recent activity
@@ -12020,6 +12138,7 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     initKeyboardShortcuts();
     initSwipeGestures();
     initGlobalSearch();
+    initStatCardDrag();
     // Set the version pill from the script tag's ?v= param
     try {
       const myScript = document.querySelector('script[src*="app.js"]');
