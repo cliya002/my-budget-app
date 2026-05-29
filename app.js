@@ -6231,6 +6231,60 @@
     return true;
   }
 
+  // Quick-pay minimums on every card with a balance, all from the largest liquid account
+  function payAllMinimums() {
+    const cardsWithBalance = state.cards.filter((c) => cardCurrentBalance(c) > 0);
+    if (!cardsWithBalance.length) {
+      showToast("No cards with balances to pay");
+      return;
+    }
+    const liquids = liquidAccounts();
+    if (!liquids.length) {
+      showToast("Add a checking or savings account first");
+      return;
+    }
+    // Compute minimum per card: explicit minPayment, else 2% of balance, floored at $25
+    const plan = cardsWithBalance.map((c) => {
+      const bal = cardCurrentBalance(c);
+      const explicit = Number(c.minPayment) || 0;
+      const computed = Math.max(25, Math.round(bal * 0.02));
+      const min = Math.min(bal, explicit > 0 ? explicit : computed);
+      return { card: c, amount: min };
+    });
+    const total = plan.reduce((s, p) => s + p.amount, 0);
+
+    // Pick largest-balance liquid account as default source
+    const source = liquids
+      .map((a) => ({ a, bal: accountBalance(a.id) }))
+      .sort((x, y) => y.bal - x.bal)[0];
+    if (!source || source.bal < total) {
+      const proceed = confirm(
+        `Plan: ${plan.length} card${plan.length === 1 ? "" : "s"}, ${fmt(total)} total\n\n` +
+        `${source ? source.a.name : "Source"} has ${source ? fmt(source.bal) : "$0"} available — that's less than the minimums total.\n\nApply anyway?`
+      );
+      if (!proceed) return;
+    } else {
+      const lines = plan.map((p) => `  • ${p.card.name}: ${fmt(p.amount)}`).join("\n");
+      const ok = confirm(
+        `Pay minimums on ${plan.length} card${plan.length === 1 ? "" : "s"} from ${source.a.name}?\n\n${lines}\n\nTotal: ${fmt(total)}`
+      );
+      if (!ok) return;
+    }
+
+    let applied = 0;
+    let appliedTotal = 0;
+    plan.forEach(({ card, amount }) => {
+      if (amount <= 0) return;
+      if (executePayCard(card.id, amount, source.a.id)) {
+        applied++;
+        appliedTotal += amount;
+      }
+    });
+    saveData();
+    renderAll();
+    showToast(`Paid ${fmt(appliedTotal)} across ${applied} card${applied === 1 ? "" : "s"}`);
+  }
+
   function applyPayCardPlan() {
     const fromId = $("#pmSource")?.value;
     const date = $("#pmDate")?.value || todayStr();
@@ -9792,6 +9846,7 @@
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
     $("#importCreditBtn").addEventListener("click", openImportCreditModal);
     $("#payCardsBtn")?.addEventListener("click", openPayCardModal);
+    $("#payMinimumsBtn")?.addEventListener("click", payAllMinimums);
     $("#payPlanOpen")?.addEventListener("click", openPayCardModal);
     $("#payCardModalClose")?.addEventListener("click", closePayCardModal);
     $("#payCardModal")?.addEventListener("click", (e) => {
