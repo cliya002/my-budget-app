@@ -1322,6 +1322,20 @@
       timing = "Completed";
     }
 
+    // Daily pace for active events
+    let paceHtml = "";
+    if (status === "active" && ev.startDate && ev.endDate && spent > 0) {
+      const start = new Date(ev.startDate);
+      const end = new Date(ev.endDate);
+      const totalDays = Math.max(1, Math.ceil((end - start) / (24 * 60 * 60 * 1000)) + 1);
+      const daysElapsed = Math.max(1, Math.ceil((today - start) / (24 * 60 * 60 * 1000)) + 1);
+      const daysRemaining = Math.max(0, totalDays - daysElapsed);
+      const dailyPaceSoFar = spent / daysElapsed;
+      const remainingBudget = Math.max(0, budget - spent);
+      const dailyBudgetRemaining = daysRemaining > 0 ? remainingBudget / daysRemaining : 0;
+      paceHtml = `<div class="event-pace">⏱️ ${fmt(dailyPaceSoFar)}/day so far${budget > 0 && daysRemaining > 0 ? ` · ${fmt(dailyBudgetRemaining)}/day budget left` : ""}</div>`;
+    }
+
     const dateRange = ev.startDate && ev.endDate
       ? `${ev.startDate} → ${ev.endDate}`
       : (ev.startDate || ev.endDate || "No dates set");
@@ -1380,6 +1394,7 @@
           <h3>${ev.icon || "🌴"} ${escapeHtml(ev.name)}</h3>
           <div class="list-item-actions">
             <button data-action="quick-event-spend" data-id="${ev.id}" title="Add expense to this event">+</button>
+            <button data-action="event-txns" data-id="${ev.id}" title="Show transactions">📜</button>
             <button data-action="event-checklist" data-id="${ev.id}" title="Checklist">📋</button>
             <button data-action="event-report" data-id="${ev.id}" title="Generate report">📄</button>
             <button data-action="event-csv" data-id="${ev.id}" title="Export CSV">⤓</button>
@@ -1403,10 +1418,14 @@
           </div>
         `}
         ${lineItemsHtml}
+        ${paceHtml}
         ${cardSummaryHtml}
         ${ev.notes ? `<div class="event-notes">${escapeHtml(ev.notes)}</div>` : ""}
         <div class="event-checklist-panel" data-event-checklist="${ev.id}" hidden>
           ${renderEventChecklistRows(ev)}
+        </div>
+        <div class="event-txns-panel" data-event-txns="${ev.id}" hidden>
+          ${renderEventTxnRows(ev)}
         </div>
       </div>`;
   }
@@ -1434,6 +1453,39 @@
         <input type="text" class="event-check-input" data-event-id="${ev.id}" placeholder="Add a task (e.g. Pack passport)" />
         <button class="btn-secondary" data-action="add-event-check" data-event-id="${ev.id}">Add</button>
       </div>
+    `;
+  }
+
+  // Render the inline transactions list for an event
+  function renderEventTxnRows(ev) {
+    const txns = state.expenses
+      .filter((e) => e.eventId === ev.id && e.type === "expense")
+      .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id))
+      .slice(0, 50); // cap for performance
+    if (!txns.length) {
+      return `<div class="card-sub">No transactions tagged to this event yet. Use the + button or tag a transaction with this event.</div>`;
+    }
+    const rows = txns.map((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const li = e.eventLineItemId ? (ev.lineItems || []).find((x) => x.id === e.eventLineItemId) : null;
+      const liTag = li ? `<span class="event-txn-li">${escapeHtml(li.label)}</span>` : "";
+      const acc = e.accountId ? state.accounts.find((a) => a.id === e.accountId) : null;
+      const accTag = acc ? `<span class="card-sub">· ${escapeHtml(acc.name)}</span>` : "";
+      return `
+        <div class="event-txn-row">
+          <div class="event-txn-info">
+            <div class="event-txn-desc">${escapeHtml(e.desc)} ${liTag}</div>
+            <div class="event-txn-meta">${e.date} · ${escapeHtml(cat ? cat.name : "Uncategorized")} ${accTag}</div>
+          </div>
+          <div class="event-txn-amount negative">−${fmt(e.amount)}</div>
+        </div>`;
+    }).join("");
+    return `
+      <div class="event-txn-head">
+        <strong>📜 Transactions</strong>
+        <span class="card-sub">${txns.length}${txns.length === 50 ? "+" : ""} shown</span>
+      </div>
+      <div class="event-txn-list">${rows}</div>
     `;
   }
 
@@ -10738,6 +10790,9 @@
         });
       } else if (action === "event-checklist") {
         const panel = document.querySelector(`[data-event-checklist="${id}"]`);
+        if (panel) panel.hidden = !panel.hidden;
+      } else if (action === "event-txns") {
+        const panel = document.querySelector(`[data-event-txns="${id}"]`);
         if (panel) panel.hidden = !panel.hidden;
       } else if (action === "event-report") {
         const ev = state.events.find((x) => x.id === id);

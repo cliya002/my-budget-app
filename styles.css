@@ -3789,3 +3789,63 @@ input[type="color"] {
   color: var(--text);
   font-size: 0.85rem;
 }
+
+
+/* Inline event transactions panel */
+.event-txns-panel {
+  margin-top: 0.7rem;
+  padding-top: 0.7rem;
+  border-top: 1px dashed var(--border);
+}
+.event-txns-panel[hidden] { display: none; }
+.event-txn-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.88rem;
+  margin-bottom: 0.5rem;
+}
+.event-txn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.event-txn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+.event-txn-info { flex: 1; min-width: 0; }
+.event-txn-desc { font-weight: 600; }
+.event-txn-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.15rem; }
+.event-txn-li {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(91, 63, 184, 0.12);
+  color: var(--accent, #5b3fb8);
+  margin-left: 0.3rem;
+  vertical-align: middle;
+}
+.event-txn-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Daily pace hint */
+.event-pace {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: rgba(91, 63, 184, 0.05);
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+}
