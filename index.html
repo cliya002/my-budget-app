@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=71" />
+  <link rel="stylesheet" href="styles.css?v=72" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -334,8 +334,8 @@
                   <input type="number" id="recAmount" placeholder="0.00" step="0.01" min="0" required />
                 </div>
                 <div>
-                  <label>Day of month (1-28)</label>
-                  <input type="number" id="recDay" placeholder="1" min="1" max="28" required />
+                  <label>Day of month (1-31)</label>
+                  <input type="number" id="recDay" placeholder="1" min="1" max="31" required />
                 </div>
               </div>
               <div class="form-row two-col">
@@ -1793,6 +1793,23 @@
     </div>
   </div>
 
+  <!-- Sync Diagnostic Modal -->
+  <div id="syncDiagModal" class="modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2>🔧 Sync Diagnostic</h2>
+        <button class="modal-close" id="syncDiagClose">×</button>
+      </div>
+      <div id="syncDiagBody" class="diag-body">
+        <p class="empty">Running checks…</p>
+      </div>
+      <div style="display:flex;gap:0.5rem;margin-top:0.85rem">
+        <button id="syncDiagCopy" class="btn-secondary" style="flex:1">📋 Copy</button>
+        <button id="syncDiagRerun" class="btn-primary" style="flex:1">🔄 Run again</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Global Search -->
   <div id="globalSearchOverlay" class="search-overlay" hidden>
     <div class="search-modal">
@@ -1819,7 +1836,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=71"></script>
+  <script src="app.js?v=72"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

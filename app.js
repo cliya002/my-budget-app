@@ -554,7 +554,7 @@
           return;
         }
 
-        const day = Math.min(Math.max(1, r.dayOfMonth || 1), 28);
+        const day = clampDayToMonth(r.dayOfMonth || 1, m);
         const dateStr = `${m}-${String(day).padStart(2, "0")}`;
 
         // Skip dates that are still in the future
@@ -1133,6 +1133,19 @@
     return Number(state.income) || 0; // fallback default
   }
 
+  // Returns the number of days in the given YYYY-MM month (28/29/30/31)
+  function daysInMonth(monthKeyStr) {
+    const [y, m] = monthKeyStr.split("-").map(Number);
+    return new Date(y, m, 0).getDate(); // Day 0 of next month = last day of this
+  }
+
+  // Clamp a configured "day of month" (1-31) to the actual last day of the
+  // given month. Used so a "31st" rule still fires on Feb 28/29 etc.
+  function clampDayToMonth(day, monthKeyStr) {
+    const last = daysInMonth(monthKeyStr);
+    return Math.min(last, Math.max(1, day || 1));
+  }
+
   function setIncomeForMonth(monthKeyStr, amount) {
     if (!state.monthlyIncome) state.monthlyIncome = {};
     state.monthlyIncome[monthKeyStr] = Number(amount) || 0;
@@ -1283,7 +1296,7 @@
     let totalReceived = 0;
 
     const items = incomes.map((r) => {
-      const day = Math.min(28, r.dayOfMonth || 1);
+      const day = clampDayToMonth(r.dayOfMonth || 1, month);
       const dateStr = `${month}-${String(day).padStart(2, "0")}`;
       const expectedDate = new Date(dateStr);
       const isPast = expectedDate <= today;
@@ -1335,7 +1348,7 @@
 
     state.recurring.forEach((r) => {
       if (!r.active || r.type !== "expense") return;
-      const day = Math.min(28, r.dayOfMonth || 1);
+      const day = clampDayToMonth(r.dayOfMonth || 1, m);
       const dateStr = `${m}-${String(day).padStart(2, "0")}`;
       const paid = state.expenses.some(
         (e) => e.recurringId === r.id && monthKey(e.date) === m
@@ -1353,7 +1366,7 @@
 
     state.cards.forEach((c) => {
       if (!c.dueDay) return;
-      const day = Math.min(28, c.dueDay);
+      const day = clampDayToMonth(c.dueDay, m);
       const dateStr = `${m}-${String(day).padStart(2, "0")}`;
       bills.push({
         type: "card",
@@ -1757,30 +1770,30 @@
       return;
     }
 
-    // 2024 federal brackets (simplified)
+    // 2025 federal brackets (IRS Rev. Proc. 2024-40 inflation adjustments)
     const brackets = {
       single: [
-        [0, 0.10], [11600, 0.12], [47150, 0.22], [100525, 0.24],
-        [191950, 0.32], [243725, 0.35], [609350, 0.37],
+        [0, 0.10], [11925, 0.12], [48475, 0.22], [103350, 0.24],
+        [197300, 0.32], [250525, 0.35], [626350, 0.37],
       ],
       married_joint: [
-        [0, 0.10], [23200, 0.12], [94300, 0.22], [201050, 0.24],
-        [383900, 0.32], [487450, 0.35], [731200, 0.37],
+        [0, 0.10], [23850, 0.12], [96950, 0.22], [206700, 0.24],
+        [394600, 0.32], [501050, 0.35], [751600, 0.37],
       ],
       married_separate: [
-        [0, 0.10], [11600, 0.12], [47150, 0.22], [100525, 0.24],
-        [191950, 0.32], [243725, 0.35], [365600, 0.37],
+        [0, 0.10], [11925, 0.12], [48475, 0.22], [103350, 0.24],
+        [197300, 0.32], [250525, 0.35], [375800, 0.37],
       ],
       head: [
-        [0, 0.10], [16550, 0.12], [63100, 0.22], [100500, 0.24],
-        [191950, 0.32], [243700, 0.35], [609350, 0.37],
+        [0, 0.10], [17000, 0.12], [64850, 0.22], [103350, 0.24],
+        [197300, 0.32], [250500, 0.35], [626350, 0.37],
       ],
     };
     const standardDeduction = {
-      single: 14600,
-      married_joint: 29200,
-      married_separate: 14600,
-      head: 21900,
+      single: 15000,
+      married_joint: 30000,
+      married_separate: 15000,
+      head: 22500,
     };
 
     // Project annualized income
@@ -4801,9 +4814,16 @@
 
   /* ---------- Family ---------- */
   function familyTransactions() {
-    // Only outgoing money sent to a person
+    // Outgoing money sent to a person (existing behavior — used by the Sent total)
     return state.expenses.filter(
       (e) => e.personId && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+  }
+
+  // Incoming money tagged as received from a person (e.g. "received from sister")
+  function familyReceivedTransactions() {
+    return state.expenses.filter(
+      (e) => e.personId && e.type === "income"
     );
   }
 
@@ -4827,7 +4847,12 @@
 
     const total = filterFamilyByPeriod(familyTransactions())
       .reduce((s, e) => s + Number(e.amount), 0);
-    $("#familyTotalPill").textContent = `Total sent: ${fmt(total)}`;
+    const received = filterFamilyByPeriod(familyReceivedTransactions())
+      .reduce((s, e) => s + Number(e.amount), 0);
+    const pillText = received > 0
+      ? `Sent: ${fmt(total)} · Received: ${fmt(received)} · Net: ${fmt(total - received)}`
+      : `Total sent: ${fmt(total)}`;
+    $("#familyTotalPill").textContent = pillText;
   }
 
   function renderPeopleList() {
@@ -4867,34 +4892,44 @@
       el.innerHTML = '<p class="empty">No people added yet. Tap <strong>+ Add Person</strong> to track money sent to family.</p>';
       return;
     }
-    const txns = filterFamilyByPeriod(familyTransactions());
-    const totalSent = txns.reduce((s, e) => s + Number(e.amount), 0);
+    const sentTxns = filterFamilyByPeriod(familyTransactions());
+    const recvTxns = filterFamilyByPeriod(familyReceivedTransactions());
+    const totalSent = sentTxns.reduce((s, e) => s + Number(e.amount), 0);
+    const totalReceived = recvTxns.reduce((s, e) => s + Number(e.amount), 0);
+    const totalActivity = totalSent + totalReceived;
 
     const rows = state.people.map((p) => {
-      const personTxns = txns.filter((e) => e.personId === p.id);
-      const total = personTxns.reduce((s, e) => s + Number(e.amount), 0);
-      const pct = totalSent > 0 ? (total / totalSent) * 100 : 0;
-      return { person: p, total, pct, count: personTxns.length };
+      const personSent = sentTxns.filter((e) => e.personId === p.id);
+      const personRecv = recvTxns.filter((e) => e.personId === p.id);
+      const sent = personSent.reduce((s, e) => s + Number(e.amount), 0);
+      const received = personRecv.reduce((s, e) => s + Number(e.amount), 0);
+      const net = sent - received;
+      const personActivity = sent + received;
+      const pct = totalActivity > 0 ? (personActivity / totalActivity) * 100 : 0;
+      return { person: p, sent, received, net, pct, count: personSent.length + personRecv.length };
     });
 
-    rows.sort((a, b) => b.total - a.total);
+    rows.sort((a, b) => (b.sent + b.received) - (a.sent + a.received));
 
     el.innerHTML = rows
       .map((r) => {
+        const netLabel = r.received > 0
+          ? `Sent ${fmt(r.sent)} · Received ${fmt(r.received)} · Net ${fmt(r.net)}`
+          : `${fmt(r.sent)} · ${r.count} txn${r.count === 1 ? "" : "s"}`;
         return `
           <div class="progress-item person-progress" style="border-left: 4px solid ${r.person.color || "#5b3fb8"}">
             <div class="progress-header">
               <span class="progress-name">${escapeHtml(r.person.name)} <span class="progress-amount">${escapeHtml(r.person.relation || "")}</span></span>
-              <span class="progress-amount">${fmt(r.total)} · ${r.count} txn${r.count === 1 ? "" : "s"}</span>
+              <span class="progress-amount">${netLabel}</span>
             </div>
             <div class="progress-bar">
-              <div class="progress-fill" style="width: ${pct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}"></div>
+              <div class="progress-fill" style="width: ${r.pct.toFixed(1)}%; background: ${r.person.color || "var(--primary)"}"></div>
             </div>
           </div>`;
       })
       .join("");
 
-    if (totalSent === 0) {
+    if (totalActivity === 0) {
       el.innerHTML += `<p class="empty" style="margin-top:0.75rem">No transactions for this period yet.</p>`;
     }
   }
@@ -4960,10 +4995,14 @@
   function renderFamilyTxnList() {
     const list = $("#familyTxnList");
     if (!list) return;
-    const txns = filterFamilyByPeriod(familyTransactions())
+    // Include both sent (expenses) and received (income) transactions tagged
+    // with a person, so the list reflects the full money flow with family.
+    const sent = filterFamilyByPeriod(familyTransactions());
+    const received = filterFamilyByPeriod(familyReceivedTransactions());
+    const txns = [...sent, ...received]
       .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
     if (!txns.length) {
-      list.innerHTML = '<li class="empty">Mark a transaction as sent to someone using the "Sent to family member" field.</li>';
+      list.innerHTML = '<li class="empty">Mark a transaction with a family member using the "Sent to family member" field — works for both expenses and income.</li>';
       return;
     }
     list.innerHTML = txns.map(renderTxnItem).join("");
@@ -5591,7 +5630,7 @@
         desc,
         amount,
         categoryId: null,
-        dayOfMonth: Math.min(28, day),
+        dayOfMonth: Math.min(31, Math.max(1, day)),
         active: true,
         lastRunMonth: monthKey(date),
       }));
@@ -6637,61 +6676,143 @@
     $("#syncPushBtn")?.addEventListener("click", syncPush);
     $("#syncPullBtn")?.addEventListener("click", syncPull);
 
-    // Sync diagnostic — runs a forced full cycle with detailed alerts so the
-    // user can verify each step is working.
-    $("#syncDiagBtn")?.addEventListener("click", async () => {
-      const lines = [];
-      const log = (s) => lines.push(s);
-      log(`Device: ${getDeviceLabel()}`);
-      log(`Auto-sync: ${localStorage.getItem("mb_auto_sync") === "true" ? "ON" : "OFF"}`);
-      log(`Token: ${localStorage.getItem(KEYS.syncToken) ? "set" : "MISSING"}`);
-      log(`Gist ID: ${localStorage.getItem(KEYS.syncGistId) || "MISSING"}`);
-      log(`Online: ${navigator.onLine ? "yes" : "NO"}`);
-      log(`Crypto key: ${cryptoKey ? "ready" : "MISSING"}`);
-      log(`Categories: ${state.categories.length}`);
-      log(`Expenses: ${state.expenses.length}`);
-      log(`Last synced: ${lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : "never"}`);
+    // Sync diagnostic — runs a full cycle of checks and renders results into a
+    // structured modal that's readable on mobile (instead of a giant alert popup).
+    async function runSyncDiagnostic() {
+      const body = $("#syncDiagBody");
+      if (!body) return;
+      body.innerHTML = '<p class="empty">Running checks…</p>';
 
+      const sections = [];
+      const sectionRow = (key, val, tone) => {
+        const cls = tone ? ` ${tone}` : "";
+        return `<div class="diag-row"><span class="diag-key">${escapeHtml(key)}</span><span class="diag-val${cls}">${escapeHtml(String(val))}</span></div>`;
+      };
+
+      // 1. Device & config snapshot
       const token = localStorage.getItem(KEYS.syncToken);
       const gistId = localStorage.getItem(KEYS.syncGistId);
+      const autoSync = localStorage.getItem("mb_auto_sync") === "true";
+      sections.push({
+        title: "Device & Config",
+        rows: [
+          sectionRow("Device", getDeviceLabel()),
+          sectionRow("Auto-sync", autoSync ? "ON" : "OFF", autoSync ? "ok" : "warn"),
+          sectionRow("Token", token ? "Set" : "Missing", token ? "ok" : "bad"),
+          sectionRow("Gist ID", gistId || "Missing", gistId ? "ok" : "bad"),
+          sectionRow("Online", navigator.onLine ? "Yes" : "No", navigator.onLine ? "ok" : "bad"),
+          sectionRow("Crypto key", cryptoKey ? "Ready" : "Missing", cryptoKey ? "ok" : "bad"),
+        ],
+      });
+
+      // 2. Local data snapshot
+      sections.push({
+        title: "Local Data",
+        rows: [
+          sectionRow("Categories", state.categories.length),
+          sectionRow("Accounts", state.accounts.length),
+          sectionRow("Expenses", state.expenses.length),
+          sectionRow("Recurring", state.recurring.length),
+          sectionRow("Goals", state.goals.length),
+          sectionRow("Cards", state.cards.length),
+          sectionRow("Last synced", lastSyncedAt ? new Date(lastSyncedAt).toLocaleString() : "Never"),
+        ],
+      });
+
+      // 3. Cloud check (if configured)
+      const cloudRows = [];
       if (token && gistId) {
         try {
           const r = await fetch(`https://api.github.com/gists/${gistId}`, {
             headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
           });
-          log(`GitHub fetch: HTTP ${r.status}`);
+          cloudRows.push(sectionRow("HTTP status", r.status, r.ok ? "ok" : "bad"));
           if (r.ok) {
             const d = await r.json();
-            log(`Cloud updated_at: ${d.updated_at}`);
+            cloudRows.push(sectionRow("Updated at", d.updated_at ? new Date(d.updated_at).toLocaleString() : "?"));
             const f = d.files && d.files[SYNC_FILENAME];
-            log(`Cloud has data file: ${f ? "yes (" + f.size + " bytes)" : "NO"}`);
+            cloudRows.push(sectionRow("Data file", f ? `${(f.size / 1024).toFixed(1)} KB` : "Missing", f ? "ok" : "bad"));
             if (f) {
               try {
                 const p = JSON.parse(f.content);
-                log(`Cloud last device: ${p.device || "unknown"}`);
-                log(`Cloud last push at: ${p.updatedAt || "?"}`);
-              } catch (e) { log(`Cloud parse failed: ${e.message}`); }
+                cloudRows.push(sectionRow("Last device", p.device || "unknown"));
+                cloudRows.push(sectionRow("Last push", p.updatedAt ? new Date(p.updatedAt).toLocaleString() : "?"));
+              } catch (e) {
+                cloudRows.push(sectionRow("Parse error", e.message, "bad"));
+              }
             }
           } else {
             const txt = await r.text();
-            log(`Error body: ${txt.slice(0, 200)}`);
+            cloudRows.push(sectionRow("Error", txt.slice(0, 100), "bad"));
           }
         } catch (e) {
-          log(`Network error: ${e.message}`);
+          cloudRows.push(sectionRow("Network error", e.message, "bad"));
         }
+      } else {
+        cloudRows.push(sectionRow("Status", "Not configured", "warn"));
       }
+      sections.push({ title: "Cloud", rows: cloudRows });
 
-      log("\n--- Forcing push & pull now ---");
-      try {
-        await syncPush({ silent: false, force: true });
-        log("Push: completed");
-      } catch (e) { log(`Push failed: ${e.message}`); }
-      try {
-        await syncPull({ skipConfirm: true, silent: false });
-        log("Pull: completed");
-      } catch (e) { log(`Pull failed: ${e.message}`); }
+      // 4. Run a forced push and pull
+      const actionRows = [];
+      if (token && gistId && cryptoKey) {
+        try {
+          await syncPush({ silent: true, force: true });
+          actionRows.push(sectionRow("Push", "Completed", "ok"));
+        } catch (e) {
+          actionRows.push(sectionRow("Push failed", e.message, "bad"));
+        }
+        try {
+          await syncPull({ skipConfirm: true, silent: true });
+          actionRows.push(sectionRow("Pull", "Completed", "ok"));
+        } catch (e) {
+          actionRows.push(sectionRow("Pull failed", e.message, "bad"));
+        }
+      } else {
+        actionRows.push(sectionRow("Skipped", "Sync not fully configured", "warn"));
+      }
+      sections.push({ title: "Forced Sync", rows: actionRows });
 
-      alert(lines.join("\n"));
+      // Render
+      body.innerHTML = sections.map((s) => `
+        <div class="diag-section">
+          <div class="diag-section-title">${escapeHtml(s.title)}</div>
+          ${s.rows.join("")}
+        </div>
+      `).join("");
+    }
+
+    $("#syncDiagBtn")?.addEventListener("click", () => {
+      $("#syncDiagModal").classList.add("open");
+      runSyncDiagnostic();
+    });
+    $("#syncDiagClose")?.addEventListener("click", () => $("#syncDiagModal").classList.remove("open"));
+    $("#syncDiagModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "syncDiagModal") $("#syncDiagModal").classList.remove("open");
+    });
+    $("#syncDiagRerun")?.addEventListener("click", runSyncDiagnostic);
+    $("#syncDiagCopy")?.addEventListener("click", async () => {
+      const body = $("#syncDiagBody");
+      if (!body) return;
+      // Convert to plain text for copy
+      const sections = body.querySelectorAll(".diag-section");
+      const lines = [];
+      sections.forEach((sec) => {
+        const title = sec.querySelector(".diag-section-title")?.textContent || "";
+        lines.push(`--- ${title} ---`);
+        sec.querySelectorAll(".diag-row").forEach((row) => {
+          const k = row.querySelector(".diag-key")?.textContent || "";
+          const v = row.querySelector(".diag-val")?.textContent || "";
+          lines.push(`${k}: ${v}`);
+        });
+        lines.push("");
+      });
+      try {
+        await navigator.clipboard.writeText(lines.join("\n"));
+        showToast("Copied to clipboard");
+      } catch (e) {
+        showToast("Copy failed — long-press to select");
+      }
     });
 
     // CSV upload
@@ -6998,8 +7119,8 @@
       const type = $("#recType").value;
       const categoryId = $("#recCategory").value || null;
       if (!desc || isNaN(amount) || isNaN(dayOfMonth)) return;
-      if (dayOfMonth < 1 || dayOfMonth > 28) {
-        showToast("Day must be between 1 and 28");
+      if (dayOfMonth < 1 || dayOfMonth > 31) {
+        showToast("Day must be between 1 and 31");
         return;
       }
       state.recurring.push(touchRecord({
@@ -7553,9 +7674,9 @@
       } else if (action === "preset-recurring") {
         const p = state.presets.find((x) => x.id === id);
         if (!p) return;
-        const day = prompt(`Make "${p.desc}" recurring on which day of month? (1-28)`, "1");
+        const day = prompt(`Make "${p.desc}" recurring on which day of month? (1-31)`, "1");
         if (day === null) return;
-        const dayOfMonth = Math.min(28, Math.max(1, parseInt(day, 10) || 1));
+        const dayOfMonth = Math.min(31, Math.max(1, parseInt(day, 10) || 1));
         state.recurring.push(touchRecord({
           id: uid(),
           type: p.type,
@@ -8376,23 +8497,46 @@
       return;
     }
 
-    const sample = rows.slice(0, 5).map((r) => {
+    // Compute category match summary across ALL rows so user sees the impact
+    const categoryCounts = {};
+    let uncategorized = 0;
+    rows.forEach((r) => {
+      const cat = autoCategorizeRule(r[fields.descKey]);
+      if (cat) {
+        categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+      } else {
+        uncategorized += 1;
+      }
+    });
+    const sortedCats = Object.entries(categoryCounts).sort((a, b) => b[1] - a[1]);
+
+    const matchSummary = sortedCats.length
+      ? `<div class="csv-cat-summary"><strong>Auto-categorized:</strong> ${
+          sortedCats.map(([cat, n]) => `<span class="csv-cat-pill">${escapeHtml(cat)} · ${n}</span>`).join("")
+        }${uncategorized > 0 ? `<span class="csv-cat-pill csv-cat-pill-warn">Uncategorized · ${uncategorized}</span>` : ""}</div>`
+      : `<div class="csv-cat-summary"><span class="card-sub">⚠️ No auto-categorization matched any of the ${rows.length} rows. They'll all import as Uncategorized — you can recategorize after.</span></div>`;
+
+    const sample = rows.slice(0, 8).map((r) => {
       const cat = autoCategorizeRule(r[fields.descKey]);
       const amt = parseFloat(String(r[fields.amountKey]).replace(/[^-\d.]/g, ""));
+      const catCell = cat
+        ? `<span class="csv-cat-pill">${escapeHtml(cat)}</span>`
+        : `<span class="csv-cat-pill csv-cat-pill-warn">Uncategorized</span>`;
       return `
         <tr>
           <td>${escapeHtml(r[fields.dateKey])}</td>
           <td>${escapeHtml(r[fields.descKey])}</td>
           <td class="right">${isNaN(amt) ? "?" : fmt(Math.abs(amt))}</td>
-          <td>${cat || "<i>Uncategorized</i>"}</td>
+          <td>${catCell}</td>
         </tr>`;
     }).join("");
 
     el.hidden = false;
     el.innerHTML = `
-      <p class="card-sub" style="margin-top:0.75rem">Found <strong>${rows.length}</strong> rows. Preview (first 5):</p>
+      <p class="card-sub" style="margin-top:0.75rem">Found <strong>${rows.length}</strong> rows. Preview (first 8):</p>
+      ${matchSummary}
       <table class="csv-table">
-        <thead><tr><th>Date</th><th>Description</th><th class="right">Amount</th><th>Auto-category</th></tr></thead>
+        <thead><tr><th>Date</th><th>Description</th><th class="right">Amount</th><th>Category</th></tr></thead>
         <tbody>${sample}</tbody>
       </table>
       <div class="form-row" style="margin-top:0.85rem">
