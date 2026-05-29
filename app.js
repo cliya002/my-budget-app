@@ -8382,6 +8382,14 @@
       if (box) box.hidden = !box.hidden;
       if (box && !box.hidden) setTimeout(() => $("#pastePaystubText")?.focus(), 50);
     });
+
+    // Paystub picture / PDF upload
+    $("#paystubUploadBtn")?.addEventListener("click", () => $("#paystubFile")?.click());
+    $("#paystubFile")?.addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (file) handlePaystubUpload(file);
+      e.target.value = ""; // allow re-uploading same file
+    });
     $("#pastePaystubParse")?.addEventListener("click", () => {
       const text = $("#pastePaystubText")?.value || "";
       if (!text.trim()) {

@@ -3285,3 +3285,14 @@ input[type="color"] {
   .ps-label { font-size: 0.88rem; }
   .ps-takehome-value { font-size: 1.1rem; }
 }
+
+
+.paystub-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+.paystub-actions button { font-size: 0.85rem; }
+@media (max-width: 480px) {
+  .paystub-actions { grid-template-columns: 1fr; }
+}
