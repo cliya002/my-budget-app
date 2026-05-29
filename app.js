@@ -402,6 +402,7 @@
         { id: uid(), name: "Shopping", limit: 200 },
         { id: uid(), name: "Personal Care", limit: 75 },
         { id: uid(), name: "Family", limit: 0 },
+        { id: uid(), name: "Credit Payment", limit: 0 },
         { id: uid(), name: "Other", limit: 200 },
       ];
       migrated = true;
@@ -422,6 +423,36 @@
           limit: 0,
         }));
         migrated = true;
+      }
+    }
+
+    // Migration: ensure a "Credit Payment" category exists so credit card payment transfers
+    // (from the Pay Cards modal) categorize as "Credit Payment" instead of "Uncategorized".
+    if (state.categories.length
+        && !state.categories.some((c) => /^credit\s*payment$/i.test(c.name))) {
+      const cpExists = state.categories.find((c) => /credit\s*pay/i.test(c.name));
+      if (!cpExists) {
+        state.categories.push(touchRecord({
+          id: uid(),
+          name: "Credit Payment",
+          limit: 0,
+        }));
+        migrated = true;
+      }
+    }
+
+    // Backfill: any existing credit-payment txns that lack a categoryId get the new
+    // Credit Payment category assigned.
+    {
+      const cpCat = state.categories.find((c) => /^credit\s*payment$/i.test(c.name));
+      if (cpCat) {
+        state.expenses.forEach((e) => {
+          if (e.kind === "credit-payment" && !e.categoryId) {
+            e.categoryId = cpCat.id;
+            touchRecord(e);
+            migrated = true;
+          }
+        });
       }
     }
 
@@ -5159,6 +5190,9 @@
     const groupId = transferGroupId || uid();
     const desc = `Payment: ${fromAcc.name} → ${card.name}`;
     const dt = date || todayStr();
+    // Tag with Credit Payment category so it shows as "Credit Payment" in the txn list
+    const cpCat = state.categories.find((c) => /^credit\s*payment$/i.test(c.name));
+    const cpCatId = cpCat ? cpCat.id : null;
 
     state.expenses.push(touchRecord({
       id: uid(),
@@ -5167,7 +5201,7 @@
       amount,
       date: dt,
       accountId: fromAccountId,
-      categoryId: null,
+      categoryId: cpCatId,
       tags: ["transfer", "credit-payment"],
       receipt: null,
       transferGroupId: groupId,
@@ -5181,7 +5215,7 @@
       amount,
       date: dt,
       accountId: card.accountId,
-      categoryId: null,
+      categoryId: cpCatId,
       tags: ["transfer", "credit-payment"],
       receipt: null,
       transferGroupId: groupId,
@@ -7661,6 +7695,7 @@
         { name: "Shopping", limit: 200 },
         { name: "Personal Care", limit: 75 },
         { name: "Family", limit: 0 },
+        { name: "Credit Payment", limit: 0 },
         { name: "Other", limit: 200 },
       ];
       const existingNames = new Set(state.categories.map((c) => c.name.toLowerCase()));
