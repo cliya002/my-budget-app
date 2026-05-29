@@ -4265,7 +4265,11 @@
     const empty = $("#moneyFlowEmpty");
     if (!el) return;
     const m = currentMonth();
-    const monthTxns = state.expenses.filter((e) => monthKey(e.date) === m);
+    let monthTxns = state.expenses.filter((e) => monthKey(e.date) === m);
+    // Honor the Insights event filter
+    if (insightsEventFilterId) {
+      monthTxns = monthTxns.filter((e) => e.eventId === insightsEventFilterId);
+    }
     const incomes = monthTxns.filter((e) => e.type === "income");
     const expenses = monthTxns.filter((e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out");
     const totalIncome = incomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
