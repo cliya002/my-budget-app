@@ -9491,6 +9491,13 @@
       navigator.clipboard.writeText(link).then(() => showToast("Link copied"));
     });
 
+    // QR scanner (camera)
+    $("#syncQrScanBtn")?.addEventListener("click", openSyncQrScanModal);
+    $("#syncQrScanClose")?.addEventListener("click", closeSyncQrScanModal);
+    $("#syncQrScanModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "syncQrScanModal") closeSyncQrScanModal();
+    });
+
     // Sync history
     $("#syncHistoryBtn")?.addEventListener("click", () => {
       renderSyncHistory();
@@ -13068,6 +13075,205 @@
     } else {
       history.replaceState(null, "", location.pathname);
     }
+  }
+
+  /* ---------- Camera-based QR scanner for sync setup ---------- */
+  let _qrScanState = null;
+
+  function setQrScanStatus(msg, type) {
+    const el = $("#syncQrScanStatus");
+    if (!el) return;
+    el.className = `sync-status ${type || ""}`;
+    el.textContent = msg;
+  }
+
+  function stopQrScanStream() {
+    if (!_qrScanState) return;
+    if (_qrScanState.rafId) cancelAnimationFrame(_qrScanState.rafId);
+    if (_qrScanState.stream) {
+      _qrScanState.stream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+    }
+    const video = $("#syncQrVideo");
+    if (video) { try { video.srcObject = null; } catch (e) {} }
+    _qrScanState = null;
+  }
+
+  function closeSyncQrScanModal() {
+    stopQrScanStream();
+    $("#syncQrScanModal")?.classList.remove("open");
+  }
+
+  function loadJsQR() {
+    if (typeof window.jsQR === "function") return Promise.resolve(window.jsQR);
+    if (window._jsQRLoadingPromise) return window._jsQRLoadingPromise;
+    window._jsQRLoadingPromise = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js";
+      s.async = true;
+      s.onload = () => resolve(window.jsQR);
+      s.onerror = () => reject(new Error("Failed to load jsQR library"));
+      document.head.appendChild(s);
+    });
+    return window._jsQRLoadingPromise;
+  }
+
+  function parseSyncFromText(text) {
+    if (!text || typeof text !== "string") return null;
+    let token = null;
+    let gistId = null;
+    try {
+      // Match either full URL with #sync= or just sync=token|gistId
+      let payload = null;
+      const hashIdx = text.indexOf("#sync=");
+      if (hashIdx >= 0) {
+        payload = text.slice(hashIdx + 6);
+      } else if (text.startsWith("sync=")) {
+        payload = text.slice(5);
+      } else if (text.includes("|") && !text.includes("://")) {
+        // Bare token|gistId
+        payload = text;
+      } else {
+        return null;
+      }
+      // Strip trailing whitespace / extra params
+      payload = payload.split(/\s/)[0];
+      const decoded = decodeURIComponent(payload);
+      const parts = decoded.split("|").map(decodeURIComponent);
+      if (parts.length >= 2 && parts[0] && parts[1]) {
+        token = parts[0];
+        gistId = parts[1];
+      }
+    } catch (e) {
+      return null;
+    }
+    if (!token || !gistId) return null;
+    return { token, gistId };
+  }
+
+  function applyScannedSync(parsed) {
+    if (!parsed || !parsed.token || !parsed.gistId) return false;
+    localStorage.setItem(KEYS.syncToken, parsed.token);
+    localStorage.setItem(KEYS.syncGistId, parsed.gistId);
+    localStorage.setItem("mb_auto_sync", "true");
+    // Update visible Settings inputs if present
+    const tokInput = $("#syncTokenInput");
+    const gistInput = $("#syncGistInput");
+    if (tokInput) tokInput.value = parsed.token;
+    if (gistInput) gistInput.value = parsed.gistId;
+    return true;
+  }
+
+  async function openSyncQrScanModal() {
+    const modal = $("#syncQrScanModal");
+    if (!modal) return;
+    modal.classList.add("open");
+    setQrScanStatus("Initializing camera…", "");
+
+    // Permissions / API check
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setQrScanStatus("Camera not supported on this browser.", "error");
+      return;
+    }
+
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: "environment" } },
+        audio: false,
+      });
+    } catch (err) {
+      setQrScanStatus("Camera blocked. Allow camera permission and try again.", "error");
+      return;
+    }
+
+    const video = $("#syncQrVideo");
+    const canvas = $("#syncQrScanCanvas");
+    if (!video || !canvas) {
+      stream.getTracks().forEach((t) => t.stop());
+      return;
+    }
+
+    _qrScanState = { stream, rafId: null, stopped: false };
+
+    video.srcObject = stream;
+    try { await video.play(); } catch (e) {}
+
+    setQrScanStatus("📷 Looking for QR code…", "");
+
+    // Prefer native BarcodeDetector if available
+    let detector = null;
+    if ("BarcodeDetector" in window) {
+      try {
+        const supported = await window.BarcodeDetector.getSupportedFormats();
+        if (supported && supported.indexOf("qr_code") >= 0) {
+          detector = new window.BarcodeDetector({ formats: ["qr_code"] });
+        }
+      } catch (e) { detector = null; }
+    }
+
+    let jsQR = null;
+    if (!detector) {
+      try {
+        jsQR = await loadJsQR();
+      } catch (e) {
+        setQrScanStatus("Couldn't load QR scanner. Check your connection.", "error");
+        stopQrScanStream();
+        return;
+      }
+    }
+
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+
+    async function scanFrame() {
+      if (!_qrScanState || _qrScanState.stopped) return;
+      if (video.readyState < 2 || video.videoWidth === 0) {
+        _qrScanState.rafId = requestAnimationFrame(scanFrame);
+        return;
+      }
+      let raw = null;
+      try {
+        if (detector) {
+          const codes = await detector.detect(video);
+          if (codes && codes.length) raw = codes[0].rawValue;
+        } else if (jsQR) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: "attemptBoth" });
+          if (code && code.data) raw = code.data;
+        }
+      } catch (e) { /* keep scanning */ }
+
+      if (raw) {
+        const parsed = parseSyncFromText(raw);
+        if (parsed) {
+          _qrScanState.stopped = true;
+          setQrScanStatus("✓ QR matched. Saving sync…", "success");
+          if (applyScannedSync(parsed)) {
+            stopQrScanStream();
+            closeSyncQrScanModal();
+            showToast("Sync configured. Tap Pull to load your data.");
+            try { renderAll(); } catch (e) {}
+            // Optional: auto-pull after pairing
+            try {
+              if (typeof pullFromCloud === "function") {
+                setTimeout(() => { pullFromCloud(); }, 400);
+              }
+            } catch (e) {}
+            return;
+          } else {
+            setQrScanStatus("QR data invalid — couldn't apply.", "error");
+            _qrScanState.stopped = false;
+          }
+        } else {
+          setQrScanStatus("Found a QR but it isn't a Pocket Budget sync code. Keep scanning…", "");
+        }
+      }
+
+      _qrScanState.rafId = requestAnimationFrame(scanFrame);
+    }
+    _qrScanState.rafId = requestAnimationFrame(scanFrame);
   }
 
   function renderSyncHistory() {
