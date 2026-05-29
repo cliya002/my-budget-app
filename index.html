@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=110" />
+  <link rel="stylesheet" href="styles.css?v=111" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1046,7 +1046,7 @@
           </div>
 
           <div class="card">
-            <div class="card-title">Sent to Each Person</div>
+            <div class="card-title">Per-Person Breakdown</div>
             <div id="familyBreakdown" class="progress-list">
               <p class="empty">No people added yet. Tap <strong>+ Add Person</strong> to track money sent to family.</p>
             </div>
@@ -1063,6 +1063,9 @@
 
           <div class="card">
             <div class="card-title">All Family Transactions</div>
+            <select id="familyTxnFilter" class="block" style="margin-bottom:0.6rem">
+              <option value="">All people</option>
+            </select>
             <ul id="familyTxnList" class="txn-list">
               <li class="empty">Mark a transaction as sent to someone using the "Sent to" field.</li>
             </ul>
@@ -2082,7 +2085,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=110"></script>
+  <script src="app.js?v=111"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -6448,6 +6448,10 @@
       list.innerHTML = '<li class="empty">No people yet.</li>';
       return;
     }
+    const relationIcons = {
+      parent: "👨‍👩‍👧", spouse: "💑", sibling: "👫", child: "👶",
+      friend: "🧑‍🤝‍🧑", relative: "👪", other: "👤",
+    };
     list.innerHTML = state.people
       .map((p) => {
         const sentAll = state.expenses
@@ -6457,6 +6461,7 @@
           .filter((e) => e.personId === p.id && e.type === "income")
           .reduce((s, e) => s + Number(e.amount), 0);
         const notes = p.notes ? ` · ${escapeHtml(p.notes)}` : "";
+        const icon = relationIcons[p.relation] || "👤";
         let amountHtml;
         if (sentAll > 0 && receivedAll > 0) {
           const net = sentAll - receivedAll;
@@ -6469,11 +6474,12 @@
         return `
           <li class="list-item person-item" style="border-left: 4px solid ${p.color || "#5b3fb8"}">
             <div class="list-item-main">
-              <div class="list-item-title">${escapeHtml(p.name)}</div>
+              <div class="list-item-title">${icon} ${escapeHtml(p.name)}</div>
               <div class="list-item-sub">${escapeHtml(p.relation || "Other")}${notes}</div>
             </div>
             <div class="list-item-amount">${amountHtml}</div>
             <div class="list-item-actions">
+              <button data-action="quick-send-person" data-id="${p.id}" title="Send money">💸</button>
               <button data-action="edit-person" data-id="${p.id}" title="Edit">✏️</button>
               <button data-action="del-person" data-id="${p.id}" title="Delete">🗑️</button>
             </div>
@@ -6606,15 +6612,33 @@
     });
   }
 
+  let familyTxnFilterId = ""; // empty = all people
+
   function renderFamilyTxnList() {
     const list = $("#familyTxnList");
     if (!list) return;
+
+    // Populate the filter dropdown with current people
+    const filterSel = $("#familyTxnFilter");
+    if (filterSel) {
+      const cur = filterSel.value || familyTxnFilterId;
+      filterSel.innerHTML =
+        '<option value="">All people</option>' +
+        state.people
+          .map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`)
+          .join("");
+      if (cur) filterSel.value = cur;
+    }
+
     // Include both sent (expenses) and received (income) transactions tagged
     // with a person, so the list reflects the full money flow with family.
     const sent = filterFamilyByPeriod(familyTransactions());
     const received = filterFamilyByPeriod(familyReceivedTransactions());
-    const txns = [...sent, ...received]
-      .sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+    let txns = [...sent, ...received];
+    if (familyTxnFilterId) {
+      txns = txns.filter((e) => e.personId === familyTxnFilterId);
+    }
+    txns.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
     if (!txns.length) {
       list.innerHTML = '<li class="empty">Mark a transaction with a family member using the "Sent to family member" field — works for both expenses and income.</li>';
       return;
@@ -9426,6 +9450,12 @@
       });
     });
 
+    // Family transaction filter dropdown
+    $("#familyTxnFilter")?.addEventListener("change", (e) => {
+      familyTxnFilterId = e.target.value;
+      renderFamilyTxnList();
+    });
+
     // Card form
     $("#cardForm").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -10070,6 +10100,18 @@
       } else if (action === "edit-person") {
         const p = state.people.find((x) => x.id === id);
         if (p) openPersonModal(p);
+      } else if (action === "quick-send-person") {
+        // Open Add Transaction modal pre-filled with this person and Family category
+        const p = state.people.find((x) => x.id === id);
+        if (!p) return;
+        const familyCat = state.categories.find((c) => /^family$/i.test(c.name));
+        openExpenseModal({
+          type: "expense",
+          desc: `Sent to ${p.name}`,
+          personId: p.id,
+          categoryId: familyCat ? familyCat.id : null,
+          date: todayStr(),
+        });
       } else if (action === "del-person") {
         if (confirm("Delete this person? Transactions linked to them will keep their record but lose the link.")) {
           tombstoneRecord("people", id);
