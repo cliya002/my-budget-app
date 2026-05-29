@@ -68,7 +68,7 @@
   // Track which transaction we are currently editing (null = adding new)
   let editingTxnId = null;
   const currencySymbols = {
-    USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", AUD: "$", CAD: "$",
+    USD: "$", EUR: "€", GBP: "£", JPY: "¥", INR: "₹", AUD: "$", CAD: "$", LKR: "Rs ",
   };
 
   // Filter state for transactions
