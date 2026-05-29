@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=128" />
+  <link rel="stylesheet" href="styles.css?v=129" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -1140,6 +1140,11 @@
             <span id="appVersionPill" class="month-pill" style="font-size:0.75rem">v—</span>
           </div>
 
+          <div class="form-row" style="margin-bottom:0.85rem">
+            <input type="text" id="settingsSearchInput" placeholder="🔍 Search settings (e.g. theme, sync, password)…" autocomplete="off" />
+          </div>
+          <p id="settingsSearchEmpty" class="empty" hidden>No settings match. Try a different word.</p>
+
           <div class="card">
             <div class="card-title">Budget Behavior</div>
             <label class="toggle-row">
@@ -1273,6 +1278,28 @@
           </div>
 
           <div class="card">
+            <div class="card-title">⚡ Defaults for Add Transaction</div>
+            <p class="card-sub">Pre-select these so the form opens ready to save with one tap.</p>
+            <div class="form-row two-col" style="margin-top:0.5rem">
+              <div>
+                <label>Default account</label>
+                <select id="defaultAccountSelect">
+                  <option value="">— None —</option>
+                </select>
+              </div>
+              <div>
+                <label>Default expense category</label>
+                <select id="defaultCategorySelect">
+                  <option value="">— None —</option>
+                </select>
+              </div>
+            </div>
+            <p class="footer-note" style="margin-top:0.5rem; text-align:left">
+              💡 Defaults only apply when you open a fresh form — editing an existing transaction or using a preset still uses the saved values.
+            </p>
+          </div>
+
+          <div class="card">
             <div class="card-title">Currency</div>
             <select id="currencySelect" class="block">
               <option value="USD">USD ($)</option>
@@ -1289,6 +1316,7 @@
           <div class="card">
             <div class="card-title">Security</div>
             <button id="changePasswordBtn" class="btn-secondary block">Change Password</button>
+            <button id="lockNowBtn" class="btn-secondary block" style="margin-top:0.5rem">🔒 Lock now</button>
             <div class="form-row" style="margin-top:0.85rem">
               <label>Auto-lock after (minutes)</label>
               <select id="autoLockSelect">
@@ -1309,6 +1337,14 @@
               </span>
               <input type="checkbox" id="hideAmountsToggle" />
             </label>
+            <label class="toggle-row" style="margin-top:0.85rem">
+              <span>
+                <strong>Skip delete confirmations</strong>
+                <br />
+                <span class="card-sub">Power-user mode — deletes happen without the "Are you sure?" prompt.</span>
+              </span>
+              <input type="checkbox" id="skipDeleteConfirmToggle" />
+            </label>
           </div>
 
           <div class="card">
@@ -1321,6 +1357,7 @@
 
           <div class="card">
             <div class="card-title">Data</div>
+            <div id="backupHealth" class="sync-status" style="margin-bottom:0.75rem"></div>
             <button id="exportBtn" class="btn-secondary block">Export Backup (JSON)</button>
             <button id="exportCsvBtn" class="btn-secondary block" style="margin-top:0.5rem">Export Transactions (CSV)</button>
             <button id="exportTaxCsvBtn" class="btn-secondary block" style="margin-top:0.5rem">Export YTD for Taxes (CSV)</button>
@@ -2235,7 +2272,7 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="app.js?v=128"></script>
+  <script src="app.js?v=129"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

@@ -1021,6 +1021,10 @@
     populateInsightsEventFilter();
     $("#currencySelect").value = currency;
     $("#rolloverToggle").checked = !!state.settings.rollover;
+    populateDefaultsSelects();
+    renderBackupHealth();
+    const skipDelTog = $("#skipDeleteConfirmToggle");
+    if (skipDelTog) skipDelTog.checked = !!state.settings?.skipDeleteConfirm;
     renderTopbarSpent();
     applyDashStatOrder();
   }
@@ -7837,9 +7841,22 @@
     populateEventSelect();
     if (prefill && prefill.categoryId) {
       $("#expCategory").value = prefill.categoryId;
+    } else if (
+      !editingTxnId &&
+      currentModalType === "expense" &&
+      state.settings?.defaultCategoryId &&
+      state.categories.some((c) => c.id === state.settings.defaultCategoryId)
+    ) {
+      $("#expCategory").value = state.settings.defaultCategoryId;
     }
     if (prefill && prefill.accountId) {
       $("#expAccount").value = prefill.accountId;
+    } else if (
+      !editingTxnId &&
+      state.settings?.defaultAccountId &&
+      state.accounts.some((a) => a.id === state.settings.defaultAccountId)
+    ) {
+      $("#expAccount").value = state.settings.defaultAccountId;
     }
     if (prefill && prefill.personId) {
       $("#expPerson").value = prefill.personId;
@@ -10735,7 +10752,7 @@
         renderAll();
       } else if (action === "del-exp") {
         const txn = state.expenses.find((x) => x.id === id);
-        if (txn && confirm("Delete this transaction?")) {
+        if (txn && confirmDeleteTxn("Delete this transaction?")) {
           // Find any linked transactions (transfer pair, paycheck deductions+splits)
           const linked = [];
           if (txn.transferGroupId) {
@@ -11339,6 +11356,41 @@
       showToast("Password changed");
     });
 
+    // Lock now
+    $("#lockNowBtn")?.addEventListener("click", () => {
+      lockNow();
+    });
+
+    // Skip delete confirmations toggle
+    const skipDelToggle = $("#skipDeleteConfirmToggle");
+    if (skipDelToggle) {
+      skipDelToggle.checked = !!state.settings.skipDeleteConfirm;
+      skipDelToggle.addEventListener("change", (e) => {
+        setSetting("skipDeleteConfirm", e.target.checked);
+        saveData();
+        showToast(e.target.checked ? "Delete confirmations off" : "Delete confirmations on");
+      });
+    }
+
+    // Default account / category for Add Transaction
+    populateDefaultsSelects();
+    $("#defaultAccountSelect")?.addEventListener("change", (e) => {
+      setSetting("defaultAccountId", e.target.value || null);
+      saveData();
+      showToast(e.target.value ? "Default account saved" : "Default account cleared");
+    });
+    $("#defaultCategorySelect")?.addEventListener("change", (e) => {
+      setSetting("defaultCategoryId", e.target.value || null);
+      saveData();
+      showToast(e.target.value ? "Default category saved" : "Default category cleared");
+    });
+
+    // Settings search filter
+    const settingsSearch = $("#settingsSearchInput");
+    if (settingsSearch) {
+      settingsSearch.addEventListener("input", filterSettingsCards);
+    }
+
     // Export
     $("#exportBtn").addEventListener("click", () => {
       const payload = {
@@ -11359,6 +11411,9 @@
       a.download = `pocket-budget-${todayStr()}.json`;
       a.click();
       URL.revokeObjectURL(url);
+      setSetting("lastBackupAt", Date.now());
+      saveData();
+      renderBackupHealth();
       showToast(`Exported ${payload._meta.txnCount} transaction${payload._meta.txnCount === 1 ? "" : "s"}`);
     });
 
@@ -11778,7 +11833,7 @@
       if (Math.abs(finalDx) > 100 && id) {
         if (finalDx < 0) {
           // Swipe left = delete
-          if (confirm("Delete this transaction?")) {
+          if (confirmDeleteTxn("Delete this transaction?")) {
             const txn = state.expenses.find((x) => x.id === id);
             tombstoneRecord("expenses", id);
             state.expenses = state.expenses.filter((x) => x.id !== id);
@@ -11844,7 +11899,7 @@
           e.preventDefault();
           const id = rows[currentIdx].dataset.txnRow;
           const txn = state.expenses.find((x) => x.id === id);
-          if (txn && confirm("Delete this transaction?")) {
+          if (txn && confirmDeleteTxn("Delete this transaction?")) {
             tombstoneRecord("expenses", id);
             state.expenses = state.expenses.filter((x) => x.id !== id);
             saveData();
@@ -12413,6 +12468,80 @@
     state.settings[key] = value;
     if (!state.settingsTimestamps) state.settingsTimestamps = {};
     state.settingsTimestamps[key] = Date.now();
+  }
+
+  // Populate the default-account and default-category selects in Settings
+  function populateDefaultsSelects() {
+    const accSel = $("#defaultAccountSelect");
+    if (accSel) {
+      accSel.innerHTML = '<option value="">— None —</option>' +
+        (state.accounts || []).map((a) =>
+          `<option value="${a.id}">${escapeHtml(a.name)}</option>`
+        ).join("");
+      accSel.value = state.settings?.defaultAccountId || "";
+    }
+    const catSel = $("#defaultCategorySelect");
+    if (catSel) {
+      catSel.innerHTML = '<option value="">— None —</option>' +
+        (state.categories || [])
+          .filter((c) => !/^income$/i.test(c.name))
+          .map((c) => `<option value="${c.id}">${escapeHtml(c.name)}</option>`)
+          .join("");
+      catSel.value = state.settings?.defaultCategoryId || "";
+    }
+  }
+
+  // Live-filter the Settings page by search query
+  function filterSettingsCards() {
+    const q = ($("#settingsSearchInput")?.value || "").trim().toLowerCase();
+    const page = $("#settings");
+    if (!page) return;
+    const cards = page.querySelectorAll(".card");
+    let visibleCount = 0;
+    cards.forEach((card) => {
+      if (!q) {
+        card.hidden = false;
+        visibleCount += 1;
+        return;
+      }
+      const text = (card.textContent || "").toLowerCase();
+      const match = text.includes(q);
+      card.hidden = !match;
+      if (match) visibleCount += 1;
+    });
+    const empty = $("#settingsSearchEmpty");
+    if (empty) empty.hidden = !q || visibleCount > 0;
+  }
+
+  // Show backup freshness in the Data card
+  function renderBackupHealth() {
+    const el = $("#backupHealth");
+    if (!el) return;
+    const last = state.settings?.lastBackupAt;
+    if (!last) {
+      el.className = "sync-status warning";
+      el.innerHTML = "⚠️ No local backup yet — export a JSON to keep your data safe.";
+      return;
+    }
+    const days = Math.floor((Date.now() - last) / 86400000);
+    const when = new Date(last).toLocaleString();
+    if (days >= 30) {
+      el.className = "sync-status warning";
+      el.innerHTML = `⚠️ Last backup: ${when} (${days} days ago) — consider exporting again.`;
+    } else if (days >= 7) {
+      el.className = "sync-status";
+      el.innerHTML = `📦 Last backup: ${when} (${days} day${days === 1 ? "" : "s"} ago).`;
+    } else {
+      el.className = "sync-status success";
+      el.innerHTML = `✓ Last backup: ${when}${days === 0 ? " (today)" : ` (${days} day${days === 1 ? "" : "s"} ago)`}.`;
+    }
+  }
+
+  // Lightweight confirm that respects the "Skip delete confirmations" setting.
+  // Use only for txn deletes (not for nuking-all-data, etc.).
+  function confirmDeleteTxn(message) {
+    if (state.settings?.skipDeleteConfirm) return true;
+    return confirm(message || "Delete this transaction?");
   }
 
   // Purge tombstones older than 90 days — anything that old is unlikely to come back from a stale device
