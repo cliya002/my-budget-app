@@ -3414,3 +3414,42 @@ input[type="color"] {
 @media (max-width: 600px) {
   .top-spent-today { display: none; }
 }
+
+
+/* Balances tab — category rows with progress + summary header */
+.cat-summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.65rem 0.85rem;
+  background: var(--card-alt, var(--card));
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.88rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+.cat-list-item .progress-bar {
+  margin-top: 0.4rem;
+  height: 6px;
+}
+.cat-pct {
+  font-size: 0.72rem;
+  font-weight: 600;
+  background: rgba(91, 63, 184, 0.12);
+  color: var(--accent, #5b3fb8);
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+.cat-pct.negative { background: rgba(220, 38, 38, 0.12); color: #dc2626; }
+
+/* Goal pace hint */
+.goal-pace {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 0.3rem;
+}
+.goal-pace.positive { color: #16a34a; font-weight: 600; }
+.goal-pace.negative { color: #dc2626; font-weight: 600; }

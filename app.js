@@ -3137,21 +3137,60 @@
     if (!state.categories.length) {
       list.innerHTML = '<li class="empty">No categories yet.</li>';
     } else {
-      list.innerHTML = state.categories
-        .map(
-          (cat) => `
-          <li class="list-item">
+      const month = currentMonth();
+      const monthExp = state.expenses.filter(
+        (e) => monthKey(e.date) === month && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+      );
+
+      // Build rows with spend so we can sort by % usage (most-used first)
+      const rows = state.categories.map((cat) => {
+        const spent = monthExp.filter((e) => e.categoryId === cat.id).reduce((s, e) => s + Number(e.amount), 0);
+        const limit = effectiveLimitFor(cat, month);
+        const pct = limit > 0 ? (spent / limit) * 100 : 0;
+        return { cat, spent, limit, pct };
+      }).sort((a, b) => {
+        // Categories with limits sort by % descending, no-limit ones at bottom
+        if (a.limit > 0 && b.limit <= 0) return -1;
+        if (a.limit <= 0 && b.limit > 0) return 1;
+        if (a.limit > 0 && b.limit > 0) return b.pct - a.pct;
+        return b.spent - a.spent;
+      });
+
+      const totalLimit = state.categories.reduce((s, c) => s + (Number(c.limit) || 0), 0);
+      const totalSpent = monthExp.reduce((s, e) => s + Number(e.amount), 0);
+      const totalPct = totalLimit > 0 ? (totalSpent / totalLimit) * 100 : 0;
+
+      const summaryRow = totalLimit > 0
+        ? `<li class="cat-summary-row">
+            <span><strong>${fmt(totalSpent)}</strong> spent of <strong>${fmt(totalLimit)}</strong> total</span>
+            <span class="${totalPct > 100 ? "negative" : totalPct > 80 ? "" : "positive"}">${totalPct.toFixed(0)}%</span>
+          </li>`
+        : "";
+
+      list.innerHTML = summaryRow + rows.map(({ cat, spent, limit, pct }) => {
+        let cls = "success";
+        if (pct >= 100) cls = "danger";
+        else if (pct >= 80) cls = "warning";
+        const limitText = limit > 0 ? `${fmt(spent)} / ${fmt(limit)}` : `${fmt(spent)} (no limit)`;
+        const progressBar = limit > 0
+          ? `<div class="progress-bar"><div class="progress-fill ${cls}" style="width: ${Math.min(100, pct)}%"></div></div>`
+          : "";
+        const pctTag = limit > 0
+          ? `<span class="cat-pct ${pct >= 100 ? "negative" : pct >= 80 ? "" : ""}">${pct.toFixed(0)}%</span>`
+          : "";
+        return `
+          <li class="list-item cat-list-item">
             <div class="list-item-main">
-              <div class="list-item-title">${escapeHtml(cat.name)}</div>
-              <div class="list-item-sub">Limit: ${fmt(cat.limit)}</div>
+              <div class="list-item-title">${escapeHtml(cat.name)} ${pctTag}</div>
+              <div class="list-item-sub">${limitText}</div>
+              ${progressBar}
             </div>
             <div class="list-item-actions">
               <button data-action="edit-cat" data-id="${cat.id}" title="Edit">✏️</button>
               <button data-action="del-cat" data-id="${cat.id}" title="Delete">🗑️</button>
             </div>
-          </li>`
-        )
-        .join("");
+          </li>`;
+      }).join("");
     }
 
     const goalList = $("#goalList");
@@ -3164,6 +3203,25 @@
           const target = Number(g.target) || 0;
           const pct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
           const dateStr = g.date ? ` · by ${g.date}` : "";
+
+          // Date-based pace hint: how much/month to hit the target by g.date
+          let paceHtml = "";
+          if (g.date && target > 0 && saved < target) {
+            const today = new Date();
+            const goalDate = new Date(g.date);
+            const monthsLeft = Math.max(0, (goalDate.getFullYear() - today.getFullYear()) * 12
+              + (goalDate.getMonth() - today.getMonth()));
+            const remaining = target - saved;
+            if (monthsLeft > 0) {
+              const perMonth = remaining / monthsLeft;
+              paceHtml = `<div class="goal-pace">📅 ${fmt(perMonth)}/mo for ${monthsLeft} more month${monthsLeft === 1 ? "" : "s"}</div>`;
+            } else if (goalDate < today) {
+              paceHtml = `<div class="goal-pace negative">⚠️ Past target date — ${fmt(remaining)} short</div>`;
+            }
+          } else if (saved >= target && target > 0) {
+            paceHtml = `<div class="goal-pace positive">🎉 Goal reached!</div>`;
+          }
+
           return `
           <li class="progress-item">
             <div class="progress-header">
@@ -3173,6 +3231,7 @@
             <div class="progress-bar">
               <div class="progress-fill success" style="width: ${pct}%"></div>
             </div>
+            ${paceHtml}
             <div class="goal-actions">
               <input type="number" placeholder="Add to savings" step="0.01" min="0" data-goal-input="${g.id}" />
               <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
