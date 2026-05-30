@@ -13842,6 +13842,28 @@
       el.title = online
         ? "Connected — sync and AI insights available"
         : "Offline — changes saved locally, will sync when reconnected";
+      // Make tappable for quick detail (idempotent — re-registering is fine)
+      if (!el._wiredClick) {
+        el.style.cursor = "pointer";
+        el.addEventListener("click", () => {
+          const isOnline = navigator.onLine;
+          const lastSync = parseInt(localStorage.getItem("mb_last_synced") || "0", 10);
+          let detail;
+          if (!isOnline) {
+            detail = "📵 Offline · changes saved locally";
+          } else if (lastSync) {
+            const ago = Date.now() - lastSync;
+            const m = Math.floor(ago / 60000);
+            detail = m < 1 ? "🟢 Online · synced just now" :
+              m < 60 ? `🟢 Online · synced ${m}m ago` :
+              `🟢 Online · synced ${Math.floor(m / 60)}h ago`;
+          } else {
+            detail = "🟢 Online · sync not configured";
+          }
+          showToast(detail);
+        });
+        el._wiredClick = true;
+      }
     }
 
     // Lock screen pill (only meaningful when offline — keeps the lock card clean otherwise)
@@ -13858,26 +13880,49 @@
     }
 
     // Show/hide offline banner (only when sync is configured, since that's when offline matters most)
+    if (!document.body) return; // very early in init
     let banner = $("#offlineBanner");
     const syncConfigured = !!(localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId));
     if (!online && syncConfigured) {
+      // Count pending changes since last sync (if dirty flag is true)
+      let countMsg = "";
+      if (typeof dirtyForSync !== "undefined" && dirtyForSync) {
+        countMsg = " · pending changes";
+      }
+      const msg = `📵 Offline${countMsg} — your changes are saved locally and will sync when you reconnect`;
       if (!banner) {
         banner = document.createElement("div");
         banner.id = "offlineBanner";
         banner.className = "offline-banner";
-        banner.innerHTML = "📵 Offline — your changes are saved locally and will sync when you reconnect";
+        banner.innerHTML = `<span>${msg}</span>`;
         document.body.appendChild(banner);
+        // Cancel any pending removal from a previous offline→online flicker
+        if (banner._removalTimer) {
+          clearTimeout(banner._removalTimer);
+          banner._removalTimer = null;
+        }
         // Trigger reflow then add show class for slide-in animation
         requestAnimationFrame(() => banner.classList.add("show"));
       } else {
+        // Update message in case dirty count changed
+        const span = banner.querySelector("span");
+        if (span) span.textContent = msg;
+        // Cancel pending removal if user just went online→offline again
+        if (banner._removalTimer) {
+          clearTimeout(banner._removalTimer);
+          banner._removalTimer = null;
+        }
         banner.classList.add("show");
       }
     } else if (banner) {
       banner.classList.remove("show");
-      // Remove after transition
-      setTimeout(() => {
-        if (banner && !banner.classList.contains("show") && banner.parentNode) {
-          banner.parentNode.removeChild(banner);
+      // Remove after transition (cancellable)
+      if (banner._removalTimer) clearTimeout(banner._removalTimer);
+      const ref = banner; // freeze for closure
+      ref._removalTimer = setTimeout(() => {
+        // Re-check at fire time — state may have changed
+        if (ref && !ref.classList.contains("show") && ref.parentNode) {
+          ref.parentNode.removeChild(ref);
         }
       }, 400);
     }
@@ -13902,6 +13947,10 @@
     dirtyForSync = true;
     updateSyncIndicator("dirty");
     schedulePushIfAuto();
+    // Refresh offline banner to reflect "pending changes" if currently offline
+    if (!navigator.onLine) {
+      try { updateNetStatus(); } catch (e) {}
+    }
   }
 
   function schedulePushIfAuto() {
