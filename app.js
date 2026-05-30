@@ -16344,6 +16344,11 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
       const prompt = document.getElementById("updatePrompt");
       if (prompt) prompt.hidden = false;
 
+      // Auto-install path: when the toggle is on and the app is in the
+      // background (or about to be), apply the update silently. Otherwise
+      // we still show the pill and rely on the user tap.
+      maybeAutoInstallUpdate();
+
       // Also push an OS-level notification so users see the update on iOS
       // home screen / Windows action center even if the app isn't focused.
       // showSystemNotification respects the user's notify toggle and skips
@@ -16404,6 +16409,65 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
       const prompt = document.getElementById("updatePrompt");
       if (prompt) prompt.hidden = true;
     });
+
+    // Auto-install: if the user opted in, apply the pending update either
+    // (a) immediately when it arrives and the app is hidden, or
+    // (b) the next time the app becomes hidden, or
+    // (c) after 60s of idle (no input) while visible.
+    let _autoUpdateIdleTimer = null;
+    function maybeAutoInstallUpdate() {
+      if (localStorage.getItem("mb_auto_update") !== "true") return;
+      const sw = window._pendingSW;
+      if (!sw || typeof sw.postMessage !== "function") return;
+      const apply = () => {
+        try { sw.postMessage("skipWaiting"); } catch (_) {}
+      };
+      // If hidden right now, install immediately
+      if (document.visibilityState === "hidden") {
+        apply();
+        return;
+      }
+      // Otherwise queue for next "hidden" or 60s idle window
+      const onHidden = () => {
+        if (document.visibilityState === "hidden") {
+          apply();
+          document.removeEventListener("visibilitychange", onHidden);
+          if (_autoUpdateIdleTimer) { clearTimeout(_autoUpdateIdleTimer); _autoUpdateIdleTimer = null; }
+        }
+      };
+      document.addEventListener("visibilitychange", onHidden);
+      // Idle-timer fallback (desktop browser tab that stays visible) — install after 60s of no input
+      const resetIdle = () => {
+        if (_autoUpdateIdleTimer) clearTimeout(_autoUpdateIdleTimer);
+        _autoUpdateIdleTimer = setTimeout(() => {
+          // Only if a modal isn't open (don't interrupt typing)
+          const modalOpen = !!document.querySelector(".modal.open");
+          if (modalOpen) return;
+          apply();
+          document.removeEventListener("visibilitychange", onHidden);
+        }, 60 * 1000);
+      };
+      ["mousemove", "keydown", "touchstart", "scroll"].forEach((evt) => {
+        window.addEventListener(evt, resetIdle, { passive: true });
+      });
+      resetIdle();
+    }
+
+    // Auto-update toggle in Settings
+    const autoUpdateTog = document.getElementById("autoUpdateToggle");
+    if (autoUpdateTog) {
+      autoUpdateTog.checked = localStorage.getItem("mb_auto_update") === "true";
+      autoUpdateTog.addEventListener("change", (e) => {
+        localStorage.setItem("mb_auto_update", e.target.checked ? "true" : "false");
+        if (e.target.checked) {
+          showToast("⚡ Auto-install on — updates apply silently in the background");
+          // If a pending update is already waiting, start the auto-install flow now
+          if (window._pendingSW) maybeAutoInstallUpdate();
+        } else {
+          showToast("Auto-install off — updates wait for your tap");
+        }
+      });
+    }
 
     // Live system theme follow — when user picks "Auto" (no saved theme) and system flips
     if (window.matchMedia) {
