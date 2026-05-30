@@ -5260,7 +5260,27 @@
 
     const list = $("#expenseList");
     if (!items.length) {
-      list.innerHTML = '<li class="empty">No transactions match your filters.</li>';
+      // Detect whether any filter is actually narrowing — if not, this is the
+      // "no transactions yet" empty state, not a filter-induced one.
+      const anyFilter = !!(filters.start || filters.end || filters.search
+        || filters.hideTransfers || filters.eventId
+        || (filters.types && filters.types.size > 0)
+        || filters.categories.size > 0 || filters.people.size > 0 || filters.tags.size > 0);
+      if (anyFilter) {
+        list.innerHTML = `
+          <li class="empty empty-filtered">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-title">No transactions match these filters</div>
+            <div class="empty-sub">Try removing one of the chips above, or clear them all to see everything.</div>
+            <button type="button" class="btn-secondary" data-empty-clear>Clear all filters</button>
+          </li>`;
+        list.querySelector("[data-empty-clear]")?.addEventListener("click", () => {
+          const clearBtn = $("#clearFilters");
+          if (clearBtn) clearBtn.click();
+        });
+      } else {
+        list.innerHTML = '<li class="empty">No transactions yet. Tap + to add one.</li>';
+      }
     } else if (filters.groupByDay && (filters.sort === "date-desc" || filters.sort === "date-asc")) {
       list.innerHTML = renderGroupedTxns(items);
       attachReceiptClicks(list);
@@ -5309,7 +5329,85 @@
       }
     }
 
+    // Active filters row — clickable chips showing exactly what's filtered;
+    // tap any chip to remove that filter without going back to the sidebar.
+    renderActiveFiltersRow();
+
     updateBulkBar();
+  }
+
+  function renderActiveFiltersRow() {
+    const row = document.getElementById("activeFiltersRow");
+    if (!row) return;
+    const chips = [];
+    const chip = (label, onRemove, cls = "") =>
+      `<button type="button" class="active-filter-chip ${cls}" data-active-filter>${escapeHtml(label)} <span aria-hidden="true">×</span></button>`;
+
+    if (filters.start) chips.push({ html: chip(`From ${filters.start}`), action: () => { filters.start = ""; const el = $("#filterStart"); if (el) el.value = ""; } });
+    if (filters.end) chips.push({ html: chip(`To ${filters.end}`), action: () => { filters.end = ""; const el = $("#filterEnd"); if (el) el.value = ""; } });
+    if (filters.types && filters.types.size > 0) {
+      filters.types.forEach((t) => {
+        const lbl = t === "income" ? "💰 Income" : t === "expense" ? "💸 Expense" : "↔️ Transfer";
+        chips.push({ html: chip(lbl), action: () => {
+          filters.types.delete(t);
+          document.querySelectorAll("[data-type-chip]").forEach((el) => {
+            el.classList.toggle("off", !filters.types.has(el.dataset.typeChip));
+          });
+        }});
+      });
+    }
+    if (filters.categories.size > 0) {
+      filters.categories.forEach((id) => {
+        let label;
+        if (id === "__uncat__") label = "❓ Uncategorized";
+        else {
+          const c = state.categories.find((x) => x.id === id);
+          label = c ? c.name : "Category";
+        }
+        chips.push({ html: chip(label), action: () => { filters.categories.delete(id); renderFilterChips(); } });
+      });
+    }
+    if (filters.people.size > 0) {
+      filters.people.forEach((id) => {
+        const p = state.people.find((x) => x.id === id);
+        chips.push({ html: chip(p ? `→ ${p.name}` : "Person"), action: () => { filters.people.delete(id); renderPersonFilterChips(); } });
+      });
+    }
+    if (filters.tags.size > 0) {
+      filters.tags.forEach((tag) => {
+        chips.push({ html: chip(`#${tag}`), action: () => { filters.tags.delete(tag); renderTagFilterChips(); } });
+      });
+    }
+    if (filters.search) {
+      chips.push({ html: chip(`🔍 "${filters.search}"`), action: () => { filters.search = ""; const el = $("#txnSearch"); if (el) el.value = ""; } });
+    }
+    if (filters.hideTransfers) {
+      chips.push({ html: chip("Hide transfers"), action: () => { filters.hideTransfers = false; const el = $("#hideTransfersToggle"); if (el) el.checked = false; } });
+    }
+    if (filters.eventId) {
+      const ev = (state.events || []).find((x) => x.id === filters.eventId);
+      chips.push({ html: chip(ev ? `🌴 ${ev.name}` : "Event"), action: () => { filters.eventId = ""; const el = $("#filterEvent"); if (el) el.value = ""; } });
+    }
+
+    if (chips.length === 0) {
+      row.hidden = true;
+      row.innerHTML = "";
+      return;
+    }
+    row.hidden = false;
+    row.innerHTML = chips.map((c) => c.html).join("") +
+      `<button type="button" class="active-filter-chip active-filter-clear" data-clear-all>Clear all</button>`;
+    const chipBtns = row.querySelectorAll("[data-active-filter]");
+    chipBtns.forEach((btn, idx) => {
+      btn.addEventListener("click", () => {
+        chips[idx].action();
+        renderTransactions();
+      });
+    });
+    row.querySelector("[data-clear-all]")?.addEventListener("click", () => {
+      const clearBtn = $("#clearFilters");
+      if (clearBtn) clearBtn.click();
+    });
   }
 
   function renderGroupedTxns(items) {
@@ -14250,7 +14348,20 @@ ${b64}`;
   }
   function initKeyboardShortcuts() {
     document.addEventListener("keydown", (e) => {
-      // Don't fire if typing in input/textarea/contenteditable
+      // Escape closes any open modal — handled even when an input is focused
+      if (e.key === "Escape") {
+        const openModals = document.querySelectorAll(".modal.open");
+        if (openModals.length > 0) {
+          openModals.forEach((m) => m.classList.remove("open"));
+          // Blur active input so iOS keyboard dismisses
+          if (document.activeElement && typeof document.activeElement.blur === "function") {
+            document.activeElement.blur();
+          }
+          return;
+        }
+      }
+
+      // Don't fire other shortcuts if typing in input/textarea/contenteditable
       const t = e.target;
       if (
         t.tagName === "INPUT" ||
@@ -14258,11 +14369,8 @@ ${b64}`;
         t.tagName === "SELECT" ||
         t.isContentEditable
       ) return;
-      // Don't fire if a modal is open
+      // Don't fire if a modal is open (already handled Escape above)
       if (document.querySelector(".modal.open")) {
-        if (e.key === "Escape") {
-          document.querySelectorAll(".modal.open").forEach((m) => m.classList.remove("open"));
-        }
         return;
       }
       // Don't fire if app is locked
