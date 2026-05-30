@@ -604,6 +604,8 @@
         handleStorageQuotaError(e);
       }
     }
+    // Proactive storage warning (cheap; runs once per save)
+    try { checkStorageUsage(); } catch (e) {}
   }
 
   // Best-effort handler for localStorage quota errors. Warns the user once per
@@ -620,6 +622,33 @@
         showAlertToast("⚠️ Device storage is full. Recent changes may not save. Delete old receipts to free space.", "danger");
       } catch (e) { /* ignore */ }
     }
+  }
+
+  // Proactively warn when localStorage is approaching the ~5MB limit.
+  // Estimates total bytes used across all keys; warns once at 80%.
+  let _storageLowWarned = false;
+  function checkStorageUsage() {
+    if (_storageLowWarned) return;
+    try {
+      let total = 0;
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        const v = localStorage.getItem(k);
+        if (v) total += k.length + v.length;
+      }
+      // Browsers commonly cap localStorage at 5 MB (~5,242,880 chars). UTF-16 = 2 bytes/char so cap is roughly 2.5 MB of useful data.
+      // We'll measure in chars and warn at ~80% of 5MB = 4 million chars.
+      const CAP = 5 * 1024 * 1024;
+      if (total > CAP * 0.8) {
+        _storageLowWarned = true;
+        const pct = Math.round((total / CAP) * 100);
+        const receiptCount = (state.expenses || []).filter((e) => e.receipt).length;
+        const tip = receiptCount > 0
+          ? `Strip ${receiptCount} receipt photo${receiptCount === 1 ? "" : "s"} via Settings → Reset Specific Data.`
+          : "Export a backup, then clear old transactions in Settings.";
+        showAlertToast(`💾 Storage ${pct}% full. ${tip}`, "warning");
+      }
+    } catch (e) { /* ignore */ }
   }
 
   /* ---------- Recurring transactions ---------- */
@@ -13826,6 +13855,15 @@
     window.removeEventListener("offline", handleOffline);
     window.addEventListener("offline", handleOffline);
 
+    // Connection quality changes (Network Information API)
+    try {
+      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (conn && !conn._mbWired) {
+        conn.addEventListener("change", () => { try { updateNetStatus(); } catch (e) {} });
+        conn._mbWired = true;
+      }
+    } catch (e) {}
+
     // Visibility change — pull when returning to app
     document.removeEventListener("visibilitychange", handleVisibility);
     document.addEventListener("visibilitychange", handleVisibility);
@@ -13847,15 +13885,36 @@
 
   function updateNetStatus() {
     const online = navigator.onLine;
+    // Detect connection quality
+    let quality = "ok";
+    try {
+      const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      if (conn && conn.effectiveType) {
+        if (["slow-2g", "2g"].includes(conn.effectiveType)) quality = "slow";
+        else if (conn.saveData) quality = "slow";
+      }
+    } catch (e) {}
 
     // Topbar pill
     const el = $("#netStatusIndicator");
     if (el) {
-      el.className = `net-status ${online ? "online" : "offline"}`;
-      el.innerHTML = `<span class="label">${online ? "Online" : "Offline"}</span>`;
-      el.title = online
-        ? "Connected — sync and AI insights available"
-        : "Offline — changes saved locally, will sync when reconnected";
+      let statusClass, statusLabel, statusTitle;
+      if (!online) {
+        statusClass = "offline";
+        statusLabel = "Offline";
+        statusTitle = "Offline — changes saved locally, will sync when reconnected";
+      } else if (quality === "slow") {
+        statusClass = "slow";
+        statusLabel = "Slow";
+        statusTitle = "Slow connection — sync may take longer than usual";
+      } else {
+        statusClass = "online";
+        statusLabel = "Online";
+        statusTitle = "Connected — sync and AI insights available";
+      }
+      el.className = `net-status ${statusClass}`;
+      el.innerHTML = `<span class="label">${statusLabel}</span>`;
+      el.title = statusTitle;
       // Make tappable for quick detail (idempotent — re-registering is fine)
       if (!el._wiredClick) {
         el.style.cursor = "pointer";
@@ -13865,6 +13924,8 @@
           let detail;
           if (!isOnline) {
             detail = "📵 Offline · changes saved locally";
+          } else if (quality === "slow") {
+            detail = "🟡 Slow connection · sync may be slow";
           } else if (lastSync) {
             const ago = Date.now() - lastSync;
             const m = Math.floor(ago / 60000);
@@ -13910,8 +13971,26 @@
         banner = document.createElement("div");
         banner.id = "offlineBanner";
         banner.className = "offline-banner";
-        banner.innerHTML = `<span>${msg}</span>`;
+        banner.innerHTML = `<span>${msg}</span><button type="button" class="offline-banner-retry">🔁 Retry sync</button>`;
         document.body.appendChild(banner);
+        // Wire the retry button
+        const retryBtn = banner.querySelector(".offline-banner-retry");
+        if (retryBtn) {
+          retryBtn.addEventListener("click", async () => {
+            retryBtn.disabled = true;
+            retryBtn.textContent = "Trying…";
+            try {
+              if (typeof syncPush === "function") {
+                await syncPush({ silent: false });
+              }
+            } catch (e) {
+              showToast("Retry failed — still offline");
+            } finally {
+              retryBtn.disabled = false;
+              retryBtn.textContent = "🔁 Retry sync";
+            }
+          });
+        }
         // Cancel any pending removal from a previous offline→online flicker
         if (banner._removalTimer) {
           clearTimeout(banner._removalTimer);
@@ -15313,6 +15392,38 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     } catch (e) { /* ignore */ }
     // Apply saved/detected locale before initial render
     try { if (window.i18n) window.i18n.applyTranslations(); } catch (e) {}
+
+    // SW update prompt — show pill when a new version is ready
+    window.addEventListener("mb:sw-update-ready", () => {
+      const prompt = document.getElementById("updatePrompt");
+      if (prompt) prompt.hidden = false;
+    });
+    document.getElementById("updatePromptBtn")?.addEventListener("click", () => {
+      const sw = window._pendingSW;
+      if (sw && typeof sw.postMessage === "function") {
+        sw.postMessage("skipWaiting");
+      } else {
+        window.location.reload();
+      }
+    });
+    document.getElementById("updatePromptDismiss")?.addEventListener("click", () => {
+      const prompt = document.getElementById("updatePrompt");
+      if (prompt) prompt.hidden = true;
+    });
+
+    // Live system theme follow — when user picks "Auto" (no saved theme) and system flips
+    if (window.matchMedia) {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      const onSysThemeChange = (e) => {
+        // Only follow system if user hasn't explicitly picked a theme
+        if (!localStorage.getItem(KEYS.theme)) {
+          applyTheme(e.matches ? "dark" : "light");
+        }
+      };
+      // Modern + legacy listener pattern
+      if (mq.addEventListener) mq.addEventListener("change", onSysThemeChange);
+      else if (mq.addListener) mq.addListener(onSysThemeChange);
+    }
     processSyncSetupHash();
     initLock();
     initNav();

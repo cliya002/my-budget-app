@@ -1,5 +1,5 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v155";
+const CACHE = "pocket-budget-v156";
 const ASSETS = [
   "./",
   "./index.html",
@@ -23,6 +23,13 @@ self.addEventListener("install", (event) => {
     caches.open(CACHE).then((cache) => cache.addAll(ASSETS)).catch(() => {})
   );
   self.skipWaiting();
+});
+
+// Listen for the "skipWaiting" message from the page to activate the new SW immediately
+self.addEventListener("message", (event) => {
+  if (event.data === "skipWaiting") {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener("activate", (event) => {
