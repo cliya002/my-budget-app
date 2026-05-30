@@ -1007,7 +1007,8 @@
       currency = state.settings.currency;
       localStorage.setItem(KEYS.currency, currency);
     }
-    $("#monthLabel").textContent = monthLabel(currentMonth());
+    const monthLabelEl = $("#monthLabel");
+    if (monthLabelEl) monthLabelEl.textContent = monthLabel(currentMonth());
     renderDashboard();
     renderBalances();
     renderTransactions();
@@ -1033,8 +1034,9 @@
     populateEventSelect();
     populateEventFilterSelect();
     populateInsightsEventFilter();
-    $("#currencySelect").value = currency;
-    $("#rolloverToggle").checked = !!state.settings.rollover;
+    $("#currencySelect") && ($("#currencySelect").value = currency);
+    const rolloverEl = $("#rolloverToggle");
+    if (rolloverEl) rolloverEl.checked = !!state.settings.rollover;
     populateDefaultsSelects();
     renderBackupHealth();
     renderAccountCategoryMap();
@@ -1225,12 +1227,13 @@
     const ctx = $("#chartGoalsTimeline");
     if (!ctx) return;
     const goalsWithDates = state.goals.filter((g) => g.date && Number(g.target) > 0);
+    const emptyEl = $("#goalsTimelineEmpty");
     if (!goalsWithDates.length) {
-      $("#goalsTimelineEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#goalsTimelineEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
     const sorted = [...goalsWithDates].sort((a, b) => a.date.localeCompare(b.date));
@@ -5559,12 +5562,12 @@
   function latestScore() {
     if (!state.creditScores.length) return null;
     return [...state.creditScores].sort((a, b) =>
-      b.date.localeCompare(a.date)
+      String(b.date || "").localeCompare(String(a.date || ""))
     )[0];
   }
   function previousScore() {
     if (state.creditScores.length < 2) return null;
-    const sorted = [...state.creditScores].sort((a, b) => b.date.localeCompare(a.date));
+    const sorted = [...state.creditScores].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
     return sorted[1];
   }
 
@@ -7615,21 +7618,24 @@
     if (!ctx) return;
 
     const history = state.netWorthHistory || [];
+    const emptyEl = $("#netWorthEmpty");
     if (history.length < 2) {
-      $("#netWorthEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#netWorthEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
-    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...history].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
     const labels = sorted.map((s) => {
-      const [y, m, d] = s.date.split("-");
+      const parts = String(s.date || "").split("-");
+      if (parts.length < 3) return s.date || "";
+      const [y, m, d] = parts;
       return new Date(Number(y), Number(m) - 1, Number(d))
         .toLocaleDateString(undefined, { month: "short", day: "numeric" });
     });
-    const data = sorted.map((s) => s.value);
+    const data = sorted.map((s) => Number(s.value) || 0);
 
     charts.netWorth = new Chart(ctx, {
       type: "line",
@@ -7811,7 +7817,7 @@
     expenses.forEach((e) => {
       if (!Array.isArray(e.tags) || !e.tags.length) return;
       e.tags.forEach((t) => {
-        totals[t] = (totals[t] || 0) + Number(e.amount);
+        totals[t] = (totals[t] || 0) + (Number(e.amount) || 0);
       });
     });
     const labels = Object.keys(totals);
@@ -13459,7 +13465,7 @@
           <div class="modal-header">
             <h2>⚠️ Sync Conflict</h2>
           </div>
-          <p>Cloud was updated by another device <strong>${new Date(remoteTime).toLocaleString()}</strong> (${remotePayload.device || "unknown device"}).</p>
+          <p>Cloud was updated by another device <strong>${new Date(remoteTime).toLocaleString()}</strong> (${escapeHtml(remotePayload.device || "unknown device")}).</p>
           <p>Your local changes are <strong>${formatSyncRelative(lastSyncedAt)}</strong>. What do you want to do?</p>
           <div style="display:flex;flex-direction:column;gap:0.5rem;margin-top:1rem">
             <button class="btn-secondary" data-conflict="pull">⬇️ Pull cloud (replace local)</button>
@@ -13469,12 +13475,23 @@
         </div>
       `;
       document.body.appendChild(overlay);
+
+      const cleanup = (choice) => {
+        document.removeEventListener("keydown", onKey);
+        overlay.remove();
+        resolve(choice);
+      };
+      const onKey = (e) => {
+        if (e.key === "Escape") cleanup("cancel");
+      };
+      document.addEventListener("keydown", onKey);
+
       overlay.querySelectorAll("[data-conflict]").forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const choice = btn.dataset.conflict;
-          overlay.remove();
-          resolve(choice);
-        });
+        btn.addEventListener("click", () => cleanup(btn.dataset.conflict));
+      });
+      // Click outside the card cancels
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) cleanup("cancel");
       });
     });
   }
@@ -13645,8 +13662,15 @@
 
   function processSyncSetupHash() {
     if (!location.hash || !location.hash.startsWith("#sync=")) return;
-    const data = decodeURIComponent(location.hash.slice(6));
-    const [token, gistId] = data.split("|").map(decodeURIComponent);
+    let data, token, gistId;
+    try {
+      data = decodeURIComponent(location.hash.slice(6));
+      [token, gistId] = data.split("|").map(decodeURIComponent);
+    } catch (e) {
+      // Malformed hash — clear it and bail
+      history.replaceState(null, "", location.pathname);
+      return;
+    }
     if (!token || !gistId) return;
     if (confirm("Set up cloud sync from a paired device? This saves the token + Gist ID locally.")) {
       localStorage.setItem(KEYS.syncToken, token);
@@ -13880,11 +13904,12 @@
         : ev.status === "error" ? "negative"
         : "";
       const dev = ev.device ? ` · ${escapeHtml(ev.device)}` : "";
+      const action = escapeHtml(String(ev.action || "").toUpperCase());
       return `
         <li class="list-item">
           <div class="list-item-main">
-            <div class="list-item-title ${cls}">${icon} ${ev.action.toUpperCase()}${dev}</div>
-            <div class="list-item-sub">${time} · ${escapeHtml(ev.message)}</div>
+            <div class="list-item-title ${cls}">${icon} ${action}${dev}</div>
+            <div class="list-item-sub">${escapeHtml(time)} · ${escapeHtml(String(ev.message || ""))}</div>
           </div>
         </li>`;
     }).join("");
