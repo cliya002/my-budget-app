@@ -5164,7 +5164,7 @@
         <div class="txn-info">
           <div class="txn-id">#${exp.id.slice(-4).toUpperCase()}</div>
           <div class="txn-name">${escapeHtml(exp.desc)}</div>
-          <div class="txn-cat">${escapeHtml(catName)}</div>
+          <button type="button" class="txn-cat txn-cat-btn" data-action="quick-cat" data-id="${exp.id}" title="Tap to change category">${escapeHtml(catName)}</button>
           ${personHtml}
           ${eventHtml}
           ${tagsHtml}
@@ -12350,17 +12350,33 @@
       renderTransactions();
     });
 
-    // Sort & group toolbar
+    // Sort & group toolbar — persist preferences across sessions
+    const savedSort = localStorage.getItem("mb_txn_sort");
+    if (savedSort) filters.sort = savedSort;
+    const sortEl = $("#txnSort");
+    if (sortEl) sortEl.value = filters.sort;
+    const savedGroupByDay = localStorage.getItem("mb_txn_group_by_day");
+    if (savedGroupByDay !== null) filters.groupByDay = savedGroupByDay === "true";
+    const groupEl = $("#groupByDayToggle");
+    if (groupEl) groupEl.checked = !!filters.groupByDay;
+    const savedHideTransfers = localStorage.getItem("mb_txn_hide_transfers");
+    if (savedHideTransfers !== null) filters.hideTransfers = savedHideTransfers === "true";
+    const htEl = $("#hideTransfersToggle");
+    if (htEl) htEl.checked = !!filters.hideTransfers;
+
     $("#txnSort").addEventListener("change", (e) => {
       filters.sort = e.target.value;
+      localStorage.setItem("mb_txn_sort", e.target.value);
       renderTransactions();
     });
     $("#groupByDayToggle").addEventListener("change", (e) => {
       filters.groupByDay = e.target.checked;
+      localStorage.setItem("mb_txn_group_by_day", e.target.checked ? "true" : "false");
       renderTransactions();
     });
     $("#hideTransfersToggle")?.addEventListener("change", (e) => {
       filters.hideTransfers = e.target.checked;
+      localStorage.setItem("mb_txn_hide_transfers", e.target.checked ? "true" : "false");
       renderTransactions();
     });
     $("#filterEvent")?.addEventListener("change", (e) => {
@@ -12822,6 +12838,13 @@
       } else if (action === "edit-exp") {
         const exp = state.expenses.find((x) => x.id === id);
         if (exp) openExpenseModal(exp);
+      } else if (action === "quick-cat") {
+        // Inline category swap — open the searchable picker for a single txn
+        if (!state.categories.length) {
+          showToast("Add a category first");
+          return;
+        }
+        openBulkRecatModal([id]);
       } else if (action === "del-preset") {
         if (confirm("Delete this preset?")) {
           tombstoneRecord("presets", id);
