@@ -1,5 +1,5 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v163";
+const CACHE = "pocket-budget-v164";
 const ASSETS = [
   "./",
   "./index.html",
@@ -25,10 +25,15 @@ self.addEventListener("install", (event) => {
   self.skipWaiting();
 });
 
-// Listen for the "skipWaiting" message from the page to activate the new SW immediately
+// Listen for messages from the page
 self.addEventListener("message", (event) => {
   if (event.data === "skipWaiting") {
     self.skipWaiting();
+  } else if (event.data === "getVersion") {
+    // Reply with the current cache version so the page can show "Updated to vN"
+    if (event.source && event.source.postMessage) {
+      event.source.postMessage({ type: "version", version: CACHE });
+    }
   }
 });
 

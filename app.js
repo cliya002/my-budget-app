@@ -4052,7 +4052,22 @@
       if (Notification.permission !== "granted") return;
       // Skip if app is in foreground & visible — toast already shown
       if (typeof document !== "undefined" && document.visibilityState === "visible") return;
-      new Notification(title, { body, icon: "icon-192.svg", tag: `pocket-budget-${title}` });
+      const n = new Notification(title, {
+        body,
+        icon: "icon-192.svg",
+        tag: `pocket-budget-${title}`,
+        // Persist on Android/desktop until user dismisses (helps update notifications stick around)
+        requireInteraction: /update/i.test(title),
+      });
+      // Tapping/clicking the notification focuses the app window (or opens it on iOS PWA)
+      n.onclick = () => {
+        try {
+          window.focus();
+          // If clicked from a closed tab, this brings the existing tab to front.
+          // For PWA installs on iOS / Windows, this opens the app.
+        } catch (_) {}
+        n.close();
+      };
     } catch (e) { /* ignore */ }
   }
 
@@ -12958,6 +12973,18 @@
     const sysNotifEl = $("#notifySystemToggle");
     if (sysNotifEl) {
       const supported = typeof Notification !== "undefined";
+
+      // Show iOS Safari hint when not installed to Home Screen — Notifications API
+      // only works in installed PWAs on iOS 16.4+, not in regular Safari tabs.
+      const ua = navigator.userAgent || "";
+      const isIos = /iPhone|iPad|iPod/i.test(ua);
+      const isStandalone = (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+        || window.navigator.standalone === true;
+      const iosHint = $("#notifyIosHint");
+      if (iosHint && isIos && !isStandalone) {
+        iosHint.hidden = false;
+      }
+
       if (!supported) {
         sysNotifEl.disabled = true;
         sysNotifEl.checked = false;
@@ -12971,7 +12998,7 @@
                 setSetting("notifyEnableSystem", true);
                 saveData();
                 showToast("🔔 System notifications enabled");
-                try { new Notification("Pocket Budget", { body: "System notifications are on.", icon: "icon-192.svg" }); } catch (_) {}
+                try { new Notification("Pocket Budget", { body: "You'll get notified about updates and alerts.", icon: "icon-192.svg" }); } catch (_) {}
               } else {
                 e.target.checked = false;
                 showAlertToast("Notification permission denied — enable it in your browser settings", "warning");
@@ -16316,6 +16343,54 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     window.addEventListener("mb:sw-update-ready", () => {
       const prompt = document.getElementById("updatePrompt");
       if (prompt) prompt.hidden = false;
+
+      // Also push an OS-level notification so users see the update on iOS
+      // home screen / Windows action center even if the app isn't focused.
+      // showSystemNotification respects the user's notify toggle and skips
+      // when the app is in the foreground (visible).
+      try {
+        // Read current version from the loaded script tag (?v=N)
+        let currentVer = "";
+        try {
+          const myScript = document.querySelector('script[src*="app.js?v="]');
+          const m = myScript?.src.match(/\?v=(\d+)/);
+          currentVer = m ? `v${m[1]}` : "";
+        } catch (e) { /* ignore */ }
+
+        // Ask the new SW for its cache version (best effort)
+        const sw = window._pendingSW;
+        let newVer = "";
+        if (sw && typeof sw.postMessage === "function") {
+          try {
+            const channel = new MessageChannel();
+            channel.port1.onmessage = (ev) => {
+              if (ev.data && ev.data.type === "version") {
+                const match = String(ev.data.version || "").match(/v(\d+)/);
+                if (match) newVer = `v${match[1]}`;
+                fireUpdateNotification(currentVer, newVer);
+              }
+            };
+            sw.postMessage("getVersion", [channel.port2]);
+            // Fallback if SW doesn't reply within 1s
+            setTimeout(() => {
+              if (!newVer) fireUpdateNotification(currentVer, "");
+            }, 1000);
+          } catch (e) {
+            fireUpdateNotification(currentVer, "");
+          }
+        } else {
+          fireUpdateNotification(currentVer, "");
+        }
+
+        function fireUpdateNotification(curr, next) {
+          if (typeof showSystemNotification !== "function") return;
+          const title = "📦 Pocket Budget update available";
+          const body = next && curr
+            ? `Tap to install ${next} (you're on ${curr}).`
+            : (next ? `Tap to install ${next}.` : "Open the app to install the update.");
+          showSystemNotification(title, body);
+        }
+      } catch (e) { /* ignore */ }
     });
     document.getElementById("updatePromptBtn")?.addEventListener("click", () => {
       const sw = window._pendingSW;
