@@ -192,8 +192,13 @@
         const [from, to] = key.split("_");
         if (!confirm(`Delete FX rate ${from} → ${to}?`)) return;
         if (state.fxRates) {
+          // Tombstone both directions so the delete propagates via sync (otherwise other devices re-add it)
+          if (typeof tombstoneMapKey === "function") {
+            tombstoneMapKey("fxRates", key);
+            tombstoneMapKey("fxRates", `${to}_${from}`);
+          }
           delete state.fxRates[key];
-          delete state.fxRates[`${to}_${from}`]; // also delete the inverse
+          delete state.fxRates[`${to}_${from}`];
           saveData();
           renderFxRatesList();
           showToast("💱 FX rate removed");
@@ -204,6 +209,16 @@
 
   const todayStr = () => {
     const d = new Date();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${d.getFullYear()}-${m}-${day}`;
+  };
+
+  // Local timezone-safe YYYY-MM-DD from a Date object. Critical: do not use
+  // d.toISOString().slice(0, 10) — that's UTC and will be off by a day for users
+  // in negative-UTC timezones, breaking streak/forecast/heatmap matching.
+  const localDateStr = (d) => {
+    if (!(d instanceof Date) || isNaN(d.getTime())) return "";
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return `${d.getFullYear()}-${m}-${day}`;
@@ -3928,6 +3943,19 @@
     const alertsShown = state.settings.alertsShown;
     let changed = false;
 
+    // Bounded cleanup: remove alertsShown entries older than 6 months to prevent unbounded localStorage growth
+    Object.keys(alertsShown).forEach((k) => {
+      // Keys look like "YYYY-MM:catId:80" or "overbudget_YYYY-MM"
+      const match = k.match(/(\d{4}-\d{2})/);
+      if (!match) return;
+      const keyMonth = match[1];
+      // Compute months difference: keyYY*12+keyMM vs current
+      const [ky, km] = keyMonth.split("-").map(Number);
+      const [cy, cm] = month.split("-").map(Number);
+      const diff = (cy - ky) * 12 + (cm - km);
+      if (diff > 6) { delete alertsShown[k]; changed = true; }
+    });
+
     state.categories.forEach((cat) => {
       const limit = effectiveLimitFor(cat, month);
       if (limit <= 0) return;
@@ -3980,7 +4008,7 @@
       if (Notification.permission !== "granted") return;
       // Skip if app is in foreground & visible — toast already shown
       if (typeof document !== "undefined" && document.visibilityState === "visible") return;
-      new Notification(title, { body, icon: "icon-192.svg", tag: "pocket-budget" });
+      new Notification(title, { body, icon: "icon-192.svg", tag: `pocket-budget-${title}` });
     } catch (e) { /* ignore */ }
   }
 
@@ -4388,7 +4416,7 @@
     for (let i = 6; i >= 0; i--) {
       const d = new Date(today);
       d.setDate(today.getDate() - i);
-      const ds = d.toISOString().slice(0, 10);
+      const ds = localDateStr(d);
       const total = state.expenses
         .filter((e) => e.date === ds && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
         .reduce((s, e) => s + Number(e.amount), 0);
@@ -4465,14 +4493,23 @@
     // Streak: count consecutive past days ending yesterday (or today if isCurrentMonth) where daily total < daily budget
     const dailyBudget = totalLimit > 0 ? totalLimit / daysInMonth : 0;
     let streak = 0;
-    if (dailyBudget > 0) {
+    if (dailyBudget > 0 && state.expenses.length > 0) {
+      // Only count back to the date of the first transaction — otherwise a fresh user with no data
+      // would falsely show a 364-day "streak". This makes the streak meaningful.
+      const earliestDateStr = state.expenses
+        .map((e) => e.date)
+        .filter(Boolean)
+        .sort()[0];
+      const earliestDate = earliestDateStr ? new Date(earliestDateStr + "T00:00:00") : null;
+
       const startDate = new Date(now);
       // Start from yesterday so today (in-progress) doesn't break the streak prematurely
       startDate.setDate(startDate.getDate() - 1);
       for (let i = 0; i < 365; i++) {
         const d = new Date(startDate);
         d.setDate(startDate.getDate() - i);
-        const ds = d.toISOString().slice(0, 10);
+        if (earliestDate && d < earliestDate) break;
+        const ds = localDateStr(d);
         const dayTotal = state.expenses
           .filter((e) => e.date === ds && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
           .reduce((s, e) => s + Number(e.amount), 0);
@@ -5733,7 +5770,7 @@
       const active = isInquiryActive(i.date);
       const fallOff = new Date(i.date);
       fallOff.setMonth(fallOff.getMonth() + 24);
-      const fallOffStr = fallOff.toISOString().slice(0, 10);
+      const fallOffStr = localDateStr(fallOff);
       const monthsLeft = Math.max(0, Math.round((fallOff - new Date()) / (30.44 * 24 * 60 * 60 * 1000)));
       html += `
         <li class="list-item ${active ? "" : "faded"}">
@@ -5771,7 +5808,7 @@
       const dt = new Date(n.date);
       const fallOff = new Date(dt);
       fallOff.setFullYear(fallOff.getFullYear() + fallOffYears(n.type));
-      const fallOffStr = fallOff.toISOString().slice(0, 10);
+      const fallOffStr = localDateStr(fallOff);
       const today = new Date();
       const months = Math.max(0, Math.round((fallOff - today) / (30.44 * 24 * 60 * 60 * 1000)));
       const fadedOff = fallOff <= today;
@@ -5934,7 +5971,7 @@
         const days = Math.ceil((next - today) / (24 * 60 * 60 * 1000));
         if (days <= 30) {
           events.push({
-            date: next.toISOString().slice(0, 10),
+            date: localDateStr(next),
             days,
             cardName: c.name,
             cardId: c.id,
@@ -7582,7 +7619,7 @@
       || text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+(\d{4})\b/i);
     if (reportFromMatch) {
       const d = new Date(reportFromMatch[0].replace(/^View report from\s+/i, ""));
-      if (!isNaN(d)) result.reportDate = d.toISOString().slice(0, 10);
+      if (!isNaN(d)) result.reportDate = localDateStr(d);
     }
 
     // Friendly name lookup for known creditor codes
@@ -7604,7 +7641,7 @@
       if (!str) return null;
       const cleaned = str.replace(/\./g, "").trim();
       const d = new Date(cleaned);
-      return isNaN(d) ? null : d.toISOString().slice(0, 10);
+      return isNaN(d) ? null : localDateStr(d);
     };
 
     // Strategy: find all "Reported: <date>" anchors. For each, the card name
@@ -8604,7 +8641,9 @@
     const dayTotals = new Map();
     expenses.forEach((e) => {
       if (!e.date) return;
-      const d = new Date(e.date);
+      // Parse as LOCAL date (not UTC) to match localDateStr() output below.
+      // new Date("2025-05-30") parses as UTC; appending T00:00:00 forces local interpretation.
+      const d = new Date(e.date + "T00:00:00");
       if (isNaN(d.getTime())) return;
       d.setHours(0, 0, 0, 0);
       if (d < startDate || d > today) return;
@@ -8631,7 +8670,7 @@
           cells.push({ empty: true });
           continue;
         }
-        const dateStr = d.toISOString().slice(0, 10);
+        const dateStr = localDateStr(d);
         const amount = dayTotals.get(dateStr) || 0;
         const intensity = amount === 0 ? 0 : Math.min(4, Math.ceil((amount / max) * 4));
         cells.push({
@@ -9247,7 +9286,6 @@
       if (amtInput && amtInput.value && parseFloat(amtInput.value) > 0) return;
       _ocrInFlight = true;
       const hint = document.getElementById("receiptPreview");
-      const oldDataset = hint ? hint.dataset.ocrLabel : null;
       if (hint) {
         const label = document.createElement("div");
         label.className = "card-sub";
@@ -9262,6 +9300,9 @@
       });
       const lbl = document.getElementById("receiptOcrLabel");
       if (lbl) lbl.remove();
+      // If user closed the modal while OCR ran, don't try to fill inputs
+      const modal = document.getElementById("expenseModal");
+      if (!modal || !modal.classList.contains("open")) return;
       if (!text) {
         showToast("Couldn't read receipt — type the amount manually");
         return;
@@ -9381,7 +9422,7 @@
     const longDate = text.match(/\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})\b/i);
     if (longDate) {
       const d = new Date(`${longDate[1]} ${longDate[2]}, ${longDate[3]}`);
-      if (!isNaN(d)) result.date = d.toISOString().slice(0, 10);
+      if (!isNaN(d)) result.date = localDateStr(d);
     }
     if (!result.date) {
       const slash = text.match(/Pay\s*Date\s*[:\-]?\s*(\d{1,2}\/\d{1,2}\/\d{2,4})/i)
@@ -9814,6 +9855,20 @@
       const amount = parseFloat($("#incomeMonthAmount").value);
       if (!m || isNaN(amount)) {
         showToast("Pick a month and enter an amount");
+        return;
+      }
+      // Validate YYYY-MM format and that the month is sensible (not year 1900 or 9999)
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) {
+        showToast("Month must be in YYYY-MM format");
+        return;
+      }
+      const yr = Number(m.slice(0, 4));
+      if (yr < 1970 || yr > 2200) {
+        showToast("Pick a sensible year");
+        return;
+      }
+      if (amount < 0) {
+        showToast("Income can't be negative");
         return;
       }
       setIncomeForMonth(m, amount);
@@ -12485,6 +12540,7 @@
         }
       } else if (action === "add-saving") {
         const input = document.querySelector(`[data-goal-input="${id}"]`);
+        if (!input) return;
         const amt = parseFloat(input.value);
         if (isNaN(amt) || amt <= 0) return;
         const goal = state.goals.find((g) => g.id === id);
@@ -12568,6 +12624,17 @@
         state.fxRates[`${from}_${to}`] = rate;
         // Also store the inverse for convenience
         state.fxRates[`${to}_${from}`] = 1 / rate;
+        // Stamp both directions so cross-device sync picks them up
+        if (!state.mapTimestamps) state.mapTimestamps = {};
+        if (!state.mapTimestamps.fxRates) state.mapTimestamps.fxRates = {};
+        const now = Date.now();
+        state.mapTimestamps.fxRates[`${from}_${to}`] = now;
+        state.mapTimestamps.fxRates[`${to}_${from}`] = now;
+        // Clear any previous tombstones for these keys
+        if (state.deletions && state.deletions.fxRates) {
+          delete state.deletions.fxRates[`${from}_${to}`];
+          delete state.deletions.fxRates[`${to}_${from}`];
+        }
         saveData();
         renderFxRatesList();
         showToast(`💱 Saved 1 ${from} = ${rate} ${to}`);
@@ -12954,12 +13021,16 @@ ${top || "  (none)"}
 — sent from Pocket Budget`;
         const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
         // Some platforms block long mailto URLs (~2k char limit). Truncate gracefully.
-        if (url.length > 2000) {
-          const trimmed = body.slice(0, 1500) + "\n…(truncated)";
-          window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(trimmed)}`;
-        } else {
-          window.location.href = url;
-        }
+        const finalBody = url.length > 2000 ? body.slice(0, 1500) + "\n…(truncated)" : body;
+        const finalUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(finalBody)}`;
+        // Use a temp anchor click — more reliable than window.location across browsers
+        const a = document.createElement("a");
+        a.href = finalUrl;
+        a.rel = "noopener";
+        a.style.display = "none";
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => a.remove(), 1000);
         showToast("📧 Email draft opened");
       } catch (err) {
         showAlertToast("Could not generate email summary", "danger");
@@ -12995,6 +13066,7 @@ ${top || "  (none)"}
           return { name: c.name, spent, limit: Number(c.limit) || 0 };
         });
         const snapshot = {
+          app: "pocket-budget-snapshot",
           v: 1,
           generatedAt: Date.now(),
           month,
@@ -13004,8 +13076,13 @@ ${top || "  (none)"}
           categories: catSnaps,
         };
         const json = JSON.stringify(snapshot);
-        // Base64-encode safely (UTF-8 friendly)
-        const b64 = btoa(unescape(encodeURIComponent(json)));
+        // Base64-encode safely (UTF-8 friendly, chunk to avoid call-stack limits)
+        const bytes = new TextEncoder().encode(json);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
+        const b64 = btoa(bin);
         // Build a printable text summary for sharing
         const textSummary =
 `Pocket Budget — Read-only Snapshot — ${month}
@@ -13094,6 +13171,7 @@ ${b64}`;
             billNegotiations: data.billNegotiations || [],
             incomeSources: data.incomeSources || [],
             events: data.events || [],
+            fxRates: data.fxRates || {},
             creditFreezes: data.creditFreezes || {},
             annualReports: data.annualReports || {},
             deletions: data.deletions || {},
@@ -13171,7 +13249,7 @@ ${b64}`;
           });
         });
         // Tombstone map-collection keys too
-        ["monthlyIncome", "creditFreezes", "annualReports"].forEach((key) => {
+        ["monthlyIncome", "creditFreezes", "annualReports", "fxRates"].forEach((key) => {
           if (!newDeletions[key]) newDeletions[key] = {};
           Object.keys(state[key] || {}).forEach((mk) => {
             newDeletions[key][mk] = now;
@@ -13201,6 +13279,7 @@ ${b64}`;
           billNegotiations: [],
           incomeSources: [],
           events: [],
+          fxRates: {},
           deletions: newDeletions,
           mapTimestamps: {},
           settingsTimestamps: {},
@@ -13303,7 +13382,7 @@ ${b64}`;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const dayMs = 86400000;
-    const fmtDate = (d) => d.toISOString().slice(0, 10);
+    const fmtDate = (d) => localDateStr(d);
     if (/\blast\s*week\b/.test(query)) {
       const start = new Date(today.getTime() - 7 * dayMs);
       dateRangeFilter = { from: fmtDate(start), to: fmtDate(today) };
@@ -13853,7 +13932,7 @@ ${b64}`;
       // Date normalize
       const d = new Date(dateRaw);
       if (isNaN(d.getTime())) { skipped += 1; return; }
-      const date = d.toISOString().slice(0, 10);
+      const date = localDateStr(d);
 
       // Type: negative = expense; positive = income (most US bank exports use this convention)
       const type = amount < 0 ? "expense" : "income";
