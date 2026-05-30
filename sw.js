@@ -1,11 +1,19 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v148";
+const CACHE = "pocket-budget-v149";
 const ASSETS = [
   "./",
   "./index.html",
   "./manifest.json",
   "./icon-192.svg",
   "./icon-512.svg",
+];
+
+// CDN libraries — cache on first fetch so they work offline next launch
+const CDN_HOSTS = [
+  "cdn.jsdelivr.net",
+  "cdnjs.cloudflare.com",
+  "fonts.googleapis.com",
+  "fonts.gstatic.com",
 ];
 
 self.addEventListener("install", (event) => {
@@ -25,8 +33,21 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  // Network-first for HTML so updates are picked up; cache-first for everything else
+  // Only handle GET; let everything else pass through (e.g. GitHub API POSTs)
+  if (event.request.method !== "GET") return;
+
   const url = new URL(event.request.url);
+
+  // Skip non-cacheable schemes
+  if (!url.protocol.startsWith("http")) return;
+
+  // GitHub Gist API and AI APIs — never cache, just pass through
+  // (offline failure is expected and handled in app code)
+  if (url.hostname === "api.github.com"
+      || url.hostname === "api.openai.com"
+      || url.hostname === "api.anthropic.com") {
+    return; // let browser handle (will error when offline)
+  }
 
   // Always fetch versioned core assets fresh from network — this lets cache-busting
   // ?v=N actually work without waiting for SW activation.
@@ -41,6 +62,25 @@ self.addEventListener("fetch", (event) => {
           return res;
         })
         .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // CDN libraries — stale-while-revalidate so they work offline after first fetch
+  if (CDN_HOSTS.includes(url.hostname)) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        const fetchPromise = fetch(event.request)
+          .then((res) => {
+            if (res && res.status === 200) {
+              const copy = res.clone();
+              caches.open(CACHE).then((c) => c.put(event.request, copy));
+            }
+            return res;
+          })
+          .catch(() => cached);
+        return cached || fetchPromise;
+      })
     );
     return;
   }
