@@ -3107,7 +3107,7 @@
 
     const headers = ["Date", "Type", "Description", "Category", "Person", "Tags", "Amount", "Currency", "Source", "Pre-Tax", "Receipt"];
     const txnRows = [...yearTxns]
-      .sort((a, b) => a.date.localeCompare(b.date))
+      .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
       .map((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
         const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
@@ -5173,20 +5173,23 @@
     const ctx = $("#chartUtilTrend");
     if (!ctx) return;
     const history = state.utilHistory || [];
+    const utilEmptyEl = $("#utilTrendEmpty");
     if (history.length < 2) {
-      $("#utilTrendEmpty").hidden = false;
+      if (utilEmptyEl) utilEmptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#utilTrendEmpty").hidden = true;
+    if (utilEmptyEl) utilEmptyEl.hidden = true;
     ctx.style.display = "block";
-    const sorted = [...history].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...history].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
     const labels = sorted.map((s) => {
-      const [y, m, d] = s.date.split("-");
+      const parts = String(s.date || "").split("-");
+      if (parts.length < 3) return s.date || "";
+      const [y, m, d] = parts;
       return new Date(Number(y), Number(m) - 1, Number(d))
         .toLocaleDateString(undefined, { month: "short", day: "numeric" });
     });
-    const data = sorted.map((s) => Number(s.util));
+    const data = sorted.map((s) => Number(s.util) || 0);
     charts.utilTrend = new Chart(ctx, {
       type: "line",
       data: {
@@ -7286,12 +7289,13 @@
     const sentTxns = familyTransactions();
     const recvTxns = familyReceivedTransactions();
     const allTxns = [...sentTxns, ...recvTxns];
+    const emptyEl = $("#familyTrendEmpty");
     if (!allTxns.length || !state.people.length) {
-      $("#familyTrendEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#familyTrendEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
     // Last 6 months totals per person (net = sent − received)
@@ -7447,22 +7451,23 @@
     const incomes = months.map((mk) =>
       state.expenses
         .filter((e) => monthKey(e.date) === mk && e.type === "income")
-        .reduce((s, e) => s + Number(e.amount), 0)
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0)
     );
     const spent = months.map((mk) =>
       state.expenses
         .filter((e) => monthKey(e.date) === mk && e.type !== "income"
           && e.type !== "transfer-in" && e.type !== "transfer-out")
-        .reduce((s, e) => s + Number(e.amount), 0)
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0)
     );
     const net = incomes.map((inc, i) => inc - spent[i]);
 
+    const emptyEl = $("#cashFlowEmpty");
     if (incomes.every((v) => v === 0) && spent.every((v) => v === 0)) {
-      $("#cashFlowEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#cashFlowEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
     const labels = months.map((mk) => {
@@ -7534,17 +7539,18 @@
 
     const totals = {};
     incomes.forEach((e) => {
-      totals[e.source] = (totals[e.source] || 0) + Number(e.amount);
+      totals[e.source] = (totals[e.source] || 0) + (Number(e.amount) || 0);
     });
     const labels = Object.keys(totals);
     const data = Object.values(totals);
 
+    const emptyEl = $("#incomeSourcesEmpty");
     if (!labels.length) {
-      $("#incomeSourcesEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#incomeSourcesEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
     charts.incomeSources = new Chart(ctx, {
@@ -7589,19 +7595,20 @@
     Object.keys(typeNames).forEach((key) => {
       const sum = incomes
         .filter((e) => (e.incomeType || "other") === key)
-        .reduce((s, e) => s + Number(e.amount), 0);
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0);
       if (sum > 0) {
         labels.push(typeNames[key]);
         totals.push(sum);
       }
     });
 
+    const emptyEl = $("#incomeTypeEmpty");
     if (!labels.length) {
-      $("#incomeTypeEmpty").hidden = false;
+      if (emptyEl) emptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#incomeTypeEmpty").hidden = true;
+    if (emptyEl) emptyEl.hidden = true;
     ctx.style.display = "block";
 
     charts.incomeType = new Chart(ctx, {
@@ -7839,12 +7846,13 @@
       });
     });
     const labels = Object.keys(totals);
+    const tagsEmptyEl = $("#tagsEmpty");
     if (!labels.length) {
-      $("#tagsEmpty").hidden = false;
+      if (tagsEmptyEl) tagsEmptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#tagsEmpty").hidden = true;
+    if (tagsEmptyEl) tagsEmptyEl.hidden = true;
     ctx.style.display = "block";
     const data = Object.values(totals);
     charts.tags = new Chart(ctx, {
