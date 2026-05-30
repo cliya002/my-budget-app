@@ -4034,13 +4034,14 @@
     });
   }
 
-  function exportCsv() {
-    if (!state.expenses.length) {
+  function exportCsv(sourceItems, filenameSuffix) {
+    const items = Array.isArray(sourceItems) ? sourceItems : state.expenses;
+    if (!items.length) {
       showToast("No transactions to export");
       return;
     }
     const headers = ["Date", "Type", "Description", "Category", "Person", "Amount", "Currency"];
-    const rows = [...state.expenses]
+    const rows = [...items]
       .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")))
       .map((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
@@ -4062,9 +4063,11 @@
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `pocket-budget-${todayStr()}.csv`;
+    const suffix = filenameSuffix ? `-${filenameSuffix}` : "";
+    a.download = `pocket-budget${suffix}-${todayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+    showToast(`Exported ${rows.length} txn${rows.length === 1 ? "" : "s"}`);
   }
 
   function csvEscape(value) {
@@ -5180,6 +5183,78 @@
       </li>`;
   }
 
+  // Returns the current filtered+sorted list of transactions (same logic as renderTransactions).
+  // Useful for exports, AI prompts, and other consumers that need the user's current view.
+  function getFilteredTransactions() {
+    let items = [...state.expenses];
+    if (filters.hideTransfers) {
+      items = items.filter((e) => e.type !== "transfer-in" && e.type !== "transfer-out");
+    }
+    if (filters.eventId) {
+      items = items.filter((e) => e.eventId === filters.eventId);
+    }
+    if (filters.types && filters.types.size > 0) {
+      items = items.filter((e) => {
+        if (filters.types.has("income") && e.type === "income") return true;
+        if (filters.types.has("expense") && e.type === "expense") return true;
+        if (filters.types.has("transfer") && (e.type === "transfer-in" || e.type === "transfer-out")) return true;
+        return false;
+      });
+    }
+    if (filters.start) items = items.filter((e) => e.date && e.date >= filters.start);
+    if (filters.end) items = items.filter((e) => e.date && e.date <= filters.end);
+    if (filters.categories.size > 0) {
+      const hasUncat = filters.categories.has("__uncat__");
+      const liveCatIds = new Set(state.categories.map((c) => c.id));
+      items = items.filter((e) => {
+        if (e.categoryId && filters.categories.has(e.categoryId)) return true;
+        if (hasUncat
+            && e.type !== "income"
+            && e.type !== "transfer-in"
+            && e.type !== "transfer-out"
+            && (!e.categoryId || !liveCatIds.has(e.categoryId))) return true;
+        return false;
+      });
+    }
+    if (filters.people.size > 0) {
+      items = items.filter((e) => e.personId && filters.people.has(e.personId));
+    }
+    if (filters.tags.size > 0) {
+      items = items.filter((e) => {
+        if (!Array.isArray(e.tags) || !e.tags.length) return false;
+        return e.tags.some((t) => filters.tags.has(String(t).trim().toLowerCase()));
+      });
+    }
+    if (filters.search) {
+      const q = filters.search.toLowerCase();
+      items = items.filter((e) => {
+        const cat = state.categories.find((c) => c.id === e.categoryId);
+        const catName = cat ? cat.name.toLowerCase() : "";
+        const tagsStr = (e.tags || []).join(" ").toLowerCase();
+        const person = e.personId ? state.people.find((p) => p.id === e.personId) : null;
+        const personName = person ? String(person.name || "").toLowerCase() : "";
+        const desc = String(e.desc || "").toLowerCase();
+        return (
+          desc.includes(q) ||
+          catName.includes(q) ||
+          tagsStr.includes(q) ||
+          personName.includes(q) ||
+          String(e.amount).includes(q)
+        );
+      });
+    }
+    items.sort((a, b) => {
+      switch (filters.sort) {
+        case "date-asc": return (a.date + a.id).localeCompare(b.date + b.id);
+        case "amount-desc": return Number(b.amount) - Number(a.amount);
+        case "amount-asc": return Number(a.amount) - Number(b.amount);
+        case "date-desc":
+        default: return (b.date + b.id).localeCompare(a.date + a.id);
+      }
+    });
+    return items;
+  }
+
   function renderTransactions() {
     let items = [...state.expenses];
 
@@ -5333,7 +5408,88 @@
     // tap any chip to remove that filter without going back to the sidebar.
     renderActiveFiltersRow();
 
+    // Saved views row — show user's saved filter combinations + Export filtered btn visibility
+    renderSavedViews();
+    const anyFilterActive = !!(filters.start || filters.end || filters.search
+      || filters.hideTransfers || filters.eventId
+      || (filters.types && filters.types.size > 0)
+      || filters.categories.size > 0 || filters.people.size > 0 || filters.tags.size > 0);
+    const exportFilteredBtn = $("#exportFilteredBtn");
+    if (exportFilteredBtn) exportFilteredBtn.hidden = !anyFilterActive;
+    const saveViewBtn = $("#saveFilterViewBtn");
+    if (saveViewBtn) saveViewBtn.hidden = !anyFilterActive;
+
     updateBulkBar();
+  }
+
+  // Saved filter views — bookmark a filter combination by name
+  function renderSavedViews() {
+    const row = document.getElementById("savedViewsRow");
+    if (!row) return;
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem("mb_saved_views") || "[]"); } catch (_) { saved = []; }
+    if (!Array.isArray(saved) || !saved.length) {
+      row.hidden = true;
+      row.innerHTML = "";
+      return;
+    }
+    row.hidden = false;
+    row.innerHTML = '<span class="saved-views-label">⭐ Views:</span>' +
+      saved.map((v, i) => `
+        <span class="saved-view-chip-wrap">
+          <button type="button" class="saved-view-chip" data-saved-view="${i}" title="Apply view">${escapeHtml(v.name)}</button>
+          <button type="button" class="saved-view-del" data-del-saved-view="${i}" aria-label="Delete view" title="Remove">×</button>
+        </span>
+      `).join("");
+    row.querySelectorAll("[data-saved-view]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const idx = Number(btn.dataset.savedView);
+        const view = saved[idx];
+        if (!view || !view.filters) return;
+        // Apply the saved filter state
+        filters.start = view.filters.start || "";
+        filters.end = view.filters.end || "";
+        filters.types = new Set(view.filters.types || []);
+        filters.categories = new Set(view.filters.categories || []);
+        filters.people = new Set(view.filters.people || []);
+        filters.tags = new Set(view.filters.tags || []);
+        filters.search = view.filters.search || "";
+        filters.hideTransfers = !!view.filters.hideTransfers;
+        filters.eventId = view.filters.eventId || "";
+        if (view.filters.sort) filters.sort = view.filters.sort;
+        if (typeof view.filters.groupByDay === "boolean") filters.groupByDay = view.filters.groupByDay;
+        // Sync UI controls
+        const startEl = $("#filterStart"); if (startEl) startEl.value = filters.start;
+        const endEl = $("#filterEnd"); if (endEl) endEl.value = filters.end;
+        const searchEl = $("#txnSearch"); if (searchEl) searchEl.value = filters.search;
+        const htEl = $("#hideTransfersToggle"); if (htEl) htEl.checked = filters.hideTransfers;
+        const evEl = $("#filterEvent"); if (evEl) evEl.value = filters.eventId;
+        const sortEl = $("#txnSort"); if (sortEl) sortEl.value = filters.sort;
+        const groupEl = $("#groupByDayToggle"); if (groupEl) groupEl.checked = filters.groupByDay;
+        document.querySelectorAll("[data-type-chip]").forEach((el) => {
+          el.classList.toggle("off", !filters.types.has(el.dataset.typeChip));
+        });
+        document.querySelectorAll("[data-quick-range]").forEach((el) => el.classList.add("off"));
+        renderFilterChips();
+        renderPersonFilterChips();
+        renderTagFilterChips();
+        renderTransactions();
+        showToast(`⭐ Applied "${view.name}"`);
+      });
+    });
+    row.querySelectorAll("[data-del-saved-view]").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.dataset.delSavedView);
+        const view = saved[idx];
+        if (!view) return;
+        if (!confirm(`Delete saved view "${view.name}"?`)) return;
+        saved.splice(idx, 1);
+        localStorage.setItem("mb_saved_views", JSON.stringify(saved));
+        renderSavedViews();
+        showToast("View removed");
+      });
+    });
   }
 
   function renderActiveFiltersRow() {
@@ -5435,7 +5591,7 @@
         ? ` <span class="card-sub">(+${fmt(earned)} / −${fmt(spent)})</span>`
         : "";
       html += `
-        <li class="txn-day-header">
+        <li class="txn-day-header${date === todayStr() ? " is-today" : ""}">
           <span>${formatLongDate(date)}</span>
           <span class="${totalCls}">${totalStr}${breakdown}</span>
         </li>`;
@@ -12382,6 +12538,49 @@
     $("#filterEvent")?.addEventListener("change", (e) => {
       filters.eventId = e.target.value;
       renderTransactions();
+    });
+
+    // Export filtered button — visible only when filters are active; exports the
+    // currently-rendered list (after all filters and sorts) to CSV.
+    $("#exportFilteredBtn")?.addEventListener("click", () => {
+      const items = getFilteredTransactions();
+      if (!items.length) {
+        showToast("No transactions in current view");
+        return;
+      }
+      exportCsv(items, "filtered");
+    });
+
+    // Save current filter combination as a named view
+    $("#saveFilterViewBtn")?.addEventListener("click", () => {
+      const name = prompt("Name this view (e.g. \"Travel YTD\", \"Subscriptions\"):");
+      if (name === null) return;
+      const trimmed = name.trim();
+      if (!trimmed) { showToast("Name can't be empty"); return; }
+      let saved = [];
+      try { saved = JSON.parse(localStorage.getItem("mb_saved_views") || "[]"); } catch (_) { saved = []; }
+      // Replace if same name already exists
+      saved = saved.filter((v) => v.name !== trimmed);
+      saved.push({
+        name: trimmed,
+        savedAt: Date.now(),
+        filters: {
+          start: filters.start || "",
+          end: filters.end || "",
+          types: filters.types ? [...filters.types] : [],
+          categories: [...filters.categories],
+          people: [...filters.people],
+          tags: [...filters.tags],
+          search: filters.search || "",
+          hideTransfers: !!filters.hideTransfers,
+          eventId: filters.eventId || "",
+          sort: filters.sort,
+          groupByDay: !!filters.groupByDay,
+        },
+      });
+      localStorage.setItem("mb_saved_views", JSON.stringify(saved));
+      renderSavedViews();
+      showToast(`⭐ View "${trimmed}" saved`);
     });
 
     // Quick range chips — set both start and end with one tap
