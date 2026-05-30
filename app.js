@@ -798,6 +798,67 @@
       resetBtn.hidden = false;
     }
 
+    // Show/hide password toggle
+    const pwdToggle = $("#passwordToggle");
+    if (pwdToggle) {
+      pwdToggle.addEventListener("click", () => {
+        const inp = $("#passwordInput");
+        if (!inp) return;
+        const isPwd = inp.type === "password";
+        inp.type = isPwd ? "text" : "password";
+        pwdToggle.textContent = isPwd ? "🙈" : "👁";
+        pwdToggle.title = isPwd ? "Hide password" : "Show password";
+        inp.focus();
+      });
+    }
+
+    // Caps Lock detector
+    const capsHint = $("#capsLockHint");
+    const capsHandler = (e) => {
+      if (!capsHint) return;
+      const on = e.getModifierState && e.getModifierState("CapsLock");
+      capsHint.hidden = !on;
+    };
+    $("#passwordInput")?.addEventListener("keydown", capsHandler);
+    $("#passwordInput")?.addEventListener("keyup", capsHandler);
+    confirmInput?.addEventListener("keydown", capsHandler);
+    confirmInput?.addEventListener("keyup", capsHandler);
+
+    // Show app version pill on lock screen
+    const versionPill = $("#lockVersionPill");
+    if (versionPill) {
+      const scriptTag = document.querySelector('script[src*="app.js"]');
+      const m = scriptTag && scriptTag.src.match(/v=(\d+)/);
+      if (m) {
+        versionPill.textContent = `v${m[1]}`;
+        versionPill.hidden = false;
+      }
+    }
+
+    // Brute-force cooldown — 5 wrong attempts in 5 min triggers a 30s pause
+    const COOLDOWN_KEY = "mb_lock_cooldown";
+    const ATTEMPTS_KEY = "mb_lock_attempts";
+    const checkCooldown = () => {
+      const until = parseInt(localStorage.getItem(COOLDOWN_KEY) || "0", 10);
+      const now = Date.now();
+      if (until > now) {
+        const sec = Math.ceil((until - now) / 1000);
+        const errEl = $("#lockError");
+        if (errEl) {
+          errEl.textContent = `Too many attempts — try again in ${sec}s`;
+          errEl.hidden = false;
+        }
+        if (unlockBtn) unlockBtn.disabled = true;
+        setTimeout(() => {
+          if (unlockBtn) unlockBtn.disabled = false;
+          if (errEl) errEl.hidden = true;
+        }, until - now);
+        return true;
+      }
+      return false;
+    };
+    checkCooldown();
+
     $("#lockForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const pwd = $("#passwordInput").value;
@@ -820,13 +881,35 @@
         localStorage.setItem(KEYS.pwd, hash);
         await unlock(pwd);
       } else {
+        if (checkCooldown()) return;
         const hash = await sha256(pwd);
         if (hash === stored) {
+          // Reset attempt counter on success
+          localStorage.removeItem(ATTEMPTS_KEY);
+          localStorage.removeItem(COOLDOWN_KEY);
           await unlock(pwd);
         } else {
-          errEl.textContent = "Incorrect password";
+          // Track failed attempts
+          let attempts = parseInt(localStorage.getItem(ATTEMPTS_KEY) || "0", 10) + 1;
+          localStorage.setItem(ATTEMPTS_KEY, String(attempts));
+          // 5 wrong → 30s cooldown
+          if (attempts >= 5) {
+            localStorage.setItem(COOLDOWN_KEY, String(Date.now() + 30 * 1000));
+            localStorage.setItem(ATTEMPTS_KEY, "0");
+            checkCooldown();
+            return;
+          }
+          const remaining = 5 - attempts;
+          errEl.textContent = `Incorrect password${remaining > 0 && remaining <= 2 ? ` · ${remaining} ${remaining === 1 ? "try" : "tries"} left` : ""}`;
           errEl.hidden = false;
           $("#passwordInput").value = "";
+          // Shake animation
+          const card = document.querySelector(".lock-card");
+          if (card) {
+            card.classList.remove("shake");
+            void card.offsetWidth; // restart animation
+            card.classList.add("shake");
+          }
         }
       }
     });

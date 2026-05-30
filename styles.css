@@ -177,6 +177,52 @@ label {
 .lock-card h1 { margin: 0 0 0.5rem 0; font-size: 1.75rem; color: var(--primary); font-weight: 700; }
 .lock-sub { color: var(--text-dim); margin: 0 0 1.5rem 0; font-size: 0.95rem; }
 
+/* Lock screen polish */
+.password-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.password-row input {
+  flex: 1;
+  padding-right: 2.5rem;
+}
+.password-toggle {
+  position: absolute;
+  right: 0.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: 0;
+  font-size: 1.1rem;
+  cursor: pointer;
+  padding: 0.4rem 0.5rem;
+  color: var(--text-dim);
+  border-radius: 6px;
+}
+.password-toggle:hover { background: var(--card-soft); }
+.lock-hint {
+  margin: 0.4rem 0 0 0;
+  font-size: 0.8rem;
+  color: var(--warning);
+  text-align: center;
+}
+.lock-version {
+  margin: 1rem 0 0 0;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Shake animation on wrong password */
+@keyframes lockShake {
+  0%, 100% { transform: translateX(0); }
+  10%, 30%, 50%, 70%, 90% { transform: translateX(-8px); }
+  20%, 40%, 60%, 80% { transform: translateX(8px); }
+}
+.lock-card.shake { animation: lockShake 0.5s ease-in-out; }
+
 .brand {
   display: flex;
   align-items: center;
