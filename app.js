@@ -282,6 +282,11 @@
     }
     applyTheme(theme);
 
+    // Defensive: ensure all collections are arrays before migrations run
+    if (!Array.isArray(state.expenses)) state.expenses = [];
+    if (!Array.isArray(state.categories)) state.categories = [];
+    if (!Array.isArray(state.goals)) state.goals = [];
+
     // Migrate old transactions (no type field) — assume expense
     let migrated = false;
     state.expenses = state.expenses.map((e) => {
@@ -618,6 +623,8 @@
 
   /* ---------- Recurring transactions ---------- */
   function processRecurring() {
+    if (!Array.isArray(state.recurring)) state.recurring = [];
+    if (!Array.isArray(state.expenses)) state.expenses = [];
     const today = new Date();
     const thisMonth = currentMonth();
     let added = 0;
@@ -1009,31 +1016,34 @@
     }
     const monthLabelEl = $("#monthLabel");
     if (monthLabelEl) monthLabelEl.textContent = monthLabel(currentMonth());
-    renderDashboard();
-    renderBalances();
-    renderTransactions();
-    renderInsights();
-    renderCredit();
-    renderFamily();
-    renderPresetsManage();
-    renderRecurringList();
-    renderAccountList();
-    renderDashAccounts();
-    renderThemeButtons();
-    renderGoalsTab();
-    populateExpenseCategorySelect();
-    populateAccountSelect("#expAccount", true);
-    populatePersonSelect();
-    populateRecurringCategorySelect();
-    renderFilterChips();
-    renderPersonFilterChips();
-    renderTagFilterChips();
-    renderBillNegotiations();
-    renderIncomeSourcesManage();
-    renderEventsTab();
-    populateEventSelect();
-    populateEventFilterSelect();
-    populateInsightsEventFilter();
+    const safeCall = (fn, name) => {
+      try { fn(); } catch (e) { console.error(`renderAll/${name} failed:`, e); }
+    };
+    safeCall(renderDashboard, "dashboard");
+    safeCall(renderBalances, "balances");
+    safeCall(renderTransactions, "transactions");
+    safeCall(renderInsights, "insights");
+    safeCall(renderCredit, "credit");
+    safeCall(renderFamily, "family");
+    safeCall(renderPresetsManage, "presetsManage");
+    safeCall(renderRecurringList, "recurring");
+    safeCall(renderAccountList, "accountList");
+    safeCall(renderDashAccounts, "dashAccounts");
+    safeCall(renderThemeButtons, "themeButtons");
+    safeCall(renderGoalsTab, "goalsTab");
+    safeCall(populateExpenseCategorySelect, "expenseCategorySelect");
+    safeCall(() => populateAccountSelect("#expAccount", true), "expAccountSelect");
+    safeCall(populatePersonSelect, "personSelect");
+    safeCall(populateRecurringCategorySelect, "recurringCategorySelect");
+    safeCall(renderFilterChips, "filterChips");
+    safeCall(renderPersonFilterChips, "personFilterChips");
+    safeCall(renderTagFilterChips, "tagFilterChips");
+    safeCall(renderBillNegotiations, "billNegotiations");
+    safeCall(renderIncomeSourcesManage, "incomeSourcesManage");
+    safeCall(renderEventsTab, "eventsTab");
+    safeCall(populateEventSelect, "eventSelect");
+    safeCall(populateEventFilterSelect, "eventFilterSelect");
+    safeCall(populateInsightsEventFilter, "insightsEventFilter");
     $("#currencySelect") && ($("#currencySelect").value = currency);
     const rolloverEl = $("#rolloverToggle");
     if (rolloverEl) rolloverEl.checked = !!state.settings.rollover;
@@ -3506,9 +3516,9 @@
 
     // Budget progress
     const progressEl = $("#budgetProgress");
-    if (!state.categories.length) {
+    if (progressEl && !state.categories.length) {
       progressEl.innerHTML = '<p class="empty">No budget categories yet. Add some in Balances.</p>';
-    } else {
+    } else if (progressEl) {
       progressEl.innerHTML = state.categories
         .map((cat) => {
           const spent = monthExpenses
@@ -4155,6 +4165,7 @@
 
   function renderFilterChips() {
     const chips = $("#filterChips");
+    if (!chips) return;
     if (!state.categories.length) {
       chips.innerHTML = '<span class="empty-chip">Add categories first</span>';
       return;
@@ -4221,21 +4232,24 @@
   function renderInsights() {
     if (typeof Chart === "undefined") return;
 
+    const safeCall = (fn, name) => {
+      try { fn(); } catch (e) { console.error(`renderInsights/${name} failed:`, e); }
+    };
     const expenses = filterExpensesForInsights();
-    renderSplitChart(expenses);
-    renderDailyChart(expenses);
-    renderBalanceChart(expenses);
-    renderWeekdayChart(expenses);
-    renderTrendChart();
-    renderCashFlowChart();
-    renderIncomeSourcesChart();
-    renderIncomeTypeChart();
-    renderNetWorthChart();
-    renderHeatmapCalendar();
-    renderTopVendors();
-    renderTagsChart();
-    renderYoYChart();
-    renderMoneyFlow();
+    safeCall(() => renderSplitChart(expenses), "splitChart");
+    safeCall(() => renderDailyChart(expenses), "dailyChart");
+    safeCall(() => renderBalanceChart(expenses), "balanceChart");
+    safeCall(() => renderWeekdayChart(expenses), "weekdayChart");
+    safeCall(renderTrendChart, "trendChart");
+    safeCall(renderCashFlowChart, "cashFlow");
+    safeCall(renderIncomeSourcesChart, "incomeSources");
+    safeCall(renderIncomeTypeChart, "incomeType");
+    safeCall(renderNetWorthChart, "netWorth");
+    safeCall(renderHeatmapCalendar, "heatmap");
+    safeCall(renderTopVendors, "topVendors");
+    safeCall(renderTagsChart, "tags");
+    safeCall(renderYoYChart, "yoy");
+    safeCall(renderMoneyFlow, "moneyFlow");
   }
 
   // Tiny inline SVG sparkline. Used in dashboard category list for 6-month trend.
@@ -4785,25 +4799,28 @@
 
   /* ---------- Credit tracker ---------- */
   function renderCredit() {
-    renderCreditStats();
-    renderCardList();
-    renderScoreList();
-    renderCreditTrend();
-    renderCreditTips();
-    renderPayoffEmpty();
-    renderInquiriesList();
-    renderNegativeList();
-    renderLimitIncreaseList();
-    renderCreditGoalList();
-    renderFreezes();
-    renderAnnualReports();
-    renderPayByCalendar();
-    renderAccountAgeTimeline();
-    renderRewardsList();
-    renderUtilTrendChart();
-    renderScoreProjection();
-    checkScoreMilestones();
-    renderPayPlanSummary();
+    const safeCall = (fn, name) => {
+      try { fn(); } catch (e) { console.error(`renderCredit/${name} failed:`, e); }
+    };
+    safeCall(renderCreditStats, "stats");
+    safeCall(renderCardList, "cardList");
+    safeCall(renderScoreList, "scoreList");
+    safeCall(renderCreditTrend, "creditTrend");
+    safeCall(renderCreditTips, "creditTips");
+    safeCall(renderPayoffEmpty, "payoffEmpty");
+    safeCall(renderInquiriesList, "inquiriesList");
+    safeCall(renderNegativeList, "negativeList");
+    safeCall(renderLimitIncreaseList, "limitIncreaseList");
+    safeCall(renderCreditGoalList, "creditGoalList");
+    safeCall(renderFreezes, "freezes");
+    safeCall(renderAnnualReports, "annualReports");
+    safeCall(renderPayByCalendar, "payByCalendar");
+    safeCall(renderAccountAgeTimeline, "accountAgeTimeline");
+    safeCall(renderRewardsList, "rewardsList");
+    safeCall(renderUtilTrendChart, "utilTrend");
+    safeCall(renderScoreProjection, "scoreProjection");
+    safeCall(checkScoreMilestones, "scoreMilestones");
+    safeCall(renderPayPlanSummary, "payPlanSummary");
   }
 
   function renderPayoffEmpty() {
