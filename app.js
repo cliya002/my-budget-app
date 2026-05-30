@@ -920,11 +920,24 @@
         localStorage.removeItem(KEYS.dataEnc);
         localStorage.removeItem(KEYS.salt);
         localStorage.setItem(KEYS.pwd, DEFAULT_PWD_HASH);
+        // Clear biometric blob since the password has been reset
+        localStorage.removeItem(BIO_CRED_KEY);
+        localStorage.removeItem(BIO_PWD_KEY);
+        // Clear lockout/attempt counters
+        localStorage.removeItem("mb_lock_attempts");
+        localStorage.removeItem("mb_lock_cooldown");
         location.reload();
       }
     });
 
-    setTimeout(() => $("#passwordInput")?.focus(), 100);
+    setTimeout(() => {
+      // Skip auto-focus on password field if biometric is enrolled (button is more prominent)
+      const hasBio = !!(localStorage.getItem(BIO_CRED_KEY) && localStorage.getItem(BIO_PWD_KEY));
+      const lastMode = localStorage.getItem("mb_lock_mode") || "password";
+      if (!hasBio && lastMode !== "pin") {
+        $("#passwordInput")?.focus();
+      }
+    }, 100);
 
     // Render stats teaser (only when password is already set, not on first launch)
     if (stored) {
@@ -1000,6 +1013,7 @@
   }
 
   let _pinBuffer = "";
+  let _pinKeydownHandler = null;
   function buildPinPad() {
     const pad = $("#lockPinPad");
     if (!pad) return;
@@ -1013,6 +1027,21 @@
     pad.querySelectorAll("[data-pin-key]").forEach((btn) => {
       btn.addEventListener("click", () => onPinKey(btn.dataset.pinKey));
     });
+    // Allow physical keyboard input for desktop users
+    if (_pinKeydownHandler) document.removeEventListener("keydown", _pinKeydownHandler);
+    _pinKeydownHandler = (e) => {
+      // Only act when PIN panel is visible
+      const pinPanel = $("#lockPinPanel");
+      if (!pinPanel || pinPanel.hidden) return;
+      if (e.key >= "0" && e.key <= "9") {
+        e.preventDefault();
+        onPinKey(e.key);
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        onPinKey("⌫");
+      }
+    };
+    document.addEventListener("keydown", _pinKeydownHandler);
   }
 
   function renderPinDisplay() {
@@ -1027,6 +1056,16 @@
   async function onPinKey(k) {
     const errEl = $("#lockPinError");
     if (errEl) errEl.hidden = true;
+    // Honor cooldown
+    const cooldownUntil = parseInt(localStorage.getItem("mb_lock_cooldown") || "0", 10);
+    if (cooldownUntil > Date.now()) {
+      if (errEl) {
+        const sec = Math.ceil((cooldownUntil - Date.now()) / 1000);
+        errEl.textContent = `Locked out for ${sec}s`;
+        errEl.hidden = false;
+      }
+      return;
+    }
     if (k === "⌫") {
       _pinBuffer = _pinBuffer.slice(0, -1);
       renderPinDisplay();
@@ -1037,14 +1076,17 @@
     renderPinDisplay();
     // Auto-submit at 4+ digits if it matches
     if (_pinBuffer.length >= 4) {
+      const snapshot = _pinBuffer; // freeze for async
       const stored = localStorage.getItem(KEYS.pwd);
-      const hash = await sha256(_pinBuffer);
+      const hash = await sha256(snapshot);
+      // Bail if user has kept typing past this snapshot (we'll match on a later call)
+      if (snapshot !== _pinBuffer && hash !== stored) return;
       if (hash === stored) {
         localStorage.removeItem("mb_lock_attempts");
         localStorage.removeItem("mb_lock_cooldown");
-        await unlock(_pinBuffer);
         _pinBuffer = "";
-      } else if (_pinBuffer.length >= 8) {
+        await unlock(snapshot);
+      } else if (snapshot.length >= 8) {
         // 8 digits and still no match — show error and reset
         if (errEl) {
           errEl.textContent = "Incorrect PIN";
@@ -1055,6 +1097,13 @@
           card.classList.remove("shake");
           void card.offsetWidth;
           card.classList.add("shake");
+        }
+        // Track attempts for cooldown (shared with password attempts)
+        let attempts = parseInt(localStorage.getItem("mb_lock_attempts") || "0", 10) + 1;
+        localStorage.setItem("mb_lock_attempts", String(attempts));
+        if (attempts >= 5) {
+          localStorage.setItem("mb_lock_cooldown", String(Date.now() + 30 * 1000));
+          localStorage.setItem("mb_lock_attempts", "0");
         }
         _pinBuffer = "";
         renderPinDisplay();
@@ -1275,9 +1324,38 @@
     stopAutoSync();
     $("#app").hidden = true;
     $("#lockScreen").classList.add("open");
-    $("#passwordInput").value = "";
-    $("#passwordConfirm").value = "";
-    $("#lockError").hidden = true;
+    const pwdInp = $("#passwordInput");
+    if (pwdInp) {
+      pwdInp.value = "";
+      // Reset visibility back to password mode
+      pwdInp.type = "password";
+    }
+    const pwdToggle = $("#passwordToggle");
+    if (pwdToggle) {
+      pwdToggle.textContent = "👁";
+      pwdToggle.title = "Show password";
+    }
+    const confirmInp = $("#passwordConfirm");
+    if (confirmInp) confirmInp.value = "";
+    const errEl = $("#lockError");
+    if (errEl) errEl.hidden = true;
+    const capsHint = $("#capsLockHint");
+    if (capsHint) capsHint.hidden = true;
+    // Clear PIN buffer and refresh display
+    _pinBuffer = "";
+    renderPinDisplay();
+    const pinErr = $("#lockPinError");
+    if (pinErr) pinErr.hidden = true;
+    // Refresh stats teaser (last-open time will update)
+    try { renderLockStatsTeaser(); } catch (e) {}
+    // Focus appropriate field
+    setTimeout(() => {
+      if ($("#lockPinPanel") && !$("#lockPinPanel").hidden) {
+        // PIN mode — nothing to focus, pad takes input
+      } else {
+        $("#passwordInput")?.focus();
+      }
+    }, 50);
   }
 
   /* ---------- Auto-lock ---------- */
@@ -11957,7 +12035,14 @@
       } catch (e) {
         console.error("Failed to re-derive key after password change", e);
       }
-      showToast("Password changed");
+      // Biometric blob holds the old password — clear it so user re-enrolls
+      if (localStorage.getItem(BIO_CRED_KEY) || localStorage.getItem(BIO_PWD_KEY)) {
+        localStorage.removeItem(BIO_CRED_KEY);
+        localStorage.removeItem(BIO_PWD_KEY);
+        showToast("Password changed · re-enable biometric in Security");
+      } else {
+        showToast("Password changed");
+      }
     });
 
     // Lock now

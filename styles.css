@@ -244,23 +244,25 @@ label {
 }
 
 .lock-bio-btn {
-  margin-top: 0.6rem;
+  margin: 0 0 0.85rem 0;
   width: 100%;
-  padding: 0.7rem 1rem;
-  background: var(--card-soft);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
-  font-size: 0.95rem;
+  padding: 0.85rem 1rem;
+  background: var(--primary);
+  border: 0;
+  border-radius: 12px;
+  color: #fff;
+  font-size: 1rem;
   font-weight: 600;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
-  transition: background 0.15s;
+  transition: background 0.15s, transform 0.05s;
+  box-shadow: 0 4px 12px rgba(91, 63, 184, 0.3);
 }
-.lock-bio-btn:hover { background: var(--primary-soft); }
+.lock-bio-btn:hover { background: var(--primary-hover); }
+.lock-bio-btn:active { transform: scale(0.98); }
 
 .lock-mode-toggle {
   display: flex;
