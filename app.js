@@ -16397,10 +16397,17 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
         }
       } catch (e) { /* ignore */ }
     });
-    document.getElementById("updatePromptBtn")?.addEventListener("click", () => {
+    document.getElementById("updatePromptBtn")?.addEventListener("click", (e) => {
+      const btn = e.currentTarget;
+      // Prevent double-tap from posting skipWaiting twice
+      if (btn.disabled) return;
+      btn.disabled = true;
+      btn.textContent = "Updating…";
       const sw = window._pendingSW;
       if (sw && typeof sw.postMessage === "function") {
         sw.postMessage("skipWaiting");
+        // Safety net: if the controllerchange / reload doesn't fire within 3s, force reload
+        setTimeout(() => { window.location.reload(); }, 3000);
       } else {
         window.location.reload();
       }
