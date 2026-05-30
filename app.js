@@ -10587,6 +10587,11 @@
         if (label) {
           localStorage.setItem("mb_device_label", label);
           showToast("Device name saved");
+        } else {
+          // User cleared the field — reset to auto-detected default rather than a stuck old value
+          localStorage.removeItem("mb_device_label");
+          deviceLabelInput.value = getDeviceLabel();
+          showToast("Device name reset to default");
         }
       });
     }
@@ -10875,6 +10880,7 @@
         netWorthHistory: [], creditInquiries: [], negativeItems: [], limitIncreases: [],
         creditGoals: [], utilHistory: [], creditFreezes: {}, annualReports: {}, deletions: {}, mapTimestamps: {},
         billNegotiations: [], incomeSources: [], events: [],
+        fxRates: {},
         settingsTimestamps: {},
         settings: { rollover: false, alertsShown: {} },
       };
@@ -13333,7 +13339,8 @@ ${b64}`;
           await Promise.all(keys.map((k) => caches.delete(k)));
         }
         showToast("Cache cleared. Reloading…");
-        setTimeout(() => location.reload(true), 500);
+        // The boolean argument to reload() is deprecated and ignored in modern browsers.
+        setTimeout(() => location.reload(), 500);
       } catch (e) {
         console.error("Force update failed:", e);
         alert("Failed: " + (e.message || e.name));
@@ -15530,11 +15537,16 @@ ${b64}`;
     localStorage.setItem(KEYS.syncToken, parsed.token);
     localStorage.setItem(KEYS.syncGistId, parsed.gistId);
     localStorage.setItem("mb_auto_sync", "true");
-    // Update visible Settings inputs if present
-    const tokInput = $("#syncTokenInput");
-    const gistInput = $("#syncGistInput");
-    if (tokInput) tokInput.value = parsed.token;
+    // Update visible Settings inputs if present (HTML IDs are #syncToken / #syncGistId)
+    const tokInput = $("#syncToken");
+    const gistInput = $("#syncGistId");
+    if (tokInput) {
+      tokInput.value = parsed.token;
+      tokInput.dataset.unlocked = "true";
+    }
     if (gistInput) gistInput.value = parsed.gistId;
+    const autoTog = $("#autoSyncToggle");
+    if (autoTog) autoTog.checked = true;
     return true;
   }
 
