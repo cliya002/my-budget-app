@@ -869,6 +869,12 @@
             // Same for PIN error
             const pinErr = $("#lockPinError");
             if (pinErr) pinErr.hidden = true;
+            // Refocus the password input so user can immediately retry
+            const pwdInp = $("#passwordInput");
+            const pinPanel = $("#lockPinPanel");
+            if (pwdInp && (!pinPanel || pinPanel.hidden)) {
+              setTimeout(() => pwdInp.focus(), 50);
+            }
           }
         };
         updateMsg();
@@ -909,7 +915,9 @@
       } else {
         if (checkCooldown()) return;
         const hash = await sha256(pwd);
-        if (hash === stored) {
+        // Read fresh from storage — password may have changed since initLock ran
+        const currentStored = localStorage.getItem(KEYS.pwd);
+        if (hash === currentStored) {
           // Reset attempt counter on success
           localStorage.removeItem(ATTEMPTS_KEY);
           localStorage.removeItem(COOLDOWN_KEY);
@@ -998,24 +1006,30 @@
     const teaser = $("#lockStatsTeaser");
     if (!teaser) return;
     // Read non-encrypted metadata from localStorage to avoid needing the password
+    const lastUnlock = parseInt(localStorage.getItem("mb_last_unlock") || "0", 10);
     const lastSync = parseInt(localStorage.getItem("mb_last_synced") || "0", 10);
     const items = [];
-    if (lastSync > 0) {
-      const ago = Date.now() - lastSync;
-      let label;
-      if (ago < 60000) label = "just now";
-      else if (ago < 3600000) label = `${Math.floor(ago / 60000)}m ago`;
-      else if (ago < 86400000) label = `${Math.floor(ago / 3600000)}h ago`;
-      else label = `${Math.floor(ago / 86400000)}d ago`;
-      items.push(`<span class="ls-item">⏱ Last open <strong>${label}</strong></span>`);
+    const formatAgo = (ts) => {
+      const ago = Date.now() - ts;
+      if (ago < 60000) return "just now";
+      if (ago < 3600000) return `${Math.floor(ago / 60000)}m ago`;
+      if (ago < 86400000) return `${Math.floor(ago / 3600000)}h ago`;
+      return `${Math.floor(ago / 86400000)}d ago`;
+    };
+    if (lastUnlock > 0) {
+      items.push(`<span class="ls-item">⏱ Last open <strong>${formatAgo(lastUnlock)}</strong></span>`);
+    } else if (lastSync > 0) {
+      items.push(`<span class="ls-item">☁️ Last sync <strong>${formatAgo(lastSync)}</strong></span>`);
     }
     const dev = localStorage.getItem("mb_device_label");
     if (dev) items.push(`<span class="ls-item">📍 <strong>${escapeHtml(dev)}</strong></span>`);
     const hasSync = !!(localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId));
-    if (hasSync) items.push(`<span class="ls-item">☁️ Sync on</span>`);
+    if (hasSync && !lastSync) items.push(`<span class="ls-item">☁️ Sync ready</span>`);
     if (items.length) {
       teaser.innerHTML = items.join("");
       teaser.hidden = false;
+    } else {
+      teaser.hidden = true;
     }
   }
 
@@ -1217,7 +1231,27 @@
       });
       // User passed biometric — unwrap stored password
       const obj = JSON.parse(pwdBlob);
-      const pwd = atob(obj.p || "");
+      let pwd;
+      try {
+        if (obj.v === 2) {
+          // UTF-8 base64url-encoded
+          const bytes = _b64uToBytes(obj.p || "");
+          pwd = new TextDecoder().decode(bytes);
+        } else {
+          // Legacy: plain btoa (Latin-1 only)
+          pwd = atob(obj.p || "");
+        }
+      } catch (decodeErr) {
+        console.error("Failed to decode biometric blob", decodeErr);
+        localStorage.removeItem(BIO_CRED_KEY);
+        localStorage.removeItem(BIO_PWD_KEY);
+        if (btn) btn.hidden = true;
+        if (errEl) {
+          errEl.textContent = "Biometric data corrupt — re-enable in Security.";
+          errEl.hidden = false;
+        }
+        return;
+      }
       const hash = await sha256(pwd);
       if (hash === localStorage.getItem(KEYS.pwd)) {
         await unlock(pwd);
@@ -1282,8 +1316,9 @@
       if (!cred) return false;
       const credIdB64 = _bytesToB64u(cred.rawId);
       localStorage.setItem(BIO_CRED_KEY, credIdB64);
-      // Store password (not ideal but localStorage-bound; user already trusts this device)
-      const wrapped = JSON.stringify({ p: btoa(password) });
+      // Store password Unicode-safe (btoa fails on chars > 0xFF — emoji, etc.)
+      const utf8Bytes = new TextEncoder().encode(password);
+      const wrapped = JSON.stringify({ p: _bytesToB64u(utf8Bytes), v: 2 });
       localStorage.setItem(BIO_PWD_KEY, wrapped);
       showToast("✓ Biometric unlock enabled");
       return true;
@@ -1303,6 +1338,8 @@
   async function unlock(password) {
     $("#lockScreen").classList.remove("open");
     $("#app").hidden = false;
+    // Stamp last-unlock time for the lock screen stats teaser
+    try { localStorage.setItem("mb_last_unlock", String(Date.now())); } catch (e) {}
     if (password) {
       cachedPassword = password;
       try {
