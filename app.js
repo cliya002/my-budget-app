@@ -78,6 +78,7 @@
   const filters = {
     start: "",
     end: "",
+    types: new Set(),       // empty = all types ('income' | 'expense' | 'transfer')
     categories: new Set(),  // empty = all
     people: new Set(),       // empty = all (only people-marked txns when non-empty)
     tags: new Set(),         // empty = all (matches when txn has any selected tag)
@@ -2333,7 +2334,14 @@
         const tag = status === "active" ? "🟢" : status === "completed" ? "✓" : "📅";
         return `<option value="${ev.id}">${tag} ${escapeHtml(ev.name)}</option>`;
       }).join("");
-    sel.value = cur;
+    // If the active filter points at a now-deleted event, clear it so the
+    // user isn't stuck staring at zero results from a stale id.
+    if (cur && !sorted.some((ev) => ev.id === cur)) {
+      filters.eventId = "";
+      sel.value = "";
+    } else {
+      sel.value = cur;
+    }
   }
 
   // Same dropdown for the Insights tab
@@ -4946,18 +4954,32 @@
     if (filters.eventId) {
       items = items.filter((e) => e.eventId === filters.eventId);
     }
+    if (filters.types && filters.types.size > 0) {
+      items = items.filter((e) => {
+        if (filters.types.has("income") && e.type === "income") return true;
+        if (filters.types.has("expense") && e.type === "expense") return true;
+        if (filters.types.has("transfer") && (e.type === "transfer-in" || e.type === "transfer-out")) return true;
+        return false;
+      });
+    }
 
-    if (filters.start) items = items.filter((e) => e.date >= filters.start);
-    if (filters.end) items = items.filter((e) => e.date <= filters.end);
+    if (filters.start) items = items.filter((e) => e.date && e.date >= filters.start);
+    if (filters.end) items = items.filter((e) => e.date && e.date <= filters.end);
     if (filters.categories.size > 0) {
       const hasUncat = filters.categories.has("__uncat__");
-      // Filter: include if categoryId is in selected set OR (uncat selected AND no categoryId AND not income/transfer)
+      // Build a Set of LIVE category ids so we can detect orphans (deleted categories
+      // that left dangling categoryId references on transactions).
+      const liveCatIds = new Set(state.categories.map((c) => c.id));
+      // Filter: include if categoryId matches a selected one, OR (uncat selected AND
+      // the txn is effectively uncategorized: categoryId missing OR pointing to a
+      // deleted category — and not income/transfer)
       items = items.filter((e) => {
         if (e.categoryId && filters.categories.has(e.categoryId)) return true;
-        if (hasUncat && !e.categoryId
+        if (hasUncat
             && e.type !== "income"
             && e.type !== "transfer-in"
-            && e.type !== "transfer-out") return true;
+            && e.type !== "transfer-out"
+            && (!e.categoryId || !liveCatIds.has(e.categoryId))) return true;
         return false;
       });
     }
@@ -5037,6 +5059,7 @@
       let count = 0;
       if (filters.start) count++;
       if (filters.end) count++;
+      if (filters.types && filters.types.size) count += filters.types.size;
       if (filters.categories.size) count += filters.categories.size;
       if (filters.people.size) count += filters.people.size;
       if (filters.tags.size) count += filters.tags.size;
@@ -5122,15 +5145,16 @@
       if (filters.end && e.date > filters.end) return false;
       return true;
     });
+    const liveCatIds = new Set(state.categories.map((c) => c.id));
     const counts = new Map();
     let uncatCount = 0;
     inDateRange.forEach((e) => {
       // Skip transfers — they're not "categorized" in the traditional sense
       if (e.type === "transfer-in" || e.type === "transfer-out") return;
-      if (e.categoryId) {
+      if (e.categoryId && liveCatIds.has(e.categoryId)) {
         counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
       } else if (e.type !== "income") {
-        // Only count uncategorized expenses; income without a category is normal
+        // Count expenses that are uncategorized OR have orphan/dangling category ids
         uncatCount += 1;
       }
     });
@@ -11918,6 +11942,7 @@
     $("#clearFilters").addEventListener("click", () => {
       filters.start = "";
       filters.end = "";
+      filters.types && filters.types.clear();
       filters.categories.clear();
       filters.people.clear();
       filters.tags.clear();
@@ -11929,6 +11954,8 @@
       $("#txnSearch").value = "";
       const ht = $("#hideTransfersToggle"); if (ht) ht.checked = false;
       const fe = $("#filterEvent"); if (fe) fe.value = "";
+      // Reset type chips visual state
+      document.querySelectorAll("[data-type-chip]").forEach((el) => el.classList.add("off"));
       renderFilterChips();
       renderPersonFilterChips();
       renderTagFilterChips();
@@ -12153,6 +12180,21 @@
 
     // Delegated clicks
     document.addEventListener("click", (e) => {
+      // Type filter chips (income/expense/transfer)
+      const tyChip = e.target.closest("[data-type-chip]");
+      if (tyChip) {
+        const t = tyChip.dataset.typeChip;
+        if (!filters.types) filters.types = new Set();
+        if (filters.types.has(t)) filters.types.delete(t);
+        else filters.types.add(t);
+        // Update chip visual state
+        document.querySelectorAll("[data-type-chip]").forEach((el) => {
+          el.classList.toggle("off", !filters.types.has(el.dataset.typeChip));
+        });
+        renderTransactions();
+        return;
+      }
+
       // Filter chips
       const chip = e.target.closest("[data-chip]");
       if (chip) {
