@@ -1704,10 +1704,10 @@
       const totalActive = sorted.filter((r) => r.active).length;
       const totalActiveAmount = sorted
         .filter((r) => r.active && r.type === "expense")
-        .reduce((s, r) => s + Number(r.amount), 0);
+        .reduce((s, r) => s + (Number(r.amount) || 0), 0);
       const totalActiveIncome = sorted
         .filter((r) => r.active && r.type === "income")
-        .reduce((s, r) => s + Number(r.amount), 0);
+        .reduce((s, r) => s + (Number(r.amount) || 0), 0);
 
       const summary = `
         <li class="cat-summary-row">
@@ -3223,7 +3223,7 @@
         (e) => monthKey(e.date) === m && e.categoryId === cat.id && e.type !== "income"
       );
       if (!monthExp.length) break;
-      const spent = monthExp.reduce((s, e) => s + Number(e.amount), 0);
+      const spent = monthExp.reduce((s, e) => s + (Number(e.amount) || 0), 0);
       const leftover = limitForMonth(cat, m) - spent;
       if (leftover <= 0) break;
       extra += leftover;
@@ -3233,7 +3233,10 @@
   }
 
   function prevMonth(monthStr) {
-    const [y, m] = monthStr.split("-").map(Number);
+    if (!monthStr || typeof monthStr !== "string") return monthStr;
+    const parts = monthStr.split("-").map(Number);
+    if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1])) return monthStr;
+    const [y, m] = parts;
     if (m === 1) return `${y - 1}-12`;
     return `${y}-${String(m - 1).padStart(2, "0")}`;
   }
@@ -5221,19 +5224,22 @@
     destroyChart("scoreProjection");
     const ctx = $("#chartScoreProjection");
     if (!ctx) return;
-    const sorted = [...state.creditScores].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...state.creditScores]
+      .filter((s) => s && s.date && Number(s.score))
+      .sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+    const projEmptyEl = $("#scoreProjectionEmpty");
     if (sorted.length < 2) {
-      $("#scoreProjectionEmpty").hidden = false;
+      if (projEmptyEl) projEmptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#scoreProjectionEmpty").hidden = true;
+    if (projEmptyEl) projEmptyEl.hidden = true;
     ctx.style.display = "block";
 
     // Linear regression on the scores
     const n = sorted.length;
     const xs = sorted.map((_, i) => i);
-    const ys = sorted.map((s) => Number(s.score));
+    const ys = sorted.map((s) => Number(s.score) || 0);
     const meanX = xs.reduce((a, b) => a + b, 0) / n;
     const meanY = ys.reduce((a, b) => a + b, 0) / n;
     let num = 0, den = 0;
@@ -5245,10 +5251,12 @@
     const intercept = meanY - slope * meanX;
 
     // Avg interval between data points (in days)
-    const totalDays = (new Date(sorted[n - 1].date) - new Date(sorted[0].date)) / (24 * 60 * 60 * 1000);
-    const avgInterval = totalDays / (n - 1) || 30;
+    const startMs = new Date(sorted[0].date).getTime();
+    const endMs = new Date(sorted[n - 1].date).getTime();
+    const totalDays = (isNaN(startMs) || isNaN(endMs)) ? 0 : (endMs - startMs) / (24 * 60 * 60 * 1000);
+    const avgInterval = (totalDays > 0 && n > 1) ? totalDays / (n - 1) : 30;
 
-    const labels = sorted.map((s) => s.date.slice(5));
+    const labels = sorted.map((s) => String(s.date || "").slice(5));
     const data = ys.slice();
 
     // Project 6 future points (one per avg interval)
@@ -5915,6 +5923,7 @@
 
   function renderCardList() {
     const list = $("#cardList");
+    if (!list) return;
     if (!state.cards.length) {
       list.innerHTML = '<li class="empty">No cards yet. Tap <strong>+ Add Card</strong>.</li>';
       return;
@@ -7230,15 +7239,15 @@
     }
     const sentTxns = filterFamilyByPeriod(familyTransactions());
     const recvTxns = filterFamilyByPeriod(familyReceivedTransactions());
-    const totalSent = sentTxns.reduce((s, e) => s + Number(e.amount), 0);
-    const totalReceived = recvTxns.reduce((s, e) => s + Number(e.amount), 0);
+    const totalSent = sentTxns.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const totalReceived = recvTxns.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const totalActivity = totalSent + totalReceived;
 
     const rows = state.people.map((p) => {
       const personSent = sentTxns.filter((e) => e.personId === p.id);
       const personRecv = recvTxns.filter((e) => e.personId === p.id);
-      const sent = personSent.reduce((s, e) => s + Number(e.amount), 0);
-      const received = personRecv.reduce((s, e) => s + Number(e.amount), 0);
+      const sent = personSent.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      const received = personRecv.reduce((s, e) => s + (Number(e.amount) || 0), 0);
       const net = sent - received;
       const personActivity = sent + received;
       const pct = totalActivity > 0 ? (personActivity / totalActivity) * 100 : 0;
@@ -7888,10 +7897,13 @@
   }
 
   function attachReceiptClicks(container) {
+    if (!container) return;
     container.querySelectorAll("[data-receipt]").forEach((img) => {
       img.addEventListener("click", () => {
-        $("#modalImage").src = img.src;
-        $("#modal").classList.add("open");
+        const modalImage = $("#modalImage");
+        const modal = $("#modal");
+        if (modalImage) modalImage.src = img.src;
+        if (modal) modal.classList.add("open");
       });
     });
     container.querySelectorAll("[data-receipt-pdf]").forEach((el) => {
@@ -7901,10 +7913,17 @@
         if (!exp || !exp.receipt) return;
         // Open the PDF data URL in a new tab
         const w = window.open();
-        if (w) {
+        if (!w) {
+          showToast("Popup blocked — allow popups to view PDF receipts");
+          return;
+        }
+        try {
           w.document.write(
             `<iframe src="${exp.receipt}" style="width:100%;height:100vh;border:0"></iframe>`
           );
+        } catch (e) {
+          console.error("PDF open failed", e);
+          showToast("Couldn't open PDF");
         }
       });
     });
