@@ -600,6 +600,40 @@
       return out;
     });
 
+    // Dedupe presets — sync merging across devices can create duplicates of the
+    // default seed (each device generates its own uid()). Group by (type|desc|amount|group)
+    // and keep the oldest entry; tombstone the rest so deletion propagates.
+    {
+      const groups = new Map();
+      state.presets.forEach((p) => {
+        const key = `${p.type || "expense"}|${(p.desc || "").trim().toLowerCase()}|${Number(p.amount) || 0}|${p.group || "custom"}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+      });
+      const losers = [];
+      const winners = [];
+      groups.forEach((arr) => {
+        if (arr.length <= 1) { winners.push(arr[0]); return; }
+        // Sort by uid creation time (oldest first); preserve favorite flag if any
+        const sorted = arr.slice().sort((a, b) => {
+          const at = recordTimestamp(a);
+          const bt = recordTimestamp(b);
+          return at - bt;
+        });
+        const keeper = sorted[0];
+        // Inherit any favorite flag from the duplicates
+        if (sorted.some((p) => p.favorite)) keeper.favorite = true;
+        winners.push(keeper);
+        sorted.slice(1).forEach((p) => losers.push(p));
+      });
+      if (losers.length > 0) {
+        losers.forEach((p) => tombstoneRecord("presets", p.id));
+        state.presets = winners;
+        migrated = true;
+        console.info(`Cleaned up ${losers.length} duplicate preset${losers.length === 1 ? "" : "s"}`);
+      }
+    }
+
     // Re-link subscription-style presets to the Subscriptions category if they
     // were created before the category existed (categoryId null/empty/missing).
     const relinkResult = relinkPresetsToCategories();
@@ -10384,6 +10418,40 @@
       // empty after this action; full renderAll keeps every control fresh.
       renderAll();
       showToast("All presets deleted");
+    });
+
+    // Remove duplicate presets — same desc + amount + group
+    $("#dedupePresetsBtn")?.addEventListener("click", () => {
+      if (!state.presets.length) {
+        showToast("No presets to dedupe.");
+        return;
+      }
+      const groups = new Map();
+      state.presets.forEach((p) => {
+        const key = `${p.type || "expense"}|${(p.desc || "").trim().toLowerCase()}|${Number(p.amount) || 0}|${p.group || "custom"}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+      });
+      const losers = [];
+      const winners = [];
+      groups.forEach((arr) => {
+        if (arr.length <= 1) { winners.push(arr[0]); return; }
+        const sorted = arr.slice().sort((a, b) => recordTimestamp(a) - recordTimestamp(b));
+        const keeper = sorted[0];
+        if (sorted.some((p) => p.favorite)) keeper.favorite = true;
+        winners.push(keeper);
+        sorted.slice(1).forEach((p) => losers.push(p));
+      });
+      if (losers.length === 0) {
+        showToast("No duplicates found");
+        return;
+      }
+      if (!confirm(`Remove ${losers.length} duplicate preset${losers.length === 1 ? "" : "s"}? The original copy of each will stay.`)) return;
+      losers.forEach((p) => tombstoneRecord("presets", p.id));
+      state.presets = winners;
+      saveData();
+      renderAll();
+      showToast(`Removed ${losers.length} duplicate${losers.length === 1 ? "" : "s"}`);
     });
 
     // Theme toggle in settings
