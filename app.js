@@ -23,6 +23,7 @@
     syncEnabled: "mb_sync_enabled",
     syncSkipReceiptsCellular: "mb_sync_skip_receipts_cellular",
     seeded: "mb_seeded_v1",       // one-time flag — defaults seeded for this install
+    locale: "mb_locale",          // i18n locale, e.g. "en", "es", "fr", "de", "pt", "si"
   };
 
   const DEFAULT_PWD_HASH =
@@ -12120,6 +12121,16 @@
       renderAll();
     });
 
+    // Language selector
+    const langSel = $("#languageSelect");
+    if (langSel && window.i18n) {
+      langSel.value = window.i18n.getLocale();
+      langSel.addEventListener("change", (e) => {
+        window.i18n.setLocale(e.target.value);
+        showToast("✓ Language updated");
+      });
+    }
+
     // Auto-lock timeout
     const autoLockSel = $("#autoLockSelect");
     if (autoLockSel) {
@@ -15300,6 +15311,8 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
       const initialTheme = savedTheme || (sysDark ? "dark" : "light");
       document.documentElement.setAttribute("data-theme", initialTheme);
     } catch (e) { /* ignore */ }
+    // Apply saved/detected locale before initial render
+    try { if (window.i18n) window.i18n.applyTranslations(); } catch (e) {}
     processSyncSetupHash();
     initLock();
     initNav();

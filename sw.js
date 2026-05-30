@@ -1,5 +1,5 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v153";
+const CACHE = "pocket-budget-v154";
 const ASSETS = [
   "./",
   "./index.html",
@@ -7,6 +7,8 @@ const ASSETS = [
   "./icon-192.svg",
   "./icon-512.svg",
 ];
+
+// Versioned core JS files — caught by the dedicated handler below
 
 // CDN libraries — cache on first fetch so they work offline next launch
 const CDN_HOSTS = [
@@ -51,7 +53,7 @@ self.addEventListener("fetch", (event) => {
 
   // Always fetch versioned core assets fresh from network — this lets cache-busting
   // ?v=N actually work without waiting for SW activation.
-  if (url.pathname.endsWith("/app.js") || url.pathname.endsWith("/styles.css")) {
+  if (url.pathname.endsWith("/app.js") || url.pathname.endsWith("/styles.css") || url.pathname.endsWith("/i18n.js")) {
     event.respondWith(
       fetch(event.request)
         .then((res) => {
