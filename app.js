@@ -1170,6 +1170,13 @@
     }
   }
 
+  // Returns a grid-line color for chart axes that adapts to the current theme.
+  // Many charts hardcoded "#eee" which is invisible in dark mode; new charts should
+  // call this helper instead.
+  function chartGridColor() {
+    return theme === "dark" ? "rgba(148, 163, 184, 0.18)" : "#eee";
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -2235,7 +2242,7 @@
           tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmt(ctx.parsed.x)}` } },
         },
         scales: {
-          x: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          x: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
           y: { stacked: true, grid: { display: false } },
         },
       },
@@ -6146,7 +6153,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -6204,7 +6211,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -6259,7 +6266,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -6336,7 +6343,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -6757,7 +6764,7 @@
         plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y.toFixed(1)}%` } } },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => v + "%" }, grid: { color: "#eee" }, beginAtZero: true, max: 100 },
+          y: { ticks: { callback: (v) => v + "%" }, grid: { color: chartGridColor() }, beginAtZero: true, max: 100 },
         },
       },
     });
@@ -6847,7 +6854,7 @@
         plugins: { legend: { position: "top", labels: { boxWidth: 12 } } },
         scales: {
           x: { grid: { display: false } },
-          y: { min: 300, max: 850, grid: { color: "#eee" } },
+          y: { min: 300, max: 850, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -8039,7 +8046,7 @@
           y: {
             min: 300,
             max: 850,
-            grid: { color: "rgba(0,0,0,0.05)" },
+            grid: { color: chartGridColor() },
             ticks: { stepSize: 50 },
           },
         },
@@ -8894,7 +8901,7 @@
         },
         scales: {
           x: { stacked: true, grid: { display: false } },
-          y: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { stacked: true, ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -9074,7 +9081,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });
@@ -9184,7 +9191,7 @@
           tooltip: { callbacks: { label: (ctx) => fmt(ctx.parsed.x) } },
         },
         scales: {
-          x: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          x: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
           y: { grid: { display: false } },
         },
       },
@@ -9241,7 +9248,7 @@
         },
         scales: {
           x: { grid: { display: false } },
-          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: "#eee" } },
+          y: { ticks: { callback: (v) => fmt(v) }, grid: { color: chartGridColor() } },
         },
       },
     });

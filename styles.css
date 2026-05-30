@@ -23,6 +23,13 @@
   --blue: #3b82f6;
   --teal: #14b8a6;
   --amber: #f59e0b;
+  /* Alias for --primary; some legacy CSS uses var(--accent, #5b3fb8) */
+  --accent: #5b3fb8;
+  /* Translucent primary tints used as backgrounds — defined here so dark mode can override */
+  --primary-tint-5: rgba(91, 63, 184, 0.05);
+  --primary-tint-10: rgba(91, 63, 184, 0.10);
+  --primary-tint-15: rgba(91, 63, 184, 0.15);
+  --primary-tint-20: rgba(91, 63, 184, 0.20);
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -40,19 +47,35 @@
   --card-soft: #2a2540;
   --border: #383253;
   --text: #ece9f5;
-  --text-dim: #9590ad;
+  --text-dim: #b3aecf;
 
-  --primary: #8b6dff;
+  --primary: #a98cff;
   --primary-soft: #2d2350;
-  --primary-hover: #a98cff;
+  --primary-hover: #c0a8ff;
+  --accent: #a98cff;
+  /* Brighter tints for dark mode — translucent against dark bg shows up better */
+  --primary-tint-5: rgba(169, 140, 255, 0.10);
+  --primary-tint-10: rgba(169, 140, 255, 0.18);
+  --primary-tint-15: rgba(169, 140, 255, 0.22);
+  --primary-tint-20: rgba(169, 140, 255, 0.28);
 
   --sidebar: #2a2240;
   --sidebar-active: #8b6dff;
   --sidebar-text: #ece9f5;
 
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --pink: #f472b6;
+  --blue: #60a5fa;
+  --teal: #2dd4bf;
+
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
   --shadow: 0 4px 18px rgba(0, 0, 0, 0.4);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  /* Tells the browser to use dark scrollbars + native form-control dark styling */
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -97,6 +120,7 @@ input, select, textarea { font-family: inherit; font-size: 0.95rem; }
   border: 1px solid var(--border);
 }
 .btn-secondary:hover { background: #f0ece4; }
+[data-theme="dark"] .btn-secondary:hover { background: var(--card-soft); }
 
 .btn-danger {
   background: var(--danger);
@@ -140,7 +164,26 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 3px var(--primary-soft);
 }
+[data-theme="dark"] input:focus, [data-theme="dark"] select:focus, [data-theme="dark"] textarea:focus {
+  box-shadow: 0 0 0 3px rgba(169, 140, 255, 0.25);
+}
 input[type="file"] { padding: 0.5rem; background: var(--card-soft); }
+
+/* Native date/time picker icon — make it visible in dark mode */
+[data-theme="dark"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="month"]::-webkit-calendar-picker-indicator,
+[data-theme="dark"] input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.85);
+  opacity: 0.9;
+  cursor: pointer;
+}
+[data-theme="dark"] input[type="color"] { background: var(--card); }
+
+/* Custom scrollbar — visible but unobtrusive in both modes */
+[data-theme="dark"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+[data-theme="dark"] ::-webkit-scrollbar-track { background: var(--bg); }
+[data-theme="dark"] ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 label {
   display: block;
@@ -400,7 +443,7 @@ label {
   align-items: center;
   justify-content: space-between;
   padding: 0.75rem 1rem;
-  background: #fff;
+  background: var(--card);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
@@ -1016,7 +1059,7 @@ label {
   position: absolute;
   top: -12px;
   right: -12px;
-  background: #fff;
+  background: var(--card);
 }
 
 /* ================ Floating Action Button ================ */
@@ -1145,6 +1188,11 @@ label {
   color: var(--primary);
   border-color: var(--primary);
 }
+[data-theme="dark"] .chip-mini:hover {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+}
 .chip-mini:active { transform: scale(0.95); }
 
 /* Compact mode — denser transaction lists */
@@ -1270,6 +1318,9 @@ html.compact-mode .stat-card { padding: 0.85rem; }
 .bulk-recat-btn:hover {
   background: var(--primary-soft, rgba(91, 63, 184, 0.08));
   border-color: var(--primary);
+}
+[data-theme="dark"] .bulk-recat-btn:hover {
+  background: rgba(169, 140, 255, 0.15);
 }
 .bulk-recat-btn .bulk-recat-name { flex: 1 1 auto; }
 .bulk-recat-btn .bulk-recat-count {
