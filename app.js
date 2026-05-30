@@ -52,6 +52,7 @@
     billNegotiations: [],  // each: { id, vendor, before, after, savedMonthly, date, note }
     incomeSources: [],     // each: { id, name, employer, type, defaultAmount } — saved payers/employers
     events: [],            // each: { id, name, icon, color, startDate, endDate, budget, lineItems, notes, status }
+    fxRates: {},           // map: "FROM_TO" -> rate (e.g. "USD_EUR" -> 0.92)
     deletions: {},         // map: collectionName -> { id: deletedAt timestamp }
     mapTimestamps: {},     // map: collectionName -> { key: lastUpdatedAt } for map-style collections
     settings: {
@@ -123,6 +124,83 @@
     });
     return isNeg ? `-${sym}${formatted}` : `${sym}${formatted}`;
   };
+
+  // Multi-currency: convert an amount from one ISO code to another using state.fxRates.
+  // Returns the converted number, or null if no rate is available.
+  function convertFx(amount, fromCode, toCode) {
+    const a = Number(amount) || 0;
+    if (!fromCode || !toCode || fromCode === toCode) return a;
+    const rates = (state && state.fxRates) || {};
+    const direct = rates[`${fromCode}_${toCode}`];
+    if (typeof direct === "number" && direct > 0) return a * direct;
+    const inverse = rates[`${toCode}_${fromCode}`];
+    if (typeof inverse === "number" && inverse > 0) return a / inverse;
+    return null;
+  }
+
+  // Format an amount that's stored in `srcCode`, converting it to the active display currency
+  // for display. Falls back to fmt() when no rate is configured.
+  function fmtFx(amount, srcCode) {
+    if (!srcCode || srcCode === currency) return fmt(amount);
+    const converted = convertFx(amount, srcCode, currency);
+    if (converted == null) {
+      // No rate — display in original currency with code prefix to avoid confusing the user
+      return `${srcCode} ${fmt(amount).replace(/^[^0-9-]+/, "")}`;
+    }
+    return fmt(converted);
+  }
+
+  // Render the list of saved FX rates in the Settings card
+  function renderFxRatesList() {
+    const el = document.getElementById("fxRatesList");
+    if (!el) return;
+    const rates = (state && state.fxRates) || {};
+    const keys = Object.keys(rates);
+    if (!keys.length) {
+      el.innerHTML = '<p class="empty">No FX rates saved yet.</p>';
+      return;
+    }
+    // Deduplicate inverse pairs (show only canonical direction once)
+    const shown = new Set();
+    const rows = [];
+    keys.forEach((k) => {
+      const [from, to] = k.split("_");
+      if (!from || !to) return;
+      const reverseKey = `${to}_${from}`;
+      // Show the pair where the rate is >= 1 (cleaner to read)
+      if (shown.has(k) || shown.has(reverseKey)) return;
+      const direct = Number(rates[k]) || 0;
+      let canonical = k, canonicalRate = direct;
+      if (direct < 1 && rates[reverseKey]) {
+        canonical = reverseKey;
+        canonicalRate = Number(rates[reverseKey]);
+      }
+      shown.add(canonical);
+      const [f, t] = canonical.split("_");
+      rows.push(`
+        <div class="fx-rate-row" style="display:flex;justify-content:space-between;align-items:center;padding:0.4rem 0;border-bottom:1px dashed var(--border)">
+          <span><strong>${escapeHtml(f)}</strong> → <strong>${escapeHtml(t)}</strong>: 1 ${escapeHtml(f)} = ${canonicalRate.toFixed(4)} ${escapeHtml(t)}</span>
+          <button class="icon-btn" data-action="del-fx" data-key="${escapeHtml(canonical)}" title="Delete">🗑️</button>
+        </div>`);
+    });
+    el.innerHTML = rows.join("") || '<p class="empty">No FX rates saved yet.</p>';
+    // Wire delete buttons (idempotent — re-binds on each render)
+    el.querySelectorAll('[data-action="del-fx"]').forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const key = btn.dataset.key;
+        if (!key) return;
+        const [from, to] = key.split("_");
+        if (!confirm(`Delete FX rate ${from} → ${to}?`)) return;
+        if (state.fxRates) {
+          delete state.fxRates[key];
+          delete state.fxRates[`${to}_${from}`]; // also delete the inverse
+          saveData();
+          renderFxRatesList();
+          showToast("💱 FX rate removed");
+        }
+      });
+    });
+  }
 
   const todayStr = () => {
     const d = new Date();
@@ -311,6 +389,7 @@
     if (!Array.isArray(state.billNegotiations)) state.billNegotiations = [];
     if (!Array.isArray(state.incomeSources)) state.incomeSources = [];
     if (!Array.isArray(state.events)) state.events = [];
+    if (typeof state.fxRates !== "object" || !state.fxRates) state.fxRates = {};
 
     // Migration: each credit card gets a paired account in Balances so debt is visible
     // and pay-card transfers can post to it.
@@ -350,7 +429,7 @@
     // Backfill mapTimestamps for any existing keys that lack one. This way, after
     // upgrading, the next time the user touches a value, the merge correctly
     // identifies it as newer than other devices' un-stamped values.
-    ["monthlyIncome", "creditFreezes", "annualReports"].forEach((coll) => {
+    ["monthlyIncome", "creditFreezes", "annualReports", "fxRates"].forEach((coll) => {
       if (!state.mapTimestamps[coll]) state.mapTimestamps[coll] = {};
       Object.keys(state[coll] || {}).forEach((k) => {
         if (typeof state.mapTimestamps[coll][k] !== "number") {
@@ -404,6 +483,12 @@
     // Apply persisted accent color early to avoid theme flicker
     if (state.settings.accentColor) {
       try { applyAccentColor(state.settings.accentColor); } catch (e) {}
+    }
+    // Apply compact mode early to avoid layout flash
+    if (state.settings.compactMode) {
+      document.documentElement.classList.add("compact-mode");
+    } else {
+      document.documentElement.classList.remove("compact-mode");
     }
 
     // Seed default categories when empty and never deleted from
@@ -1786,6 +1871,12 @@
             <input type="number" placeholder="Add amount" step="0.01" min="0" data-goal-input="${g.id}" />
             <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
             ${suggestedHtml}
+          </div>
+          <div class="goal-quick-chips" style="margin-top:0.4rem">
+            <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="10">+10</button>
+            <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="25">+25</button>
+            <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="50">+50</button>
+            <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="100">+100</button>
           </div>
         </div>`;
     }).join("");
@@ -3851,12 +3942,14 @@
       if (pct >= 100 && !alertsShown[key100]) {
         if (notifEnabled("cat100")) {
           showAlertToast(`🚨 ${cat.name} is over budget!`, "danger");
+          showSystemNotification(`🚨 ${cat.name} is over budget!`, `You've spent ${fmt(spent)} of ${fmt(limit)} this month.`);
         }
         alertsShown[key100] = true;
         changed = true;
       } else if (pct >= 80 && pct < 100 && !alertsShown[key80]) {
         if (notifEnabled("cat80")) {
           showAlertToast(`⚠️ ${cat.name} at ${Math.round(pct)}% of budget`, "warning");
+          showSystemNotification(`⚠️ ${cat.name} at ${Math.round(pct)}%`, `${fmt(spent)} of ${fmt(limit)} spent this month.`);
         }
         alertsShown[key80] = true;
         changed = true;
@@ -3877,6 +3970,18 @@
       toast.hidden = true;
       toast.className = "toast";
     }, 3500);
+  }
+
+  // Show OS-level notification (when permission granted and toggle on)
+  function showSystemNotification(title, body) {
+    try {
+      if (typeof Notification === "undefined") return;
+      if (!state.settings.notifyEnableSystem) return;
+      if (Notification.permission !== "granted") return;
+      // Skip if app is in foreground & visible — toast already shown
+      if (typeof document !== "undefined" && document.visibilityState === "visible") return;
+      new Notification(title, { body, icon: "icon-192.svg", tag: "pocket-budget" });
+    } catch (e) { /* ignore */ }
   }
 
   /* ---------- Bulk select & undo ---------- */
@@ -4037,6 +4142,9 @@
 
     // 7-day spending sparkline under the Spent stat
     renderSpentSparkline();
+
+    // Spending pulse: forecast, velocity, streaks
+    renderPulse(month, totalSpent, monthExpenses);
 
     // One-shot over-budget alert per month: if you cross 100% of total budget
     checkOverBudgetAlert(totalSpent, month);
@@ -4319,6 +4427,134 @@
     }
   }
 
+  // Spending Pulse: forecast vs actual, daily velocity, under-budget streak
+  function renderPulse(month, totalSpent, monthExpenses) {
+    const el = document.getElementById("pulseContent");
+    if (!el) return;
+    const now = new Date();
+    const [yy, mm] = month.split("-").map(Number);
+    const isCurrentMonth = (yy === now.getFullYear() && mm === now.getMonth() + 1);
+    const dayOfMonth = isCurrentMonth ? now.getDate() : new Date(yy, mm, 0).getDate();
+    const daysInMonth = new Date(yy, mm, 0).getDate();
+    const daysRemaining = Math.max(0, daysInMonth - dayOfMonth);
+
+    // Forecast: current spent / day-of-month * days-in-month
+    const dailyAvg = dayOfMonth > 0 ? totalSpent / dayOfMonth : 0;
+    const forecast = dailyAvg * daysInMonth;
+    const totalLimit = state.categories.reduce((s, c) => s + (effectiveLimitFor(c, month) || 0), 0);
+
+    // Forecast tone vs total budget
+    let forecastTone = "neutral";
+    let forecastNote = "";
+    if (totalLimit > 0) {
+      if (forecast > totalLimit * 1.1) {
+        forecastTone = "danger";
+        forecastNote = `${fmt(forecast - totalLimit)} over budget at this pace`;
+      } else if (forecast > totalLimit) {
+        forecastTone = "warning";
+        forecastNote = `Slightly over budget at this pace`;
+      } else if (forecast < totalLimit * 0.85) {
+        forecastTone = "success";
+        forecastNote = `On track — ${fmt(totalLimit - forecast)} under at this pace`;
+      } else {
+        forecastTone = "success";
+        forecastNote = `On track`;
+      }
+    }
+
+    // Streak: count consecutive past days ending yesterday (or today if isCurrentMonth) where daily total < daily budget
+    const dailyBudget = totalLimit > 0 ? totalLimit / daysInMonth : 0;
+    let streak = 0;
+    if (dailyBudget > 0) {
+      const startDate = new Date(now);
+      // Start from yesterday so today (in-progress) doesn't break the streak prematurely
+      startDate.setDate(startDate.getDate() - 1);
+      for (let i = 0; i < 365; i++) {
+        const d = new Date(startDate);
+        d.setDate(startDate.getDate() - i);
+        const ds = d.toISOString().slice(0, 10);
+        const dayTotal = state.expenses
+          .filter((e) => e.date === ds && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+          .reduce((s, e) => s + Number(e.amount), 0);
+        if (dayTotal <= dailyBudget) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+    }
+
+    // Velocity: daily average vs daily budget
+    let velocityHtml = "";
+    if (dailyAvg > 0) {
+      if (dailyBudget > 0) {
+        const ratio = dailyAvg / dailyBudget;
+        const tone = ratio > 1.05 ? "negative" : (ratio < 0.95 ? "positive" : "");
+        velocityHtml = `<span class="${tone}">${fmt(dailyAvg)}/day</span> vs ${fmt(dailyBudget)}/day budget`;
+      } else {
+        velocityHtml = `${fmt(dailyAvg)}/day this month`;
+      }
+    } else {
+      velocityHtml = `No spend yet this month`;
+    }
+
+    // Forecast block
+    let forecastHtml = "";
+    if (totalLimit > 0) {
+      forecastHtml = `
+        <div class="pulse-row">
+          <span class="pulse-icon">📈</span>
+          <div class="pulse-text">
+            <strong>Forecast: ${fmt(forecast)}</strong> by month-end
+            <div class="card-sub pulse-${forecastTone}">${escapeHtml(forecastNote)}</div>
+          </div>
+        </div>`;
+    } else {
+      forecastHtml = `
+        <div class="pulse-row">
+          <span class="pulse-icon">📈</span>
+          <div class="pulse-text">
+            <strong>Forecast: ${fmt(forecast)}</strong> by month-end
+            <div class="card-sub">Set category budgets to see how you compare</div>
+          </div>
+        </div>`;
+    }
+
+    // Velocity block
+    const velocityBlock = `
+      <div class="pulse-row">
+        <span class="pulse-icon">💸</span>
+        <div class="pulse-text">
+          <strong>Spending velocity</strong>
+          <div class="card-sub">${velocityHtml}</div>
+        </div>
+      </div>`;
+
+    // Streak block
+    let streakBlock = "";
+    if (dailyBudget > 0) {
+      const streakLabel = streak === 0
+        ? "No active streak — try a no-spend day to start"
+        : `${streak} day${streak === 1 ? "" : "s"} under daily budget`;
+      const flame = streak >= 7 ? "🔥" : (streak >= 3 ? "✨" : "🏆");
+      streakBlock = `
+        <div class="pulse-row">
+          <span class="pulse-icon">${flame}</span>
+          <div class="pulse-text">
+            <strong>Streak</strong>
+            <div class="card-sub">${escapeHtml(streakLabel)}</div>
+          </div>
+        </div>`;
+    }
+
+    // Days remaining context
+    const daysHtml = isCurrentMonth && daysRemaining > 0
+      ? `<div class="pulse-footer card-sub">${daysRemaining} day${daysRemaining === 1 ? "" : "s"} left this month</div>`
+      : "";
+
+    el.innerHTML = forecastHtml + velocityBlock + streakBlock + daysHtml;
+  }
+
   // Drag-to-reorder for dashboard stat cards
   function initStatCardDrag() {
     const grid = document.getElementById("statGrid");
@@ -4523,6 +4759,12 @@
               <input type="number" placeholder="Add to savings" step="0.01" min="0" data-goal-input="${g.id}" />
               <button class="btn-primary" data-action="add-saving" data-id="${g.id}">Add</button>
               <button class="btn-secondary" data-action="del-goal" data-id="${g.id}">Delete</button>
+            </div>
+            <div class="goal-quick-chips" style="margin-top:0.4rem">
+              <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="10">+10</button>
+              <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="25">+25</button>
+              <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="50">+50</button>
+              <button class="chip-mini" data-action="quick-goal-amt" data-id="${g.id}" data-amt="100">+100</button>
             </div>
           </li>`;
         })
@@ -4841,6 +5083,49 @@
     safeCall(renderTagsChart, "tags");
     safeCall(renderYoYChart, "yoy");
     safeCall(renderMoneyFlow, "moneyFlow");
+    safeCall(() => renderTagAnalytics(expenses), "tagAnalytics");
+  }
+
+  // Tag analytics: list per-tag totals for the filtered window, with a 6-month trend sparkline per tag
+  function renderTagAnalytics(expenses) {
+    const el = document.getElementById("tagAnalyticsList");
+    if (!el) return;
+    const tagTotals = {};
+    (expenses || []).forEach((e) => {
+      if (e.type !== "expense") return;
+      const tags = (e.tags || []).filter(Boolean);
+      tags.forEach((t) => {
+        const k = String(t).trim().toLowerCase();
+        if (!k) return;
+        tagTotals[k] = (tagTotals[k] || 0) + (Number(e.amount) || 0);
+      });
+    });
+    const sorted = Object.entries(tagTotals).sort((a, b) => b[1] - a[1]).slice(0, 12);
+    if (!sorted.length) {
+      el.innerHTML = '<p class="empty">Tag transactions to see analytics.</p>';
+      return;
+    }
+    // Build 6-month trend per tag (using ALL state.expenses, not just filtered)
+    const months = [];
+    let cursor = currentMonth();
+    for (let i = 0; i < 6; i++) {
+      months.unshift(cursor);
+      cursor = prevMonth(cursor);
+    }
+    el.innerHTML = sorted.map(([tag, total]) => {
+      const monthly = months.map((m) => {
+        return state.expenses
+          .filter((e) => e.type === "expense" && monthKey(e.date) === m && (e.tags || []).map((t) => String(t).toLowerCase()).includes(tag))
+          .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      });
+      const spark = renderSparkline(monthly, { width: 100, height: 22 });
+      return `
+        <div class="tag-row">
+          <span class="tag-name">#${escapeHtml(tag)}</span>
+          <span class="tag-amount">${fmt(total)}</span>
+          <span class="tag-spark">${spark}</span>
+        </div>`;
+    }).join("");
   }
 
   // Tiny inline SVG sparkline. Used in dashboard category list for 6-month trend.
@@ -8949,6 +9234,89 @@
     return result.data.text || "";
   }
 
+  // Receipt OCR helper — runs lightweight OCR on the receipt image and pre-fills
+  // the expense amount and description if the user hasn't already filled them.
+  let _ocrInFlight = false;
+  async function maybeOcrReceiptAmount(file) {
+    try {
+      if (_ocrInFlight) return;
+      if (!file || !file.type || !file.type.startsWith("image/")) return;
+      const amtInput = document.getElementById("expAmount");
+      const descInput = document.getElementById("expDesc");
+      // Don't run if user has already typed an amount
+      if (amtInput && amtInput.value && parseFloat(amtInput.value) > 0) return;
+      _ocrInFlight = true;
+      const hint = document.getElementById("receiptPreview");
+      const oldDataset = hint ? hint.dataset.ocrLabel : null;
+      if (hint) {
+        const label = document.createElement("div");
+        label.className = "card-sub";
+        label.id = "receiptOcrLabel";
+        label.style.marginTop = "0.4rem";
+        label.textContent = "🔍 Reading receipt…";
+        hint.appendChild(label);
+      }
+      const text = await ocrImage(file, (pct) => {
+        const lbl = document.getElementById("receiptOcrLabel");
+        if (lbl) lbl.textContent = `🔍 Reading receipt… ${Math.round(pct * 100)}%`;
+      });
+      const lbl = document.getElementById("receiptOcrLabel");
+      if (lbl) lbl.remove();
+      if (!text) {
+        showToast("Couldn't read receipt — type the amount manually");
+        return;
+      }
+      // Find an amount: prefer "Total"/"Amount" lines; fall back to last currency-formatted number
+      const cleaned = text.replace(/[\u2212\u2013\u2014]/g, "-").replace(/\u00a0/g, " ");
+      const lines = cleaned.split(/\r?\n/);
+      let amount = null;
+      // 1. Look for "TOTAL ... $X.XX" or "AMOUNT ... $X.XX" (case-insensitive)
+      const totalRe = /\b(?:grand\s+)?total(?:\s+due)?\b[^0-9$]*\$?\s*(\d{1,3}(?:[,\d]{0,7})\.\d{2})/i;
+      for (const line of lines) {
+        const m = line.match(totalRe);
+        if (m) { amount = parseFloat(m[1].replace(/,/g, "")); break; }
+      }
+      // 2. If still nothing, take the LAST currency-formatted amount (often the receipt total)
+      if (amount == null) {
+        const allAmounts = [...cleaned.matchAll(/\$?\s*(\d{1,3}(?:,\d{3})*\.\d{2})/g)]
+          .map((m) => parseFloat(m[1].replace(/,/g, "")))
+          .filter((n) => !isNaN(n) && n > 0);
+        if (allAmounts.length) amount = allAmounts[allAmounts.length - 1];
+      }
+      // Look for a vendor/description: first non-empty line that's not a date or amount
+      let vendor = null;
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^\d/.test(trimmed)) continue; // starts with digit — likely date or number
+        if (/^[\d\s\W]+$/.test(trimmed)) continue;
+        if (trimmed.length < 3 || trimmed.length > 40) continue;
+        vendor = trimmed.replace(/\s+/g, " ");
+        break;
+      }
+      let toastMsg = [];
+      if (amount && amtInput && (!amtInput.value || parseFloat(amtInput.value) === 0)) {
+        amtInput.value = amount.toFixed(2);
+        toastMsg.push(`amount $${amount.toFixed(2)}`);
+      }
+      if (vendor && descInput && !descInput.value.trim()) {
+        descInput.value = vendor;
+        toastMsg.push(`vendor "${vendor}"`);
+      }
+      if (toastMsg.length) {
+        showToast(`🧾 Filled ${toastMsg.join(" and ")}`);
+      } else {
+        showToast("Couldn't auto-fill — receipt text unclear");
+      }
+    } catch (err) {
+      console.error("Receipt OCR failed:", err);
+      const lbl = document.getElementById("receiptOcrLabel");
+      if (lbl) lbl.remove();
+    } finally {
+      _ocrInFlight = false;
+    }
+  }
+
   function parsePaystub(rawText) {
     // Defensive: ensure we have a string to work with
     if (!rawText || typeof rawText !== "string") {
@@ -9668,6 +10036,8 @@
           preview.innerHTML = `<img src="${dataUrl}" alt="Receipt preview" />`;
           preview.hidden = false;
           preview.dataset.dataUrl = dataUrl;
+          // Try OCR auto-fill if amount is empty
+          maybeOcrReceiptAmount(file);
         })
         .catch((err) => {
           console.error(err);
@@ -12133,6 +12503,30 @@
           input.value = amt;
           input.focus();
         }
+      } else if (action === "quick-goal-amt") {
+        // One-tap chip: directly add this amount to the goal
+        const amt = parseFloat(btn.dataset.amt);
+        if (isNaN(amt) || amt <= 0) return;
+        const goal = state.goals.find((g) => g.id === id);
+        if (!goal) return;
+        const liquid = liquidAccounts ? liquidAccounts() : [];
+        const acct = liquid[0] ? liquid[0].id : null;
+        state.expenses.push(touchRecord({
+          id: uid(),
+          type: "expense",
+          desc: `Saved to ${goal.name}`,
+          amount: amt,
+          date: todayStr(),
+          categoryId: null,
+          accountId: acct,
+          personId: null,
+          goalId: id,
+          tags: ["goal-contribution"],
+          receipt: null,
+        }));
+        saveData();
+        renderAll();
+        showToast(`+${fmt(amt)} → ${goal.name}`);
       }
     });
 
@@ -12148,7 +12542,41 @@
       setSetting("currency", currency);
       saveData();
       renderAll();
+      renderFxRatesList();
     });
+
+    // FX rates
+    const fxSaveBtn = $("#fxSaveBtn");
+    if (fxSaveBtn) {
+      fxSaveBtn.addEventListener("click", () => {
+        const from = ($("#fxFromInput")?.value || "").trim().toUpperCase();
+        const to = ($("#fxToInput")?.value || "").trim().toUpperCase();
+        const rate = parseFloat($("#fxRateInput")?.value);
+        if (!/^[A-Z]{3}$/.test(from) || !/^[A-Z]{3}$/.test(to)) {
+          showAlertToast("Enter 3-letter currency codes (e.g. USD, EUR)", "warning");
+          return;
+        }
+        if (from === to) {
+          showAlertToast("From and To currencies must differ", "warning");
+          return;
+        }
+        if (isNaN(rate) || rate <= 0) {
+          showAlertToast("Rate must be a positive number", "warning");
+          return;
+        }
+        if (!state.fxRates) state.fxRates = {};
+        state.fxRates[`${from}_${to}`] = rate;
+        // Also store the inverse for convenience
+        state.fxRates[`${to}_${from}`] = 1 / rate;
+        saveData();
+        renderFxRatesList();
+        showToast(`💱 Saved 1 ${from} = ${rate} ${to}`);
+        $("#fxFromInput").value = "";
+        $("#fxToInput").value = "";
+        $("#fxRateInput").value = "";
+      });
+    }
+    renderFxRatesList();
 
     // Language selector
     const langSel = $("#languageSelect");
@@ -12273,6 +12701,22 @@
       });
     }
 
+    // Compact mode toggle
+    const compactToggle = $("#compactModeToggle");
+    if (compactToggle) {
+      compactToggle.checked = !!state.settings?.compactMode;
+      // Apply on init if already on
+      if (state.settings?.compactMode) {
+        document.documentElement.classList.add("compact-mode");
+      }
+      compactToggle.addEventListener("change", (e) => {
+        setSetting("compactMode", e.target.checked);
+        saveData();
+        document.documentElement.classList.toggle("compact-mode", e.target.checked);
+        showToast(e.target.checked ? "📏 Compact mode on" : "Default density");
+      });
+    }
+
     // Default account / category for Add Transaction
     populateDefaultsSelects();
     $("#defaultAccountSelect")?.addEventListener("change", (e) => {
@@ -12309,6 +12753,41 @@
         showToast(e.target.checked ? "Notification enabled" : "Notification muted");
       });
     });
+
+    // Browser/system notifications toggle (shows OS notifications even when app is closed)
+    const sysNotifEl = $("#notifySystemToggle");
+    if (sysNotifEl) {
+      const supported = typeof Notification !== "undefined";
+      if (!supported) {
+        sysNotifEl.disabled = true;
+        sysNotifEl.checked = false;
+      } else {
+        sysNotifEl.checked = !!state.settings.notifyEnableSystem && Notification.permission === "granted";
+        sysNotifEl.addEventListener("change", async (e) => {
+          if (e.target.checked) {
+            try {
+              const perm = await Notification.requestPermission();
+              if (perm === "granted") {
+                setSetting("notifyEnableSystem", true);
+                saveData();
+                showToast("🔔 System notifications enabled");
+                try { new Notification("Pocket Budget", { body: "System notifications are on.", icon: "icon-192.svg" }); } catch (_) {}
+              } else {
+                e.target.checked = false;
+                showAlertToast("Notification permission denied — enable it in your browser settings", "warning");
+              }
+            } catch (err) {
+              e.target.checked = false;
+              showAlertToast("Could not request notification permission", "danger");
+            }
+          } else {
+            setSetting("notifyEnableSystem", false);
+            saveData();
+            showToast("System notifications off");
+          }
+        });
+      }
+    }
 
     // Theme accent color
     document.querySelectorAll(".accent-swatch").forEach((sw) => {
@@ -12424,6 +12903,145 @@
       saveData();
       renderBackupHealth();
       showToast(`Exported ${payload._meta.txnCount} transaction${payload._meta.txnCount === 1 ? "" : "s"}`);
+    });
+
+    // Email summary — generate plain-text monthly report and open mailto:
+    $("#emailSummaryBtn")?.addEventListener("click", () => {
+      try {
+        const month = currentMonth();
+        const monthExpenses = state.expenses.filter(
+          (e) => monthKey(e.date) === month && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+        );
+        const monthIncomes = state.expenses.filter((e) => monthKey(e.date) === month && e.type === "income");
+        const totalSpent = monthExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+        const totalIncome = monthIncomes.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+        const net = totalIncome - totalSpent;
+
+        // Per-category breakdown
+        const byCat = {};
+        monthExpenses.forEach((e) => {
+          const cat = state.categories.find((c) => c.id === e.categoryId);
+          const name = cat ? cat.name : "Uncategorized";
+          byCat[name] = (byCat[name] || 0) + (Number(e.amount) || 0);
+        });
+        const catLines = Object.entries(byCat)
+          .sort((a, b) => b[1] - a[1])
+          .map(([name, amt]) => `  - ${name}: ${fmt(amt)}`)
+          .join("\n");
+
+        // Top 5 transactions
+        const top = [...monthExpenses]
+          .sort((a, b) => Number(b.amount) - Number(a.amount))
+          .slice(0, 5)
+          .map((e) => `  - ${e.date}  ${e.desc || "(no description)"}  ${fmt(e.amount)}`)
+          .join("\n");
+
+        const subject = `Pocket Budget — ${month} summary`;
+        const body =
+`Pocket Budget — ${month}
+
+Income:    ${fmt(totalIncome)}
+Spent:     ${fmt(totalSpent)}
+Net:       ${fmt(net)}
+Txns:      ${monthExpenses.length}
+
+By Category:
+${catLines || "  (none)"}
+
+Top Transactions:
+${top || "  (none)"}
+
+— sent from Pocket Budget`;
+        const url = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        // Some platforms block long mailto URLs (~2k char limit). Truncate gracefully.
+        if (url.length > 2000) {
+          const trimmed = body.slice(0, 1500) + "\n…(truncated)";
+          window.location.href = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(trimmed)}`;
+        } else {
+          window.location.href = url;
+        }
+        showToast("📧 Email draft opened");
+      } catch (err) {
+        showAlertToast("Could not generate email summary", "danger");
+        console.error(err);
+      }
+    });
+
+    // Share read-only snapshot — generates a base64 data URL with balances/totals only (no transactions)
+    $("#shareSnapshotBtn")?.addEventListener("click", async () => {
+      try {
+        const month = currentMonth();
+        const monthExpenses = state.expenses.filter(
+          (e) => monthKey(e.date) === month && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+        );
+        const totalSpent = monthExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+        const monthIncomes = state.expenses.filter((e) => monthKey(e.date) === month && e.type === "income");
+        const totalIncome = monthIncomes.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+        const accountSnaps = (state.accounts || []).map((a) => ({
+          name: a.name,
+          balance: typeof accountBalance === "function" ? accountBalance(a.id) : 0,
+          type: a.type,
+        }));
+        const goalSnaps = (state.goals || []).map((g) => ({
+          name: g.name,
+          saved: Number(g.saved) || 0,
+          target: Number(g.target) || 0,
+        }));
+        const catSnaps = (state.categories || []).map((c) => {
+          const spent = monthExpenses
+            .filter((e) => e.categoryId === c.id)
+            .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+          return { name: c.name, spent, limit: Number(c.limit) || 0 };
+        });
+        const snapshot = {
+          v: 1,
+          generatedAt: Date.now(),
+          month,
+          totals: { income: totalIncome, spent: totalSpent, net: totalIncome - totalSpent },
+          accounts: accountSnaps,
+          goals: goalSnaps,
+          categories: catSnaps,
+        };
+        const json = JSON.stringify(snapshot);
+        // Base64-encode safely (UTF-8 friendly)
+        const b64 = btoa(unescape(encodeURIComponent(json)));
+        // Build a printable text summary for sharing
+        const textSummary =
+`Pocket Budget — Read-only Snapshot — ${month}
+Income: ${fmt(totalIncome)}  Spent: ${fmt(totalSpent)}  Net: ${fmt(totalIncome - totalSpent)}
+Generated: ${new Date().toLocaleString()}
+
+Accounts: ${accountSnaps.length}, Goals: ${goalSnaps.length}, Categories: ${catSnaps.length}
+
+(Snapshot data — copy and share)
+${b64}`;
+        // Prefer Web Share API on mobile
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: "Pocket Budget snapshot", text: textSummary });
+            showToast("🤝 Snapshot shared");
+            return;
+          } catch (_) { /* user cancelled — fall through to copy */ }
+        }
+        try {
+          await navigator.clipboard.writeText(textSummary);
+          showToast("🤝 Snapshot copied to clipboard");
+        } catch (_) {
+          // Final fallback: download as text file
+          const blob = new Blob([textSummary], { type: "text/plain" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `pocket-budget-snapshot-${month}.txt`;
+          a.click();
+          URL.revokeObjectURL(url);
+          showToast("🤝 Snapshot saved");
+        }
+      } catch (err) {
+        showAlertToast("Could not generate snapshot", "danger");
+        console.error(err);
+      }
     });
 
     // Import
@@ -12669,26 +13287,81 @@
     if (!el) return;
     const query = q.toLowerCase().trim();
     if (!query) {
-      el.innerHTML = '<p class="empty">Type to search across the app.</p>';
+      el.innerHTML = '<p class="empty">Type to search. Try "starbucks", "$50", or "starbucks last week".</p>';
       return;
     }
 
-    const matches = (str) => str && str.toLowerCase().includes(query);
+    // Smart parse: extract amount (e.g. "$50" or "50.25") and date keywords ("last week", "this month")
+    let textPart = query;
+    let amountFilter = null;
+    const amtMatch = query.match(/\$?\s*(\d+(?:\.\d{1,2})?)/);
+    if (amtMatch) {
+      amountFilter = parseFloat(amtMatch[1]);
+      textPart = textPart.replace(amtMatch[0], "").trim();
+    }
+    let dateRangeFilter = null;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dayMs = 86400000;
+    const fmtDate = (d) => d.toISOString().slice(0, 10);
+    if (/\blast\s*week\b/.test(query)) {
+      const start = new Date(today.getTime() - 7 * dayMs);
+      dateRangeFilter = { from: fmtDate(start), to: fmtDate(today) };
+      textPart = textPart.replace(/\blast\s*week\b/, "").trim();
+    } else if (/\bthis\s*week\b/.test(query)) {
+      const day = today.getDay();
+      const monday = new Date(today.getTime() - ((day + 6) % 7) * dayMs);
+      dateRangeFilter = { from: fmtDate(monday), to: fmtDate(today) };
+      textPart = textPart.replace(/\bthis\s*week\b/, "").trim();
+    } else if (/\blast\s*month\b/.test(query)) {
+      const m = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const end = new Date(today.getFullYear(), today.getMonth(), 0);
+      dateRangeFilter = { from: fmtDate(m), to: fmtDate(end) };
+      textPart = textPart.replace(/\blast\s*month\b/, "").trim();
+    } else if (/\bthis\s*month\b/.test(query)) {
+      const m = new Date(today.getFullYear(), today.getMonth(), 1);
+      dateRangeFilter = { from: fmtDate(m), to: fmtDate(today) };
+      textPart = textPart.replace(/\bthis\s*month\b/, "").trim();
+    } else if (/\btoday\b/.test(query)) {
+      dateRangeFilter = { from: fmtDate(today), to: fmtDate(today) };
+      textPart = textPart.replace(/\btoday\b/, "").trim();
+    } else if (/\byesterday\b/.test(query)) {
+      const y = new Date(today.getTime() - dayMs);
+      dateRangeFilter = { from: fmtDate(y), to: fmtDate(y) };
+      textPart = textPart.replace(/\byesterday\b/, "").trim();
+    }
+    textPart = textPart.replace(/\s+/g, " ").trim();
+
+    const matches = (str) => {
+      if (!textPart) return true;
+      return str && str.toLowerCase().includes(textPart);
+    };
 
     const txnHits = state.expenses
-      .filter((e) => matches(e.desc) || (e.tags || []).some(matches))
+      .filter((e) => {
+        if (textPart && !(matches(e.desc) || (e.tags || []).some(matches))) return false;
+        if (amountFilter != null) {
+          const diff = Math.abs((Number(e.amount) || 0) - amountFilter);
+          if (diff > 0.01) return false;
+        }
+        if (dateRangeFilter && e.date) {
+          if (e.date < dateRangeFilter.from || e.date > dateRangeFilter.to) return false;
+        }
+        return true;
+      })
       .slice(0, 10)
       .map((e) => {
         const cat = state.categories.find((c) => c.id === e.categoryId);
         return {
           icon: e.type === "income" ? "💰" : "💸",
-          title: e.desc,
+          title: e.desc || "(no description)",
           sub: `${e.date} · ${cat ? cat.name : "Uncategorized"} · ${fmt(e.amount)}`,
           action: () => { closeGlobalSearch(); openExpenseModal(e); },
         };
       });
 
-    const cardHits = state.cards.filter((c) => matches(c.name) || matches(c.issuer)).map((c) => {
+    // Cards/people/etc. only match by text — skip if query has no text part
+    const cardHits = textPart ? state.cards.filter((c) => matches(c.name) || matches(c.issuer)).map((c) => {
       const bal = cardCurrentBalance(c);
       return {
         icon: "💳",
@@ -12696,7 +13369,7 @@
         sub: c.issuer ? `${c.issuer} · Balance ${fmt(bal)}` : `Balance ${fmt(bal)}`,
         action: () => { closeGlobalSearch(); $('[data-tab="credit"]').click(); },
       };
-    });
+    }) : [];
 
     const peopleHits = state.people.filter((p) => matches(p.name) || matches(p.relation)).map((p) => ({
       icon: "👤",
@@ -13238,7 +13911,7 @@
   // Date-keyed time series — keep newest value per date
   const DATE_SERIES_COLLECTIONS = ["netWorthHistory", "utilHistory"];
   // Map-style settings — merge keys
-  const MAP_COLLECTIONS = ["monthlyIncome", "creditFreezes", "annualReports"];
+  const MAP_COLLECTIONS = ["monthlyIncome", "creditFreezes", "annualReports", "fxRates"];
 
   function recordTimestamp(rec) {
     if (rec.updatedAt) return Number(rec.updatedAt);
