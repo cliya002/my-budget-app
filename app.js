@@ -14658,6 +14658,8 @@ ${b64}`;
     showAlertToast("📡 Back online", "success");
     if (dirtyForSync) syncPush({ silent: true });
     updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
+    // Reset session dismiss so the banner can show again next time we go offline
+    window._offlineBannerDismissed = false;
     updateNetStatus();
   }
   function handleOffline() {
@@ -14741,7 +14743,9 @@ ${b64}`;
     let banner = $("#offlineBanner");
     const syncConfigured = !!(localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId));
     const lockOpen = !!($("#lockScreen") && $("#lockScreen").classList.contains("open"));
-    const shouldShowBanner = !online && syncConfigured && !lockOpen;
+    // User-dismissed for this session (via the × button) — don't re-show until reload or back online → offline cycle
+    const sessionDismissed = window._offlineBannerDismissed === true;
+    const shouldShowBanner = !online && syncConfigured && !lockOpen && !sessionDismissed;
     if (shouldShowBanner) {
       // Count pending changes since last sync (if dirty flag is true)
       let countMsg = "";
@@ -14753,7 +14757,7 @@ ${b64}`;
         banner = document.createElement("div");
         banner.id = "offlineBanner";
         banner.className = "offline-banner";
-        banner.innerHTML = `<span>${msg}</span><button type="button" class="offline-banner-retry">🔁 Retry sync</button>`;
+        banner.innerHTML = `<span>${msg}</span><button type="button" class="offline-banner-retry">🔁 Retry sync</button><button type="button" class="offline-banner-close" aria-label="Dismiss" title="Dismiss">×</button>`;
         document.body.appendChild(banner);
         // Wire the retry button
         const retryBtn = banner.querySelector(".offline-banner-retry");
@@ -14771,6 +14775,21 @@ ${b64}`;
               retryBtn.disabled = false;
               retryBtn.textContent = "🔁 Retry sync";
             }
+          });
+        }
+        // Wire the dismiss × button — hides banner for this session
+        const closeBtn = banner.querySelector(".offline-banner-close");
+        if (closeBtn) {
+          closeBtn.addEventListener("click", () => {
+            window._offlineBannerDismissed = true;
+            banner.classList.remove("show");
+            document.body.classList.remove("has-offline-banner");
+            // Schedule removal after CSS transition
+            if (banner._removalTimer) clearTimeout(banner._removalTimer);
+            banner._removalTimer = setTimeout(() => {
+              if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
+            }, 400);
+            showToast("Offline banner dismissed for this session");
           });
         }
         // Cancel any pending removal from a previous offline→online flicker
@@ -14791,8 +14810,11 @@ ${b64}`;
         }
         banner.classList.add("show");
       }
+      // Push the page content down so the banner doesn't overlap headings/buttons
+      document.body.classList.add("has-offline-banner");
     } else if (banner) {
       banner.classList.remove("show");
+      document.body.classList.remove("has-offline-banner");
       // Remove after transition (cancellable)
       if (banner._removalTimer) clearTimeout(banner._removalTimer);
       const ref = banner; // freeze for closure
@@ -14802,6 +14824,9 @@ ${b64}`;
           ref.parentNode.removeChild(ref);
         }
       }, 400);
+    } else {
+      // No banner element exists — make sure body class is also off
+      document.body.classList.remove("has-offline-banner");
     }
   }
   function handleVisibility() {
