@@ -601,6 +601,84 @@
       return out;
     });
 
+    // Dedupe categories — sync merging across devices can create duplicates of the
+    // default seed (each device generates its own uid()). Group by lowercased name,
+    // keep the oldest entry, repoint every reference (txns/recurring/presets/account-cat
+    // map/default category setting) to the survivor, then tombstone the losers.
+    {
+      const groups = new Map();
+      (state.categories || []).forEach((c) => {
+        const key = (c.name || "").trim().toLowerCase();
+        if (!key) return;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(c);
+      });
+      const idRemap = new Map(); // oldId -> winnerId
+      const losersToTombstone = [];
+      groups.forEach((arr) => {
+        if (arr.length < 2) return;
+        const sorted = arr.slice().sort((a, b) => recordTimestamp(a) - recordTimestamp(b));
+        const winner = sorted[0];
+        // Inherit a non-zero limit from any duplicate so we don't accidentally lose
+        // the user's configured budget when merging. Highest wins (most likely the
+        // intentional one).
+        const limits = sorted.map((c) => Number(c.limit) || 0);
+        const maxLimit = Math.max(...limits);
+        if (maxLimit > 0 && (Number(winner.limit) || 0) !== maxLimit) {
+          winner.limit = maxLimit;
+          touchRecord(winner);
+        }
+        for (let i = 1; i < sorted.length; i++) {
+          idRemap.set(sorted[i].id, winner.id);
+          losersToTombstone.push(sorted[i].id);
+        }
+      });
+      if (idRemap.size > 0) {
+        // Repoint references
+        const repoint = (rec, key) => {
+          if (rec[key] && idRemap.has(rec[key])) {
+            rec[key] = idRemap.get(rec[key]);
+            touchRecord(rec);
+          }
+        };
+        (state.expenses || []).forEach((e) => repoint(e, "categoryId"));
+        (state.recurring || []).forEach((r) => repoint(r, "categoryId"));
+        (state.presets || []).forEach((p) => repoint(p, "categoryId"));
+        // Account → category mapping setting
+        if (state.settings && state.settings.accountCategoryMap) {
+          let mapChanged = false;
+          const newMap = { ...state.settings.accountCategoryMap };
+          Object.keys(newMap).forEach((acctId) => {
+            const oldCatId = newMap[acctId];
+            if (oldCatId && idRemap.has(oldCatId)) {
+              newMap[acctId] = idRemap.get(oldCatId);
+              mapChanged = true;
+            }
+          });
+          if (mapChanged) {
+            state.settings.accountCategoryMap = newMap;
+            if (typeof setSetting === "function") {
+              try { setSetting("accountCategoryMap", newMap); } catch (_) {}
+            }
+          }
+        }
+        // Default category setting
+        if (state.settings && state.settings.defaultCategoryId
+            && idRemap.has(state.settings.defaultCategoryId)) {
+          state.settings.defaultCategoryId = idRemap.get(state.settings.defaultCategoryId);
+          if (typeof setSetting === "function") {
+            try { setSetting("defaultCategoryId", state.settings.defaultCategoryId); } catch (_) {}
+          }
+        }
+        // Tombstone losers and remove from state.categories
+        losersToTombstone.forEach((id) => tombstoneRecord("categories", id));
+        const loserSet = new Set(losersToTombstone);
+        state.categories = state.categories.filter((c) => !loserSet.has(c.id));
+        migrated = true;
+        console.info(`Cleaned up ${losersToTombstone.length} duplicate categor${losersToTombstone.length === 1 ? "y" : "ies"}`);
+      }
+    }
+
     // Dedupe presets — sync merging across devices can create duplicates of the
     // default seed (each device generates its own uid()). Group by (type|desc|amount|group)
     // and keep the oldest entry; tombstone the rest so deletion propagates.
