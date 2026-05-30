@@ -838,21 +838,42 @@
     // Brute-force cooldown — 5 wrong attempts in 5 min triggers a 30s pause
     const COOLDOWN_KEY = "mb_lock_cooldown";
     const ATTEMPTS_KEY = "mb_lock_attempts";
+    let _cooldownInterval = null;
     const checkCooldown = () => {
+      // Stop any running countdown timer
+      if (_cooldownInterval) {
+        clearInterval(_cooldownInterval);
+        _cooldownInterval = null;
+      }
       const until = parseInt(localStorage.getItem(COOLDOWN_KEY) || "0", 10);
       const now = Date.now();
+      // Sanity cap: if cooldown is more than 5 min in future, treat it as corrupt and clear
+      if (until > now + 5 * 60 * 1000) {
+        localStorage.removeItem(COOLDOWN_KEY);
+        return false;
+      }
       if (until > now) {
-        const sec = Math.ceil((until - now) / 1000);
         const errEl = $("#lockError");
-        if (errEl) {
-          errEl.textContent = `Too many attempts — try again in ${sec}s`;
-          errEl.hidden = false;
-        }
+        const updateMsg = () => {
+          const left = Math.max(0, until - Date.now());
+          const sec = Math.ceil(left / 1000);
+          if (errEl) {
+            errEl.textContent = `Too many attempts — try again in ${sec}s`;
+            errEl.hidden = false;
+          }
+          if (left <= 0) {
+            clearInterval(_cooldownInterval);
+            _cooldownInterval = null;
+            if (unlockBtn) unlockBtn.disabled = false;
+            if (errEl) errEl.hidden = true;
+            // Same for PIN error
+            const pinErr = $("#lockPinError");
+            if (pinErr) pinErr.hidden = true;
+          }
+        };
+        updateMsg();
         if (unlockBtn) unlockBtn.disabled = true;
-        setTimeout(() => {
-          if (unlockBtn) unlockBtn.disabled = false;
-          if (errEl) errEl.hidden = true;
-        }, until - now);
+        _cooldownInterval = setInterval(updateMsg, 1000);
         return true;
       }
       return false;
@@ -861,20 +882,25 @@
 
     $("#lockForm").addEventListener("submit", async (e) => {
       e.preventDefault();
-      const pwd = $("#passwordInput").value;
+      const pwdInp = $("#passwordInput");
+      const pwd = pwdInp ? pwdInp.value : "";
       const errEl = $("#lockError");
-      errEl.hidden = true;
+      if (errEl) errEl.hidden = true;
 
       if (!stored) {
-        const confirmVal = confirmInput.value;
+        const confirmVal = confirmInput ? confirmInput.value : "";
         if (pwd.length < 4) {
-          errEl.textContent = "Password must be at least 4 characters";
-          errEl.hidden = false;
+          if (errEl) {
+            errEl.textContent = "Password must be at least 4 characters";
+            errEl.hidden = false;
+          }
           return;
         }
         if (pwd !== confirmVal) {
-          errEl.textContent = "Passwords do not match";
-          errEl.hidden = false;
+          if (errEl) {
+            errEl.textContent = "Passwords do not match";
+            errEl.hidden = false;
+          }
           return;
         }
         const hash = await sha256(pwd);
@@ -900,9 +926,11 @@
             return;
           }
           const remaining = 5 - attempts;
-          errEl.textContent = `Incorrect password${remaining > 0 && remaining <= 2 ? ` · ${remaining} ${remaining === 1 ? "try" : "tries"} left` : ""}`;
-          errEl.hidden = false;
-          $("#passwordInput").value = "";
+          if (errEl) {
+            errEl.textContent = `Incorrect password${remaining > 0 && remaining <= 2 ? ` · ${remaining} ${remaining === 1 ? "try" : "tries"} left` : ""}`;
+            errEl.hidden = false;
+          }
+          if (pwdInp) pwdInp.value = "";
           // Shake animation
           const card = document.querySelector(".lock-card");
           if (card) {
@@ -1001,13 +1029,24 @@
     }
     const form = $("#lockForm");
     const pinPanel = $("#lockPinPanel");
+    // Clear errors and inputs when switching
+    const errEl = $("#lockError");
+    if (errEl) errEl.hidden = true;
+    const pinErr = $("#lockPinError");
+    if (pinErr) pinErr.hidden = true;
     if (mode === "pin") {
       if (form) form.hidden = true;
       if (pinPanel) pinPanel.hidden = false;
+      // Clear password input when leaving password mode
+      const pwdInp = $("#passwordInput");
+      if (pwdInp) pwdInp.value = "";
       buildPinPad();
     } else {
       if (form) form.hidden = false;
       if (pinPanel) pinPanel.hidden = true;
+      // Clear PIN buffer when leaving PIN mode
+      _pinBuffer = "";
+      renderPinDisplay();
       setTimeout(() => $("#passwordInput")?.focus(), 50);
     }
   }
@@ -1030,8 +1069,10 @@
     // Allow physical keyboard input for desktop users
     if (_pinKeydownHandler) document.removeEventListener("keydown", _pinKeydownHandler);
     _pinKeydownHandler = (e) => {
-      // Only act when PIN panel is visible
+      // Only act when PIN panel is visible AND lock screen is open
+      const lockScreen = $("#lockScreen");
       const pinPanel = $("#lockPinPanel");
+      if (!lockScreen || !lockScreen.classList.contains("open")) return;
       if (!pinPanel || pinPanel.hidden) return;
       if (e.key >= "0" && e.key <= "9") {
         e.preventDefault();
@@ -1150,7 +1191,14 @@
     const credIdB64 = localStorage.getItem(BIO_CRED_KEY);
     const pwdBlob = localStorage.getItem(BIO_PWD_KEY);
     const errEl = $("#lockError");
+    const btn = $("#lockBiometricBtn");
+    const lbl = $("#lockBioLabel");
+    const ico = $("#lockBioIcon");
     if (!credIdB64 || !pwdBlob) return;
+    // Visual loading state
+    if (btn) btn.disabled = true;
+    if (lbl) lbl.textContent = "Verifying…";
+    if (ico) ico.textContent = "⏳";
     try {
       // Use the credential to "verify" user presence. We don't actually use the assertion
       // for crypto — we just rely on the platform authenticator gate to release the password.
@@ -1177,7 +1225,6 @@
         // Password changed since registration — clear stale credential
         localStorage.removeItem(BIO_CRED_KEY);
         localStorage.removeItem(BIO_PWD_KEY);
-        const btn = $("#lockBiometricBtn");
         if (btn) btn.hidden = true;
         if (errEl) {
           errEl.textContent = "Biometric link expired — sign in with password to re-enable.";
@@ -1187,9 +1234,18 @@
     } catch (e) {
       console.warn("Biometric unlock failed", e);
       if (errEl) {
-        errEl.textContent = "Biometric unlock cancelled or failed. Use password.";
+        // NotAllowedError is "user cancelled" — friendlier message
+        const msg = (e && e.name === "NotAllowedError")
+          ? "Biometric cancelled. Use password or try again."
+          : "Biometric unlock failed. Use password instead.";
+        errEl.textContent = msg;
         errEl.hidden = false;
       }
+    } finally {
+      // Restore button state
+      if (btn) btn.disabled = false;
+      if (lbl) lbl.textContent = "Unlock with biometrics";
+      if (ico) ico.textContent = "🔐";
     }
   }
 
