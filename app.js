@@ -742,6 +742,12 @@
     const relinkResult = relinkPresetsToCategories();
     if (relinkResult > 0) migrated = true;
 
+    // Clean orphan refs that may exist from prior incomplete sync merges
+    try {
+      const orphanFixes = repointOrphanRefsByName();
+      if (orphanFixes > 0) migrated = true;
+    } catch (e) { /* ignore */ }
+
     if (migrated) saveData();
   }
 
@@ -1034,6 +1040,68 @@
         changed += 1;
       }
     });
+    (state.events || []).forEach((ev) => {
+      if (ev.linkedGoalId && !liveGoalIds.has(ev.linkedGoalId)) {
+        ev.linkedGoalId = null;
+        touchRecord(ev);
+        changed += 1;
+      }
+    });
+    // Account → category mapping setting: drop entries pointing at dead accounts or categories
+    if (state.settings && state.settings.accountCategoryMap) {
+      const map = state.settings.accountCategoryMap;
+      let mapChanged = false;
+      const newMap = { ...map };
+      Object.keys(newMap).forEach((acctId) => {
+        if (!liveAccIds.has(acctId)) {
+          delete newMap[acctId];
+          mapChanged = true;
+          return;
+        }
+        const catId = newMap[acctId];
+        if (catId && !liveCatIds.has(catId)) {
+          delete newMap[acctId];
+          mapChanged = true;
+        }
+      });
+      if (mapChanged) {
+        if (typeof setSetting === "function") {
+          try { setSetting("accountCategoryMap", newMap); } catch (_) {
+            state.settings.accountCategoryMap = newMap;
+          }
+        } else {
+          state.settings.accountCategoryMap = newMap;
+        }
+        changed += 1;
+      }
+    }
+    // Default account / category settings: clear if pointing at dead records
+    if (state.settings) {
+      if (state.settings.defaultAccountId && !liveAccIds.has(state.settings.defaultAccountId)) {
+        if (typeof setSetting === "function") {
+          try { setSetting("defaultAccountId", null); } catch (_) { state.settings.defaultAccountId = null; }
+        } else {
+          state.settings.defaultAccountId = null;
+        }
+        changed += 1;
+      }
+      if (state.settings.defaultCategoryId && !liveCatIds.has(state.settings.defaultCategoryId)) {
+        if (typeof setSetting === "function") {
+          try { setSetting("defaultCategoryId", null); } catch (_) { state.settings.defaultCategoryId = null; }
+        } else {
+          state.settings.defaultCategoryId = null;
+        }
+        changed += 1;
+      }
+      if (state.settings.roundUpGoalId && !liveGoalIds.has(state.settings.roundUpGoalId)) {
+        if (typeof setSetting === "function") {
+          try { setSetting("roundUpGoalId", null); } catch (_) { state.settings.roundUpGoalId = null; }
+        } else {
+          state.settings.roundUpGoalId = null;
+        }
+        changed += 1;
+      }
+    }
     if (changed > 0) {
       console.info(`Cleaned ${changed} orphan reference${changed === 1 ? "" : "s"} after sync merge`);
     }
