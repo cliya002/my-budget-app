@@ -328,6 +328,8 @@
     const toast = $("#toast");
     if (!toast) return;
     toast.textContent = msg;
+    // Reset class so a previous showAlertToast() doesn't leak its colored style here
+    toast.className = "toast";
     toast.hidden = false;
     clearTimeout(showToast._t);
     showToast._t = setTimeout(() => (toast.hidden = true), 2200);
@@ -4459,6 +4461,12 @@
   function renderPulse(month, totalSpent, monthExpenses) {
     const el = document.getElementById("pulseContent");
     if (!el) return;
+    // Empty-state guard: keep the friendly placeholder visible until there's at least
+    // one expense or an income event recorded. Otherwise the card shows misleading zeros.
+    if (!Array.isArray(state.expenses) || state.expenses.length === 0) {
+      el.innerHTML = '<p class="empty">Add a few transactions to see your spending pulse.</p>';
+      return;
+    }
     const now = new Date();
     const [yy, mm] = month.split("-").map(Number);
     const isCurrentMonth = (yy === now.getFullYear() && mm === now.getMonth() + 1);
@@ -9280,6 +9288,8 @@
     try {
       if (_ocrInFlight) return;
       if (!file || !file.type || !file.type.startsWith("image/")) return;
+      // Don't auto-fill on edit flow — the user already has values they care about
+      if (typeof editingTxnId !== "undefined" && editingTxnId) return;
       const amtInput = document.getElementById("expAmount");
       const descInput = document.getElementById("expDesc");
       // Don't run if user has already typed an amount
@@ -12693,14 +12703,31 @@
       if (newPwd.length < 4) { alert("Password too short."); return; }
       const confirmPwd = prompt("Confirm new password:");
       if (newPwd !== confirmPwd) { alert("Passwords do not match."); return; }
-      localStorage.setItem(KEYS.pwd, await sha256(newPwd));
-      // Re-derive encryption key with new password and re-encrypt local data
+
+      // Re-derive new key first; only update the stored hash AFTER re-encryption succeeds.
+      // Otherwise a deriveKey failure would leave the password hash mismatched with the
+      // still-old encryption key, locking the user out on next launch.
+      let newKey;
       try {
-        cryptoKey = await deriveKey(newPwd);
+        newKey = await deriveKey(newPwd);
+      } catch (e) {
+        console.error("Failed to derive key from new password", e);
+        alert("Could not change password — your data is unchanged. Try again.");
+        return;
+      }
+      const previousKey = cryptoKey;
+      try {
+        cryptoKey = newKey;
         cachedPassword = newPwd;
         saveData(); // Re-saves with the new key
+        // Only commit the hash after a successful re-save with the new key
+        localStorage.setItem(KEYS.pwd, await sha256(newPwd));
       } catch (e) {
-        console.error("Failed to re-derive key after password change", e);
+        // Roll back to old key so user can still read their data
+        cryptoKey = previousKey;
+        console.error("Failed to re-encrypt with new password", e);
+        alert("Could not save with new password — kept the old one.");
+        return;
       }
       // Biometric blob holds the old password — clear it so user re-enrolls
       if (localStorage.getItem(BIO_CRED_KEY) || localStorage.getItem(BIO_PWD_KEY)) {
@@ -14543,6 +14570,9 @@ ${b64}`;
     }
     if (localStorage.getItem("mb_auto_sync") !== "true") return;
     if (!localStorage.getItem(KEYS.syncToken)) return;
+    // Clear any previous timer before creating a new one — startAutoSync is called from
+    // multiple paths (initial load, sync settings change, online event) and would otherwise leak.
+    if (autoSyncTimer) clearInterval(autoSyncTimer);
     autoSyncTimer = setInterval(() => {
       if (dirtyForSync && navigator.onLine) {
         syncPush({ silent: true });
