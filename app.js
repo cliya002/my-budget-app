@@ -12306,10 +12306,13 @@
     // Filters
     $("#filterStart").addEventListener("change", (e) => {
       filters.start = e.target.value;
+      // Manual date change — clear quick-range visual state to avoid stale "active" look
+      document.querySelectorAll("[data-quick-range]").forEach((el) => el.classList.add("off"));
       renderTransactions();
     });
     $("#filterEnd").addEventListener("change", (e) => {
       filters.end = e.target.value;
+      document.querySelectorAll("[data-quick-range]").forEach((el) => el.classList.add("off"));
       renderTransactions();
     });
     // Debounce search input — avoids re-rendering thousands of txns on every keystroke
@@ -12339,6 +12342,8 @@
       const fe = $("#filterEvent"); if (fe) fe.value = "";
       // Reset type chips visual state
       document.querySelectorAll("[data-type-chip]").forEach((el) => el.classList.add("off"));
+      // Reset quick-range chip visual state
+      document.querySelectorAll("[data-quick-range]").forEach((el) => el.classList.add("off"));
       renderFilterChips();
       renderPersonFilterChips();
       renderTagFilterChips();
@@ -12362,6 +12367,89 @@
       filters.eventId = e.target.value;
       renderTransactions();
     });
+
+    // Quick range chips — set both start and end with one tap
+    document.querySelectorAll("[data-quick-range]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const range = btn.dataset.quickRange;
+        const today = new Date();
+        const fmtDate = (d) => localDateStr(d);
+        let start = "", end = "";
+        if (range === "today") {
+          start = end = fmtDate(today);
+        } else if (range === "week") {
+          // Start of week = last Sunday
+          const wkStart = new Date(today);
+          wkStart.setDate(today.getDate() - today.getDay());
+          start = fmtDate(wkStart);
+          end = fmtDate(today);
+        } else if (range === "month") {
+          start = fmtDate(new Date(today.getFullYear(), today.getMonth(), 1));
+          end = fmtDate(today);
+        } else if (range === "lastmonth") {
+          start = fmtDate(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+          end = fmtDate(new Date(today.getFullYear(), today.getMonth(), 0));
+        } else if (range === "ytd") {
+          start = fmtDate(new Date(today.getFullYear(), 0, 1));
+          end = fmtDate(today);
+        }
+        filters.start = start;
+        filters.end = end;
+        const startEl = $("#filterStart"); if (startEl) startEl.value = start;
+        const endEl = $("#filterEnd"); if (endEl) endEl.value = end;
+        // Visual feedback — highlight the picked range chip and clear others
+        document.querySelectorAll("[data-quick-range]").forEach((c) => {
+          c.classList.toggle("off", c.dataset.quickRange !== range);
+        });
+        renderTransactions();
+      });
+    });
+
+    // Filter sidebar collapse / expand (desktop only — on mobile sidebar is full-width)
+    const filtersSidebar = $("#filtersSidebar");
+    const filtersCollapseBtn = $("#filtersCollapseBtn");
+    const txnLayout = $("#txnLayout");
+    function applyFilterCollapse(collapsed) {
+      if (!txnLayout) return;
+      txnLayout.classList.toggle("filters-collapsed", collapsed);
+      if (filtersCollapseBtn) {
+        filtersCollapseBtn.setAttribute("aria-expanded", String(!collapsed));
+        filtersCollapseBtn.textContent = collapsed ? "▸" : "◂";
+        filtersCollapseBtn.title = collapsed ? "Show filters" : "Hide filters";
+      }
+    }
+    // Restore saved state
+    const savedCollapsed = localStorage.getItem("mb_filters_collapsed") === "true";
+    applyFilterCollapse(savedCollapsed);
+    filtersCollapseBtn?.addEventListener("click", () => {
+      const isCollapsed = txnLayout?.classList.contains("filters-collapsed");
+      const next = !isCollapsed;
+      localStorage.setItem("mb_filters_collapsed", String(next));
+      applyFilterCollapse(next);
+    });
+    // The × inside the sidebar header collapses it (mobile-friendly)
+    document.querySelector("[data-collapse-filters]")?.addEventListener("click", () => {
+      localStorage.setItem("mb_filters_collapsed", "true");
+      applyFilterCollapse(true);
+    });
+
+    // Scroll-to-top button — appears after scrolling 600px down on the txn page
+    const scrollTopBtn = $("#scrollToTopBtn");
+    if (scrollTopBtn) {
+      const checkScroll = () => {
+        const txnsActive = $("#transactions")?.classList.contains("active");
+        if (!txnsActive) { scrollTopBtn.hidden = true; return; }
+        scrollTopBtn.hidden = window.scrollY < 600;
+      };
+      window.addEventListener("scroll", checkScroll, { passive: true });
+      // Re-check when switching tabs
+      document.querySelectorAll(".nav-item").forEach((nb) => {
+        nb.addEventListener("click", () => setTimeout(checkScroll, 50));
+      });
+      scrollTopBtn.addEventListener("click", () => {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+      });
+    }
 
     // Bulk actions
     $("#bulkClearBtn").addEventListener("click", () => {

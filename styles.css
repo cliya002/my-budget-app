@@ -620,6 +620,15 @@ label {
   align-items: center;
   padding: 0.9rem 0;
   border-bottom: 1px solid var(--border);
+  /* Subtle fade-in on render — keeps the list feeling responsive without distracting */
+  animation: txnFadeIn 0.18s ease-out;
+}
+@keyframes txnFadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .txn-item { animation: none; }
 }
 .txn-item:last-child { border-bottom: none; }
 
@@ -706,6 +715,57 @@ label {
   margin-bottom: 1rem;
   padding-bottom: 0.75rem;
   border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.filters-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.4rem;
+  border-radius: 6px;
+}
+.filters-close-btn:hover { background: var(--card-soft); color: var(--text); }
+
+/* Filter sidebar collapse — desktop only; mobile sidebar is full-width */
+.txn-layout { position: relative; }
+.filters-collapse-btn {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 5;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  width: 28px;
+  height: 28px;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+  padding: 0;
+  line-height: 1;
+}
+.filters-collapse-btn:hover { background: var(--card-soft); color: var(--text); }
+@media (min-width: 981px) {
+  .filters-collapse-btn { display: inline-flex; align-items: center; justify-content: center; }
+  .txn-layout.filters-collapsed {
+    grid-template-columns: 0 1fr;
+  }
+  .txn-layout.filters-collapsed .filters {
+    display: none;
+  }
+  .txn-layout.filters-collapsed .filters-collapse-btn {
+    left: 0;
+  }
+  .txn-layout:not(.filters-collapsed) .filters-collapse-btn {
+    left: 252px;
+  }
 }
 .filter-group { margin-bottom: 1.25rem; }
 .filter-label {
@@ -4587,6 +4647,30 @@ body.has-offline-banner {
   border: 1px solid var(--danger, #ef4444);
 }
 .active-filter-clear:hover { background: var(--danger, #ef4444); color: #fff; opacity: 1; }
+
+/* Scroll-to-top button — appears in lower-right when scrolled deep into the txn list */
+.scroll-top-btn {
+  position: fixed;
+  bottom: calc(5rem + env(safe-area-inset-bottom, 0px));
+  right: 1.25rem;
+  z-index: 50;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  font-size: 1.1rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s, opacity 0.2s;
+}
+.scroll-top-btn:hover { transform: translateY(-2px); }
+.scroll-top-btn[hidden] { display: none; }
 
 /* Friendlier empty state when filters yield no results */
 .empty.empty-filtered {
