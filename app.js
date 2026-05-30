@@ -980,6 +980,9 @@
       try { renderLockStatsTeaser(); } catch (e) { /* ignore */ }
     }
 
+    // Initial network status (shows offline pill on lock screen if applicable)
+    try { updateNetStatus(); } catch (e) { /* ignore */ }
+
     // Show mode toggle (Password / PIN) only after a password is set
     if (stored) {
       const modeToggle = $("#lockModeToggle");
@@ -1472,6 +1475,8 @@
     if (pinErr) pinErr.hidden = true;
     // Refresh stats teaser (last-open time will update)
     try { renderLockStatsTeaser(); } catch (e) {}
+    // Refresh network status (in case it changed while unlocked)
+    try { updateNetStatus(); } catch (e) {}
     // Focus appropriate field
     setTimeout(() => {
       if ($("#lockPinPanel") && !$("#lockPinPanel").hidden) {
@@ -13827,14 +13832,30 @@
   }
 
   function updateNetStatus() {
-    const el = $("#netStatusIndicator");
-    if (!el) return;
     const online = navigator.onLine;
-    el.className = `net-status ${online ? "online" : "offline"}`;
-    el.innerHTML = `<span class="label">${online ? "Online" : "Offline"}</span>`;
-    el.title = online
-      ? "Connected — sync and AI insights available"
-      : "Offline — changes saved locally, will sync when reconnected";
+
+    // Topbar pill
+    const el = $("#netStatusIndicator");
+    if (el) {
+      el.className = `net-status ${online ? "online" : "offline"}`;
+      el.innerHTML = `<span class="label">${online ? "Online" : "Offline"}</span>`;
+      el.title = online
+        ? "Connected — sync and AI insights available"
+        : "Offline — changes saved locally, will sync when reconnected";
+    }
+
+    // Lock screen pill (only meaningful when offline — keeps the lock card clean otherwise)
+    const lockEl = $("#lockNetStatus");
+    if (lockEl) {
+      if (!online) {
+        lockEl.className = "lock-net-status offline";
+        lockEl.innerHTML = "Offline mode";
+        lockEl.title = "No internet — you can still unlock and use the app fully";
+        lockEl.hidden = false;
+      } else {
+        lockEl.hidden = true;
+      }
+    }
 
     // Show/hide offline banner (only when sync is configured, since that's when offline matters most)
     let banner = $("#offlineBanner");

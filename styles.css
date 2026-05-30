@@ -232,6 +232,38 @@ label {
   border-radius: 12px;
   font-size: 0.8rem;
 }
+
+/* Lock screen network status pill */
+.lock-net-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  margin: 0 auto 0.85rem auto;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  background: var(--card-soft);
+}
+.lock-net-status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.lock-net-status.online {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.lock-net-status.offline {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  animation: netOfflinePulse 2s ease-in-out infinite;
+}
 .lock-stats-teaser .ls-item {
   color: var(--text-dim);
   display: flex;
