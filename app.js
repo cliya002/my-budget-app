@@ -628,6 +628,30 @@
           winner.limit = maxLimit;
           touchRecord(winner);
         }
+        // Merge limit history from all duplicates so past budget changes aren't lost.
+        // Dedupe by `until` (one entry per month boundary), preferring the highest limit.
+        const mergedHistMap = new Map();
+        sorted.forEach((c) => {
+          (Array.isArray(c.limitHistory) ? c.limitHistory : []).forEach((h) => {
+            if (!h || !h.until) return;
+            const existing = mergedHistMap.get(h.until);
+            const newLim = Number(h.limit) || 0;
+            if (!existing || newLim > (Number(existing.limit) || 0)) {
+              mergedHistMap.set(h.until, { until: h.until, limit: newLim });
+            }
+          });
+        });
+        if (mergedHistMap.size > 0) {
+          const mergedHist = Array.from(mergedHistMap.values())
+            .sort((a, b) => String(a.until).localeCompare(String(b.until)));
+          // Only update if it's actually different to avoid unnecessary touches
+          const oldStr = JSON.stringify(winner.limitHistory || []);
+          const newStr = JSON.stringify(mergedHist);
+          if (oldStr !== newStr) {
+            winner.limitHistory = mergedHist;
+            touchRecord(winner);
+          }
+        }
         for (let i = 1; i < sorted.length; i++) {
           idRemap.set(sorted[i].id, winner.id);
           losersToTombstone.push(sorted[i].id);
@@ -949,6 +973,71 @@
       saveData();
       setTimeout(() => showToast(`Added ${added} recurring transaction${added === 1 ? "" : "s"}`), 500);
     }
+  }
+
+  // After a sync merge, txns/recurring/presets may reference category or account
+  // IDs that are now tombstoned (because another device merged duplicates and
+  // tombstoned the loser). Clear those references so the txn cleanly falls into
+  // "Uncategorized" instead of pointing at a ghost. The user can use the new
+  // bulk-recat modal to reassign in one shot.
+  function repointOrphanRefsByName() {
+    const liveCatIds = new Set((state.categories || []).map((c) => c.id));
+    const liveAccIds = new Set((state.accounts || []).map((a) => a.id));
+    const liveGoalIds = new Set((state.goals || []).map((g) => g.id));
+    const livePersonIds = new Set((state.people || []).map((p) => p.id));
+    const liveEventIds = new Set((state.events || []).map((ev) => ev.id));
+    let changed = 0;
+    (state.expenses || []).forEach((e) => {
+      if (e.categoryId && !liveCatIds.has(e.categoryId)) {
+        e.categoryId = null;
+        touchRecord(e);
+        changed += 1;
+      }
+      if (e.accountId && !liveAccIds.has(e.accountId)) {
+        e.accountId = null;
+        touchRecord(e);
+        changed += 1;
+      }
+      if (e.goalId && !liveGoalIds.has(e.goalId)) {
+        e.goalId = null;
+        touchRecord(e);
+        changed += 1;
+      }
+      if (e.personId && !livePersonIds.has(e.personId)) {
+        e.personId = null;
+        touchRecord(e);
+        changed += 1;
+      }
+      if (e.eventId && !liveEventIds.has(e.eventId)) {
+        e.eventId = null;
+        e.eventLineItemId = null;
+        touchRecord(e);
+        changed += 1;
+      }
+    });
+    (state.recurring || []).forEach((r) => {
+      if (r.categoryId && !liveCatIds.has(r.categoryId)) {
+        r.categoryId = null;
+        touchRecord(r);
+        changed += 1;
+      }
+      if (r.goalId && !liveGoalIds.has(r.goalId)) {
+        r.goalId = null;
+        touchRecord(r);
+        changed += 1;
+      }
+    });
+    (state.presets || []).forEach((p) => {
+      if (p.categoryId && !liveCatIds.has(p.categoryId)) {
+        p.categoryId = null;
+        touchRecord(p);
+        changed += 1;
+      }
+    });
+    if (changed > 0) {
+      console.info(`Cleaned ${changed} orphan reference${changed === 1 ? "" : "s"} after sync merge`);
+    }
+    return changed;
   }
 
   function dedupeRecurringTransactions() {
@@ -15652,6 +15741,11 @@ ${b64}`;
       state = mergeStates(state, decrypted);
       // After merge, run dedupe in case sync introduced duplicate recurring entries
       try { dedupeRecurringTransactions(); } catch (e) { /* ignore */ }
+      // Sync may have brought in tombstones for category/account IDs that this device's
+      // local txns/recurring/presets still reference. Repoint orphans by name to a live
+      // category/account so nothing falls into "Uncategorized" just because another
+      // device deduplicated and we hadn't yet.
+      try { repointOrphanRefsByName(); } catch (e) { /* ignore */ }
       const addedCount = recentlyPulledIds.size;
       const totalAfter = state.expenses.length;
       saveData();
