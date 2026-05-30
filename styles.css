@@ -31,6 +31,9 @@
   --primary-tint-15: rgba(91, 63, 184, 0.15);
   --primary-tint-20: rgba(91, 63, 184, 0.20);
 
+  /* Alias for --text-dim used in some legacy code */
+  --muted: #7a7a8a;
+
   --radius: 16px;
   --radius-sm: 10px;
   --radius-pill: 999px;
@@ -59,6 +62,9 @@
   --primary-tint-15: rgba(169, 140, 255, 0.22);
   --primary-tint-20: rgba(169, 140, 255, 0.28);
 
+  /* Brighter muted for dark mode */
+  --muted: #b3aecf;
+
   --sidebar: #2a2240;
   --sidebar-active: #8b6dff;
   --sidebar-text: #ece9f5;
@@ -76,6 +82,46 @@
 
   /* Tells the browser to use dark scrollbars + native form-control dark styling */
   color-scheme: dark;
+}
+
+/* ================ Dark mode color overrides ================
+ * Many components hardcoded saturated greens/reds (#16a34a, #dc2626, etc.)
+ * that look too dim against the dark bg. Lift them all to the brighter
+ * Tailwind 400-shade equivalents so up/down/positive/negative cues stay visible. */
+[data-theme="dark"] .lock-net-status.online,
+[data-theme="dark"] .net-status.online,
+[data-theme="dark"] .pulse-success,
+[data-theme="dark"] .section-takehome .paystub-amount.positive,
+[data-theme="dark"] .goal-pace.positive,
+[data-theme="dark"] .acc-monthly .positive,
+[data-theme="dark"] .event-badge.active {
+  color: #4ade80;
+}
+[data-theme="dark"] .lock-net-status.offline,
+[data-theme="dark"] .net-status.offline,
+[data-theme="dark"] .pulse-danger,
+[data-theme="dark"] .cat-pct.negative,
+[data-theme="dark"] .goal-pace.negative,
+[data-theme="dark"] .acc-monthly .negative,
+[data-theme="dark"] .event-badge.over {
+  color: #f87171;
+}
+[data-theme="dark"] .net-status.slow,
+[data-theme="dark"] .pulse-warning,
+[data-theme="dark"] .saved-views-label {
+  color: #fbbf24;
+}
+[data-theme="dark"] .top-spent-today.has-spend {
+  color: #f472b6;
+}
+/* Hardcoded dark amber #b45309 → bright amber for dark mode */
+[data-theme="dark"] [class*="badge"][class*="planning"],
+[data-theme="dark"] [class*="warn"]:not([class*="card"]) {
+  /* deliberately scoped — only color text, never card backgrounds */
+}
+[data-theme="dark"] .event-badge.planning,
+[data-theme="dark"] .csv-cat-pill-warn {
+  color: #fbbf24;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -138,6 +184,7 @@ input, select, textarea { font-family: inherit; font-size: 0.95rem; }
   border-radius: var(--radius-sm);
 }
 .icon-btn:hover { background: rgba(0,0,0,0.05); }
+[data-theme="dark"] .icon-btn:hover { background: rgba(255,255,255,0.06); }
 
 .link {
   background: transparent;
@@ -493,6 +540,7 @@ label {
   transition: background 0.15s, color 0.15s;
 }
 .nav-item:hover { background: rgba(255, 255, 255, 0.4); }
+[data-theme="dark"] .nav-item:hover { background: rgba(255, 255, 255, 0.07); }
 .nav-item.active {
   background: var(--sidebar-active);
   color: #fff;
@@ -646,6 +694,7 @@ label {
   border-radius: 6px;
 }
 .list-item-actions button:hover { color: var(--text); background: rgba(0,0,0,0.05); }
+[data-theme="dark"] .list-item-actions button:hover { background: rgba(255,255,255,0.06); }
 
 .empty {
   color: var(--text-dim);
@@ -1118,6 +1167,12 @@ label {
   font-size: 0.9rem;
   animation: slideUp 0.25s ease;
 }
+[data-theme="dark"] .toast {
+  /* In dark mode --text is near-white, so flip toast to a dark pill with light text */
+  background: #1a1626;
+  color: #ece9f5;
+  border: 1px solid var(--border);
+}
 @keyframes slideUp {
   from { transform: translate(-50%, 30px); opacity: 0; }
   to { transform: translate(-50%, 0); opacity: 1; }
@@ -1436,6 +1491,11 @@ html.compact-mode .stat-card { padding: 0.85rem; }
 }
 .preset-chip:hover { background: var(--primary); color: #fff; }
 .preset-chip:active { transform: scale(0.98); }
+[data-theme="dark"] .preset-chip {
+  background: rgba(169, 140, 255, 0.18);
+  color: var(--text);
+  border: 1px solid rgba(169, 140, 255, 0.3);
+}
 
 .modal-footer {
   display: flex;
@@ -1769,6 +1829,11 @@ html.compact-mode .stat-card { padding: 0.85rem; }
   display: inline-flex;
   align-items: center;
   gap: 0.75rem;
+}
+[data-theme="dark"] .toast.toast-undo {
+  background: #1a1626;
+  color: #ece9f5;
+  border: 1px solid var(--border);
 }
 .toast-action {
   background: transparent;
@@ -2416,6 +2481,10 @@ input[type="color"] {
   border-color: var(--primary);
   color: var(--primary);
   transform: translateY(-1px);
+}
+[data-theme="dark"] .preset-card:hover {
+  background: rgba(169, 140, 255, 0.18);
+  color: var(--text);
 }
 .preset-card:active { transform: scale(0.97); }
 .preset-icon { font-size: 1.5rem; line-height: 1; }
@@ -4189,6 +4258,8 @@ body.has-offline-banner {
 }
 .stat-meta .positive { color: #16a34a; font-weight: 600; }
 .stat-meta .negative { color: #dc2626; font-weight: 600; }
+[data-theme="dark"] .stat-meta .positive { color: #4ade80; }
+[data-theme="dark"] .stat-meta .negative { color: #f87171; }
 
 
 /* Topbar mini "Spent today" pill */
