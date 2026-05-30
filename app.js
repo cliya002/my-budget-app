@@ -1179,12 +1179,24 @@
     if (!window.PublicKeyCredential) return; // not supported
     const credId = localStorage.getItem(BIO_CRED_KEY);
     const pwdBlob = localStorage.getItem(BIO_PWD_KEY);
-    if (credId && pwdBlob) {
-      btn.hidden = false;
-      btn.onclick = () => attemptBiometricUnlock();
-      // Auto-prompt on platforms where it's near-instant (mobile)
-      // (skip auto-prompt; require user tap to keep things explicit)
+    if (!credId || !pwdBlob) return;
+    // Verify platform authenticator (Face ID / Touch ID / Windows Hello) is actually available.
+    // On iOS Safari this returns false if Face ID isn't configured for the site.
+    let available = true;
+    try {
+      if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+        available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+      }
+    } catch (e) {
+      available = true; // fail-open — let the user try
     }
+    if (!available) {
+      // Don't show button — fall back to password
+      btn.hidden = true;
+      return;
+    }
+    btn.hidden = false;
+    btn.onclick = () => attemptBiometricUnlock();
   }
 
   function _b64uToBytes(b64u) {
@@ -1223,7 +1235,6 @@
           allowCredentials: [{
             id: _b64uToBytes(credIdB64),
             type: "public-key",
-            transports: ["internal"],
           }],
           userVerification: "required",
           timeout: 60000,
@@ -1289,7 +1300,15 @@
       return false;
     }
     try {
-      const userId = crypto.getRandomValues(new Uint8Array(16));
+      // Stable user ID per device — keep it across enrollments so iOS doesn't pile up credentials
+      let userIdB64 = localStorage.getItem("mb_bio_user_id");
+      let userId;
+      if (userIdB64) {
+        userId = _b64uToBytes(userIdB64);
+      } else {
+        userId = crypto.getRandomValues(new Uint8Array(16));
+        localStorage.setItem("mb_bio_user_id", _bytesToB64u(userId));
+      }
       const challenge = crypto.getRandomValues(new Uint8Array(32));
       const cred = await navigator.credentials.create({
         publicKey: {
@@ -1324,7 +1343,18 @@
       return true;
     } catch (e) {
       console.error("Register biometric failed", e);
-      showToast("Couldn't register biometric. Try again.");
+      // Bubble up a more specific error so user knows what to do
+      let msg = "Couldn't register biometric. Try again.";
+      if (e && e.name === "NotAllowedError") {
+        msg = "Biometric prompt cancelled or timed out.";
+      } else if (e && e.name === "NotSupportedError") {
+        msg = "Biometric type not supported on this device.";
+      } else if (e && e.name === "InvalidStateError") {
+        msg = "Already registered — tap unlock with biometrics.";
+      } else if (e && e.name === "SecurityError") {
+        msg = "Security error — make sure you're on https://";
+      }
+      showToast(msg);
       return false;
     }
   }
@@ -12155,14 +12185,23 @@
     refreshBioButtons();
     if (bioEnrollBtn) {
       bioEnrollBtn.addEventListener("click", async () => {
-        const pwd = prompt("Confirm your password to enable biometric unlock:");
-        if (!pwd) return;
-        const hash = await sha256(pwd);
-        if (hash !== localStorage.getItem(KEYS.pwd)) {
-          showToast("Incorrect password");
+        // Use the in-memory password from the active session — user is already authenticated.
+        // Avoids prompt() which breaks the user-gesture chain on iOS Safari for WebAuthn create().
+        if (!cachedPassword) {
+          showToast("Lock and unlock once first, then enable biometric.");
           return;
         }
-        const ok = await registerBiometric(pwd);
+        // Verify platform authenticator availability before attempting enrollment
+        if (typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable === "function") {
+          try {
+            const available = await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
+            if (!available) {
+              showToast("No Face ID / Touch ID / Windows Hello detected on this device.");
+              return;
+            }
+          } catch (e) { /* fall through */ }
+        }
+        const ok = await registerBiometric(cachedPassword);
         if (ok) refreshBioButtons();
       });
     }
