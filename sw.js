@@ -1,5 +1,5 @@
 /* Pocket Budget App service worker */
-const CACHE = "pocket-budget-v165";
+const CACHE = "pocket-budget-v166";
 const ASSETS = [
   "./",
   "./index.html",
@@ -30,9 +30,14 @@ self.addEventListener("message", (event) => {
   if (event.data === "skipWaiting") {
     self.skipWaiting();
   } else if (event.data === "getVersion") {
-    // Reply with the current cache version so the page can show "Updated to vN"
-    if (event.source && event.source.postMessage) {
-      event.source.postMessage({ type: "version", version: CACHE });
+    // Reply with the current cache version. Prefer the MessageChannel port
+    // when the page sent one (so the reply lands on channel.port1.onmessage,
+    // not on navigator.serviceWorker.onmessage).
+    const reply = { type: "version", version: CACHE };
+    if (event.ports && event.ports[0]) {
+      try { event.ports[0].postMessage(reply); } catch (_) {}
+    } else if (event.source && event.source.postMessage) {
+      try { event.source.postMessage(reply); } catch (_) {}
     }
   }
 });

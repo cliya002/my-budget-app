@@ -16415,58 +16415,87 @@ ${biggest ? `<p><strong>Biggest single expense:</strong> ${escapeHtml(biggest.de
     // (b) the next time the app becomes hidden, or
     // (c) after 60s of idle (no input) while visible.
     let _autoUpdateIdleTimer = null;
-    function maybeAutoInstallUpdate() {
-      if (localStorage.getItem("mb_auto_update") !== "true") return;
+    let _autoUpdateArmed = false;          // Prevents stacking listeners on repeat calls
+    let _autoUpdateApplied = false;        // Idempotency guard
+    let _autoUpdateOnHidden = null;        // Reference for cleanup
+    const _autoUpdateInputEvents = ["mousemove", "keydown", "touchstart", "scroll"];
+    function _autoUpdateCleanup() {
+      if (_autoUpdateOnHidden) {
+        document.removeEventListener("visibilitychange", _autoUpdateOnHidden);
+        _autoUpdateOnHidden = null;
+      }
+      _autoUpdateInputEvents.forEach((evt) => {
+        try { window.removeEventListener(evt, _autoUpdateResetIdle); } catch (_) {}
+      });
+      if (_autoUpdateIdleTimer) {
+        clearTimeout(_autoUpdateIdleTimer);
+        _autoUpdateIdleTimer = null;
+      }
+      _autoUpdateArmed = false;
+    }
+    function _autoUpdateResetIdle() {
+      if (_autoUpdateApplied) return;
+      if (_autoUpdateIdleTimer) clearTimeout(_autoUpdateIdleTimer);
+      _autoUpdateIdleTimer = setTimeout(() => {
+        // Don't interrupt typing in a modal
+        const modalOpen = !!document.querySelector(".modal.open");
+        if (modalOpen) { _autoUpdateResetIdle(); return; }
+        _autoUpdateApply();
+      }, 60 * 1000);
+    }
+    function _autoUpdateApply() {
+      if (_autoUpdateApplied) return;
       const sw = window._pendingSW;
       if (!sw || typeof sw.postMessage !== "function") return;
-      const apply = () => {
-        try { sw.postMessage("skipWaiting"); } catch (_) {}
-      };
+      _autoUpdateApplied = true;
+      try { sw.postMessage("skipWaiting"); } catch (_) {}
+      _autoUpdateCleanup();
+    }
+    function maybeAutoInstallUpdate() {
+      if (localStorage.getItem("mb_auto_update") !== "true") return;
+      if (_autoUpdateApplied || _autoUpdateArmed) return; // already running or done
+      const sw = window._pendingSW;
+      if (!sw || typeof sw.postMessage !== "function") return;
       // If hidden right now, install immediately
       if (document.visibilityState === "hidden") {
-        apply();
+        _autoUpdateApply();
         return;
       }
+      _autoUpdateArmed = true;
       // Otherwise queue for next "hidden" or 60s idle window
-      const onHidden = () => {
-        if (document.visibilityState === "hidden") {
-          apply();
-          document.removeEventListener("visibilitychange", onHidden);
-          if (_autoUpdateIdleTimer) { clearTimeout(_autoUpdateIdleTimer); _autoUpdateIdleTimer = null; }
-        }
+      _autoUpdateOnHidden = () => {
+        if (document.visibilityState === "hidden") _autoUpdateApply();
       };
-      document.addEventListener("visibilitychange", onHidden);
-      // Idle-timer fallback (desktop browser tab that stays visible) — install after 60s of no input
-      const resetIdle = () => {
-        if (_autoUpdateIdleTimer) clearTimeout(_autoUpdateIdleTimer);
-        _autoUpdateIdleTimer = setTimeout(() => {
-          // Only if a modal isn't open (don't interrupt typing)
-          const modalOpen = !!document.querySelector(".modal.open");
-          if (modalOpen) return;
-          apply();
-          document.removeEventListener("visibilitychange", onHidden);
-        }, 60 * 1000);
-      };
-      ["mousemove", "keydown", "touchstart", "scroll"].forEach((evt) => {
-        window.addEventListener(evt, resetIdle, { passive: true });
+      document.addEventListener("visibilitychange", _autoUpdateOnHidden);
+      _autoUpdateInputEvents.forEach((evt) => {
+        window.addEventListener(evt, _autoUpdateResetIdle, { passive: true });
       });
-      resetIdle();
+      _autoUpdateResetIdle();
     }
 
     // Auto-update toggle in Settings
     const autoUpdateTog = document.getElementById("autoUpdateToggle");
     if (autoUpdateTog) {
-      autoUpdateTog.checked = localStorage.getItem("mb_auto_update") === "true";
-      autoUpdateTog.addEventListener("change", (e) => {
-        localStorage.setItem("mb_auto_update", e.target.checked ? "true" : "false");
-        if (e.target.checked) {
-          showToast("⚡ Auto-install on — updates apply silently in the background");
-          // If a pending update is already waiting, start the auto-install flow now
-          if (window._pendingSW) maybeAutoInstallUpdate();
-        } else {
-          showToast("Auto-install off — updates wait for your tap");
-        }
-      });
+      // Disable if service workers aren't supported (e.g. private window in some browsers)
+      if (!("serviceWorker" in navigator)) {
+        autoUpdateTog.disabled = true;
+        autoUpdateTog.checked = false;
+        autoUpdateTog.title = "Service workers not supported in this context";
+      } else {
+        autoUpdateTog.checked = localStorage.getItem("mb_auto_update") === "true";
+        autoUpdateTog.addEventListener("change", (e) => {
+          localStorage.setItem("mb_auto_update", e.target.checked ? "true" : "false");
+          if (e.target.checked) {
+            showToast("⚡ Auto-install on — updates apply silently in the background");
+            // If a pending update is already waiting, start the auto-install flow now
+            if (window._pendingSW) maybeAutoInstallUpdate();
+          } else {
+            showToast("Auto-install off — updates wait for your tap");
+            // Cancel any in-flight queued install when user opts out
+            _autoUpdateCleanup();
+          }
+        });
+      }
     }
 
     // Live system theme follow — when user picks "Auto" (no saved theme) and system flips
