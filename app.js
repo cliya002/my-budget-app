@@ -4950,7 +4950,16 @@
     if (filters.start) items = items.filter((e) => e.date >= filters.start);
     if (filters.end) items = items.filter((e) => e.date <= filters.end);
     if (filters.categories.size > 0) {
-      items = items.filter((e) => filters.categories.has(e.categoryId));
+      const hasUncat = filters.categories.has("__uncat__");
+      // Filter: include if categoryId is in selected set OR (uncat selected AND no categoryId AND not income/transfer)
+      items = items.filter((e) => {
+        if (e.categoryId && filters.categories.has(e.categoryId)) return true;
+        if (hasUncat && !e.categoryId
+            && e.type !== "income"
+            && e.type !== "transfer-in"
+            && e.type !== "transfer-out") return true;
+        return false;
+      });
     }
     if (filters.people.size > 0) {
       items = items.filter((e) => e.personId && filters.people.has(e.personId));
@@ -5105,14 +5114,57 @@
       chips.innerHTML = '<span class="empty-chip">Add categories first</span>';
       return;
     }
-    chips.innerHTML = state.categories
-      .map((cat) => {
-        const on = filters.categories.has(cat.id);
-        return `<button class="chip ${on ? "" : "off"}" data-chip="${cat.id}">${
-          on ? "✓ " : ""
-        }${escapeHtml(cat.name)}</button>`;
-      })
-      .join("");
+    // Compute txn count per category in the *currently filtered* date range so the chip
+    // counts reflect the user's view, not the lifetime total. Include income too —
+    // category filter applies across types.
+    const inDateRange = state.expenses.filter((e) => {
+      if (filters.start && e.date < filters.start) return false;
+      if (filters.end && e.date > filters.end) return false;
+      return true;
+    });
+    const counts = new Map();
+    let uncatCount = 0;
+    inDateRange.forEach((e) => {
+      // Skip transfers — they're not "categorized" in the traditional sense
+      if (e.type === "transfer-in" || e.type === "transfer-out") return;
+      if (e.categoryId) {
+        counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
+      } else if (e.type !== "income") {
+        // Only count uncategorized expenses; income without a category is normal
+        uncatCount += 1;
+      }
+    });
+
+    // Sort: active filters first, then by usage (descending count), then alphabetically
+    const cats = [...state.categories].sort((a, b) => {
+      const aOn = filters.categories.has(a.id);
+      const bOn = filters.categories.has(b.id);
+      if (aOn !== bOn) return aOn ? -1 : 1;
+      const aN = counts.get(a.id) || 0;
+      const bN = counts.get(b.id) || 0;
+      if (aN !== bN) return bN - aN;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+    const catChips = cats.map((cat) => {
+      const on = filters.categories.has(cat.id);
+      const n = counts.get(cat.id) || 0;
+      const countTag = n > 0 ? ` <span class="chip-count">${n}</span>` : "";
+      return `<button class="chip ${on ? "" : "off"}" data-chip="${cat.id}">${
+        on ? "✓ " : ""
+      }${escapeHtml(cat.name)}${countTag}</button>`;
+    }).join("");
+
+    // Virtual "Uncategorized" chip — only when there are uncategorized txns to filter
+    let uncatChip = "";
+    if (uncatCount > 0) {
+      const on = filters.categories.has("__uncat__");
+      uncatChip = `<button class="chip chip-uncat ${on ? "" : "off"}" data-chip="__uncat__" title="Transactions without a category">${
+        on ? "✓ " : ""
+      }❓ Uncategorized <span class="chip-count">${uncatCount}</span></button>`;
+    }
+
+    chips.innerHTML = catChips + uncatChip;
   }
 
   function renderPersonFilterChips() {
@@ -11921,31 +11973,114 @@
         showToast("Add a category first");
         return;
       }
-      const ids = [...selectedTxns];
-      // Build a numbered prompt so user picks a category
+      openBulkRecatModal([...selectedTxns]);
+    });
+  // Bulk recategorize modal — searchable, mobile-friendly category picker
+  let _bulkRecatTargetIds = [];
+  function openBulkRecatModal(ids) {
+    if (!Array.isArray(ids) || !ids.length) return;
+    _bulkRecatTargetIds = ids.slice();
+    const modal = document.getElementById("bulkRecatModal");
+    if (!modal) {
+      // Fallback: if HTML hasn't been updated yet on the user's cached version, use a confirm-style picker
       const list = state.categories.map((c, i) => `${i + 1}. ${c.name}`).join("\n");
-      const choice = prompt(`Recategorize ${ids.length} transaction${ids.length === 1 ? "" : "s"} to which category?\n\n${list}\n\nEnter the number:`);
+      const choice = prompt(`Recategorize ${ids.length} txn${ids.length === 1 ? "" : "s"} to which category?\n\n${list}\n\nEnter the number:`);
       if (choice === null) return;
       const idx = parseInt(choice, 10) - 1;
-      if (isNaN(idx) || idx < 0 || idx >= state.categories.length) {
-        showToast("Invalid selection");
-        return;
-      }
-      const targetCatId = state.categories[idx].id;
-      const targetCatName = state.categories[idx].name;
-      let updated = 0;
-      state.expenses.forEach((e) => {
-        if (ids.includes(e.id)) {
-          e.categoryId = targetCatId;
-          touchRecord(e);
-          updated += 1;
-        }
+      if (isNaN(idx) || idx < 0 || idx >= state.categories.length) { showToast("Invalid selection"); return; }
+      _applyBulkRecat(state.categories[idx].id);
+      return;
+    }
+    const titleEl = document.getElementById("bulkRecatTitle");
+    if (titleEl) titleEl.textContent = `Move ${ids.length} txn${ids.length === 1 ? "" : "s"} to…`;
+    const search = document.getElementById("bulkRecatSearch");
+    if (search) search.value = "";
+    renderBulkRecatList("");
+    modal.classList.add("open");
+    setTimeout(() => search?.focus(), 80);
+  }
+  function renderBulkRecatList(query) {
+    const list = document.getElementById("bulkRecatList");
+    if (!list) return;
+    const q = (query || "").trim().toLowerCase();
+    const counts = new Map();
+    state.expenses.forEach((e) => {
+      if (e.categoryId) counts.set(e.categoryId, (counts.get(e.categoryId) || 0) + 1);
+    });
+    const cats = [...state.categories]
+      .filter((c) => !q || (c.name || "").toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aN = counts.get(a.id) || 0;
+        const bN = counts.get(b.id) || 0;
+        if (aN !== bN) return bN - aN;
+        return (a.name || "").localeCompare(b.name || "");
       });
+    if (!cats.length) {
+      list.innerHTML = '<p class="empty">No categories match.</p>';
+      return;
+    }
+    const buttons = cats.map((c) => {
+      const n = counts.get(c.id) || 0;
+      return `<button class="bulk-recat-btn" data-cat-id="${c.id}">
+        <span class="bulk-recat-name">${escapeHtml(c.name)}</span>
+        <span class="bulk-recat-count">${n} txn${n === 1 ? "" : "s"}</span>
+      </button>`;
+    }).join("");
+    // Add "Uncategorized" option (clear category)
+    const uncatBtn = `<button class="bulk-recat-btn bulk-recat-uncat" data-cat-id="">
+      <span class="bulk-recat-name">❓ Uncategorized (clear)</span>
+    </button>`;
+    list.innerHTML = (q ? "" : uncatBtn) + buttons;
+    list.querySelectorAll(".bulk-recat-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const targetId = btn.dataset.catId || null;
+        _applyBulkRecat(targetId);
+      });
+    });
+  }
+  function _applyBulkRecat(targetCatId) {
+    const ids = _bulkRecatTargetIds;
+    if (!ids || !ids.length) return;
+    let updated = 0;
+    state.expenses.forEach((e) => {
+      if (ids.includes(e.id) && e.categoryId !== targetCatId) {
+        e.categoryId = targetCatId;
+        touchRecord(e);
+        updated += 1;
+      }
+    });
+    if (updated > 0) {
       selectedTxns.clear();
       saveData();
       renderAll();
-      showToast(`Moved ${updated} to ${targetCatName}`);
+    }
+    const modal = document.getElementById("bulkRecatModal");
+    if (modal) modal.classList.remove("open");
+    _bulkRecatTargetIds = [];
+    if (updated > 0) {
+      const targetName = targetCatId
+        ? (state.categories.find((c) => c.id === targetCatId)?.name || "category")
+        : "Uncategorized";
+      showToast(`Moved ${updated} to ${targetName}`);
+    } else {
+      showToast("Already in that category");
+    }
+  }
+
+    // Bulk recategorize modal wiring (close button, search input, backdrop click)
+    document.getElementById("bulkRecatClose")?.addEventListener("click", () => {
+      const modal = document.getElementById("bulkRecatModal");
+      if (modal) modal.classList.remove("open");
     });
+    document.getElementById("bulkRecatModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "bulkRecatModal") {
+        e.target.classList.remove("open");
+      }
+    });
+    document.getElementById("bulkRecatSearch")?.addEventListener("input", (e) => {
+      renderBulkRecatList(e.target.value);
+    });
+
     $("#bulkDeleteBtn").addEventListener("click", () => {
       if (!selectedTxns.size) return;
       const ids = [...selectedTxns];

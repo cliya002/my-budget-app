@@ -733,6 +733,8 @@ label {
 }
 .chip.off { background: var(--card-soft); color: var(--text-dim); border: 1px solid var(--border); }
 .chip:hover { opacity: 0.85; }
+.chip-uncat:not(.off) { background: var(--warning, #d97706); }
+.chip-uncat.off { background: var(--card-soft); color: var(--warning, #d97706); border: 1px dashed var(--warning, #d97706); }
 .chip-count {
   font-size: 0.7rem;
   opacity: 0.7;
@@ -1152,6 +1154,46 @@ html.compact-mode .stat-card { padding: 0.85rem; }
   display: flex;
   align-items: center;
   gap: 0.35rem;
+}
+
+/* Bulk recategorize modal — searchable picker */
+.bulk-recat-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  margin-top: 0.5rem;
+}
+.bulk-recat-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--card-soft);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 0.15s, border-color 0.15s;
+}
+.bulk-recat-btn:hover {
+  background: var(--primary-soft, rgba(91, 63, 184, 0.08));
+  border-color: var(--primary);
+}
+.bulk-recat-btn .bulk-recat-name { flex: 1 1 auto; }
+.bulk-recat-btn .bulk-recat-count {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  flex: 0 0 auto;
+}
+.bulk-recat-uncat {
+  border-style: dashed;
+  color: var(--warning, #d97706);
 }
 
 .footer-note { text-align: center; color: var(--text-dim); font-size: 0.85rem; margin: 1rem 0; }
