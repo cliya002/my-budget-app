@@ -1386,6 +1386,7 @@
     startAutoLock();
     startAutoSync();
     updateSyncIndicator("synced");
+    updateNetStatus();
     // If sync is set up, automatically merge cloud data BEFORE running recurring
     // so we don't add duplicate recurring transactions across devices.
     if (localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId)) {
@@ -13809,15 +13810,56 @@
     // Visibility change — pull when returning to app
     document.removeEventListener("visibilitychange", handleVisibility);
     document.addEventListener("visibilitychange", handleVisibility);
+
+    // Initial network status indicator
+    updateNetStatus();
   }
 
   function handleOnline() {
     showAlertToast("📡 Back online", "success");
     if (dirtyForSync) syncPush({ silent: true });
     updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
+    updateNetStatus();
   }
   function handleOffline() {
     updateSyncIndicator("offline");
+    updateNetStatus();
+  }
+
+  function updateNetStatus() {
+    const el = $("#netStatusIndicator");
+    if (!el) return;
+    const online = navigator.onLine;
+    el.className = `net-status ${online ? "online" : "offline"}`;
+    el.innerHTML = `<span class="label">${online ? "Online" : "Offline"}</span>`;
+    el.title = online
+      ? "Connected — sync and AI insights available"
+      : "Offline — changes saved locally, will sync when reconnected";
+
+    // Show/hide offline banner (only when sync is configured, since that's when offline matters most)
+    let banner = $("#offlineBanner");
+    const syncConfigured = !!(localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId));
+    if (!online && syncConfigured) {
+      if (!banner) {
+        banner = document.createElement("div");
+        banner.id = "offlineBanner";
+        banner.className = "offline-banner";
+        banner.innerHTML = "📵 Offline — your changes are saved locally and will sync when you reconnect";
+        document.body.appendChild(banner);
+        // Trigger reflow then add show class for slide-in animation
+        requestAnimationFrame(() => banner.classList.add("show"));
+      } else {
+        banner.classList.add("show");
+      }
+    } else if (banner) {
+      banner.classList.remove("show");
+      // Remove after transition
+      setTimeout(() => {
+        if (banner && !banner.classList.contains("show") && banner.parentNode) {
+          banner.parentNode.removeChild(banner);
+        }
+      }, 400);
+    }
   }
   function handleVisibility() {
     if (!document.hidden && localStorage.getItem("mb_auto_sync") === "true") {

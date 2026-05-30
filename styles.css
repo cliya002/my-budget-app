@@ -2835,6 +2835,68 @@ input[type="color"] {
   cursor: default;
   margin-right: 0.4rem;
 }
+
+/* Network status (always visible) */
+.net-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  margin-right: 0.4rem;
+  background: var(--card-soft);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  transition: background 0.2s, color 0.2s, border-color 0.2s;
+}
+.net-status::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.net-status.online {
+  color: #16a34a;
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+.net-status.offline {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.35);
+  animation: netOfflinePulse 2s ease-in-out infinite;
+}
+@keyframes netOfflinePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* Offline banner (top of page when offline + sync enabled) */
+.offline-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background: #f59e0b;
+  color: #1c1917;
+  padding: 0.5rem 1rem;
+  text-align: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+  z-index: 9000;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  transform: translateY(-100%);
+  transition: transform 0.3s ease;
+}
+.offline-banner.show { transform: translateY(0); }
+@media (max-width: 480px) {
+  .net-status { font-size: 0.7rem; padding: 0.2rem 0.45rem; }
+  .net-status .label { display: none; }
+}
+
 .sync-indicator-desktop {
   display: block;
   font-size: 0.75rem;
