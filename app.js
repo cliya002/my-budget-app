@@ -3740,6 +3740,14 @@
   function renderPresetsManage() {
     const list = $("#presetsManageList");
     if (!list) return;
+    // Keep the toggle button label's count in sync with current preset total
+    const toggleBtn = $("#presetsListToggle");
+    if (toggleBtn) {
+      const isVisible = !list.hidden;
+      toggleBtn.textContent = isVisible
+        ? `▾ Hide preset list (${state.presets.length})`
+        : `▸ Show preset list (${state.presets.length})`;
+    }
     if (!state.presets.length) {
       list.innerHTML = '<li class="empty">No presets yet.</li>';
       return;
@@ -10453,6 +10461,30 @@
       renderAll();
       showToast(`Removed ${losers.length} duplicate${losers.length === 1 ? "" : "s"}`);
     });
+
+    // Show/hide the full preset list (defaults to hidden — keeps Settings tidy)
+    const presetsListToggle = $("#presetsListToggle");
+    const presetsManageList = $("#presetsManageList");
+    if (presetsListToggle && presetsManageList) {
+      // Restore last preference (default hidden)
+      const stored = localStorage.getItem("mb_presets_list_visible");
+      const startVisible = stored === "true";
+      presetsManageList.hidden = !startVisible;
+      presetsListToggle.setAttribute("aria-expanded", String(startVisible));
+      presetsListToggle.textContent = startVisible
+        ? `▾ Hide preset list (${state.presets.length})`
+        : `▸ Show preset list (${state.presets.length})`;
+      presetsListToggle.addEventListener("click", () => {
+        const isVisible = !presetsManageList.hidden;
+        const next = !isVisible;
+        presetsManageList.hidden = !next;
+        presetsListToggle.setAttribute("aria-expanded", String(next));
+        presetsListToggle.textContent = next
+          ? `▾ Hide preset list (${state.presets.length})`
+          : `▸ Show preset list (${state.presets.length})`;
+        try { localStorage.setItem("mb_presets_list_visible", next ? "true" : "false"); } catch (_) {}
+      });
+    }
 
     // Theme toggle in settings
     $$(".theme-btn").forEach((btn) => {
