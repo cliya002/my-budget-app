@@ -216,12 +216,12 @@
 
   async function decryptState(b64) {
     if (!cryptoKey) return null;
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    const iv = arr.slice(0, 12);
-    const ct = arr.slice(12);
     try {
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const iv = arr.slice(0, 12);
+      const ct = arr.slice(12);
       const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, ct);
       return JSON.parse(new TextDecoder().decode(pt));
     } catch (e) {
@@ -3811,7 +3811,8 @@
   }
 
   function renderBalances() {
-    $("#incomeAmount").value = state.income || "";
+    const incEl = $("#incomeAmount");
+    if (incEl) incEl.value = state.income || "";
     renderMonthIncomeList();
     renderYtdIncome();
     renderExpectedIncome();
@@ -3819,9 +3820,9 @@
     renderRoundUpStats();
 
     const list = $("#categoryList");
-    if (!state.categories.length) {
+    if (list && !state.categories.length) {
       list.innerHTML = '<li class="empty">No categories yet.</li>';
-    } else {
+    } else if (list) {
       const month = currentMonth();
       const monthExp = state.expenses.filter(
         (e) => monthKey(e.date) === month && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
@@ -3879,9 +3880,9 @@
     }
 
     const goalList = $("#goalList");
-    if (!state.goals.length) {
+    if (goalList && !state.goals.length) {
       goalList.innerHTML = '<li class="empty">No savings goals yet.</li>';
-    } else {
+    } else if (goalList) {
       goalList.innerHTML = state.goals
         .map((g) => {
           const saved = goalSavedTotal(g);
@@ -8168,15 +8169,18 @@
   /* ---------- Paystub upload & parsing ---------- */
   async function handlePaystubUpload(file) {
     const status = $("#paystubStatus");
-    status.hidden = false;
-    status.className = "paystub-status";
-    status.textContent = "Reading paystub…";
+    const setStatus = (msg, cls) => {
+      if (!status) return;
+      status.hidden = false;
+      status.className = cls || "paystub-status";
+      status.textContent = msg;
+    };
+    setStatus("Reading paystub…");
     try {
       let text = "";
       if (file.type === "application/pdf") {
         if (!window.pdfjsLib) {
-          status.className = "paystub-status warn";
-          status.textContent = "PDF library not loaded. Try image instead.";
+          setStatus("PDF library not loaded. Try image instead.", "paystub-status warn");
           return;
         }
         const buf = await file.arrayBuffer();
@@ -8205,29 +8209,27 @@
         }
         // If PDF text is empty (image-only PDF), fall back to OCR by rendering each page
         if (text.replace(/\s+/g, "").length < 50) {
-          status.textContent = "PDF has no text layer. Loading OCR…";
+          setStatus("PDF has no text layer. Loading OCR…");
           text = await ocrPdf(buf, (progress, page, pages) => {
-            status.textContent = `OCR scanning page ${page}/${pages}… ${Math.round(progress * 100)}%`;
+            setStatus(`OCR scanning page ${page}/${pages}… ${Math.round(progress * 100)}%`);
           });
         }
       } else if (file.type.startsWith("image/")) {
-        status.textContent = "Loading OCR engine (one-time, ~10MB)…";
+        setStatus("Loading OCR engine (one-time, ~10MB)…");
         text = await ocrImage(file, (progress) => {
-          status.textContent = `OCR scanning… ${Math.round(progress * 100)}%`;
+          setStatus(`OCR scanning… ${Math.round(progress * 100)}%`);
         });
       } else {
-        status.className = "paystub-status warn";
-        status.textContent = "Unsupported file type. Use PDF or image.";
+        setStatus("Unsupported file type. Use PDF or image.", "paystub-status warn");
         return;
       }
 
       if (!text || text.replace(/\s+/g, "").length < 20) {
-        status.className = "paystub-status warn";
-        status.textContent = "Couldn't extract any text. Try a clearer file or fill manually.";
+        setStatus("Couldn't extract any text. Try a clearer file or fill manually.", "paystub-status warn");
         return;
       }
 
-      status.textContent = "Parsing paystub data…";
+      setStatus("Parsing paystub data…");
       const parsed = parsePaystub(text);
       applyPaystubToForm(parsed);
 
@@ -8251,16 +8253,14 @@
       if (parsed._otherTotal) found.push(`other total ${fmt(parsed._otherTotal)}`);
 
       if (found.length === 0) {
-        status.className = "paystub-status warn";
-        status.textContent = "Couldn't auto-detect fields. Fill them in manually.";
-      } else {
+        setStatus("Couldn't auto-detect fields. Fill them in manually.", "paystub-status warn");
+      } else if (status) {
         status.className = "paystub-status success";
         status.innerHTML = `✓ Found: ${found.join(", ")}.<br><small>Review the values below before saving.</small>`;
       }
     } catch (e) {
       console.error("Paystub upload failed:", e);
-      status.className = "paystub-status warn";
-      status.textContent = `Failed: ${e.message || e.name || "unknown error"}. Try a different file or fill manually.`;
+      setStatus(`Failed: ${e.message || e.name || "unknown error"}. Try a different file or fill manually.`, "paystub-status warn");
     }
   }
 
@@ -13144,7 +13144,8 @@
     }, 15 * 1000);
 
     // Refresh "X min ago" badge every minute
-    setInterval(() => {
+    if (window._syncBadgeTimer) clearInterval(window._syncBadgeTimer);
+    window._syncBadgeTimer = setInterval(() => {
       if (lastSyncedAt) updateSyncIndicator(dirtyForSync ? "dirty" : "synced");
     }, 60 * 1000);
 
@@ -13179,6 +13180,8 @@
     autoSyncTimer = null;
     if (window._pullPollTimer) clearInterval(window._pullPollTimer);
     window._pullPollTimer = null;
+    if (window._syncBadgeTimer) clearInterval(window._syncBadgeTimer);
+    window._syncBadgeTimer = null;
   }
 
   function markDirty() {
