@@ -10387,6 +10387,33 @@
         // Sort by record timestamp ascending (oldest first)
         const sorted = arr.slice().sort((a, b) => recordTimestamp(a) - recordTimestamp(b));
         const winner = sorted[0];
+        // Inherit highest non-zero limit from any duplicate (preserve user's intentional setting)
+        const limits = sorted.map((c) => Number(c.limit) || 0);
+        const maxLimit = Math.max(...limits);
+        if (maxLimit > 0 && (Number(winner.limit) || 0) !== maxLimit) {
+          winner.limit = maxLimit;
+          touchRecord(winner);
+        }
+        // Merge limitHistory entries (one per month, prefer highest limit)
+        const histMap = new Map();
+        sorted.forEach((c) => {
+          (Array.isArray(c.limitHistory) ? c.limitHistory : []).forEach((h) => {
+            if (!h || !h.until) return;
+            const ex = histMap.get(h.until);
+            const newLim = Number(h.limit) || 0;
+            if (!ex || newLim > (Number(ex.limit) || 0)) {
+              histMap.set(h.until, { until: h.until, limit: newLim });
+            }
+          });
+        });
+        if (histMap.size > 0) {
+          const merged = Array.from(histMap.values())
+            .sort((a, b) => String(a.until).localeCompare(String(b.until)));
+          if (JSON.stringify(winner.limitHistory || []) !== JSON.stringify(merged)) {
+            winner.limitHistory = merged;
+            touchRecord(winner);
+          }
+        }
         for (let i = 1; i < sorted.length; i++) {
           idRemap.set(sorted[i].id, winner.id);
           losersToTombstone.push(sorted[i].id);
@@ -10413,6 +10440,23 @@
       state.expenses.forEach((e) => remap(e, "categoryId"));
       state.recurring.forEach((r) => remap(r, "categoryId"));
       state.presets.forEach((p) => remap(p, "categoryId"));
+      // Account → category mapping
+      if (state.settings && state.settings.accountCategoryMap) {
+        const newMap = { ...state.settings.accountCategoryMap };
+        let mapChanged = false;
+        Object.keys(newMap).forEach((acctId) => {
+          const oldCatId = newMap[acctId];
+          if (oldCatId && idRemap.has(oldCatId)) {
+            newMap[acctId] = idRemap.get(oldCatId);
+            mapChanged = true;
+          }
+        });
+        if (mapChanged) setSetting("accountCategoryMap", newMap);
+      }
+      // Default category
+      if (state.settings?.defaultCategoryId && idRemap.has(state.settings.defaultCategoryId)) {
+        setSetting("defaultCategoryId", idRemap.get(state.settings.defaultCategoryId));
+      }
 
       // Tombstone the losers and remove from state.categories
       losersToTombstone.forEach((id) => tombstoneRecord("categories", id));
@@ -12170,9 +12214,15 @@
       filters.end = e.target.value;
       renderTransactions();
     });
+    // Debounce search input — avoids re-rendering thousands of txns on every keystroke
+    let _txnSearchTimer = null;
     $("#txnSearch").addEventListener("input", (e) => {
-      filters.search = e.target.value.trim();
-      renderTransactions();
+      const val = e.target.value.trim();
+      if (_txnSearchTimer) clearTimeout(_txnSearchTimer);
+      _txnSearchTimer = setTimeout(() => {
+        filters.search = val;
+        renderTransactions();
+      }, 150);
     });
     $("#clearFilters").addEventListener("click", () => {
       filters.start = "";
@@ -13915,7 +13965,12 @@ ${b64}`;
 
     const input = $("#globalSearchInput");
     if (input) {
-      input.addEventListener("input", (e) => renderGlobalSearchResults(e.target.value));
+      let _gsTimer = null;
+      input.addEventListener("input", (e) => {
+        const val = e.target.value;
+        if (_gsTimer) clearTimeout(_gsTimer);
+        _gsTimer = setTimeout(() => renderGlobalSearchResults(val), 120);
+      });
       input.addEventListener("keydown", (e) => {
         if (e.key === "Escape") closeGlobalSearch();
       });
