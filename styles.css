@@ -1148,6 +1148,10 @@ label {
   border: 1px solid var(--primary-soft);
   padding: 1rem 1.25rem;
 }
+[data-theme="dark"] .hint-card {
+  background: linear-gradient(135deg, rgba(169, 140, 255, 0.12) 0%, rgba(244, 114, 182, 0.06) 100%);
+  border: 1px solid rgba(169, 140, 255, 0.25);
+}
 .hint-icon { font-size: 2rem; }
 .hint-title { font-weight: 600; color: var(--primary); margin-bottom: 0.25rem; }
 .hint-sub { font-size: 0.85rem; color: var(--text-dim); }
@@ -2318,6 +2322,10 @@ html.compact-mode .stat-card { padding: 0.85rem; }
   border: 1px solid var(--primary-soft);
   border-radius: var(--radius-sm);
 }
+[data-theme="dark"] .subscription-suggest {
+  background: linear-gradient(135deg, rgba(169, 140, 255, 0.12) 0%, rgba(251, 191, 36, 0.08) 100%);
+  border: 1px solid rgba(169, 140, 255, 0.25);
+}
 .sub-title { font-weight: 700; color: var(--primary); margin-bottom: 0.2rem; }
 .sub-sub { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 0.75rem; }
 .sub-item {
@@ -2366,6 +2374,9 @@ html.compact-mode .stat-card { padding: 0.85rem; }
   padding: 0.85rem 1rem;
   background: linear-gradient(135deg, var(--primary-soft) 0%, #e0d4ff 100%);
   border-radius: var(--radius-sm);
+}
+[data-theme="dark"] .account-net {
+  background: linear-gradient(135deg, rgba(169, 140, 255, 0.18) 0%, rgba(169, 140, 255, 0.08) 100%);
 }
 .account-net-label { font-weight: 600; color: var(--primary); }
 .account-net-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
@@ -2522,6 +2533,9 @@ input[type="color"] {
   border-radius: var(--radius-sm);
   text-align: center;
   margin-bottom: 1rem;
+}
+[data-theme="dark"] .ytd-total {
+  background: linear-gradient(135deg, rgba(169, 140, 255, 0.18) 0%, rgba(169, 140, 255, 0.08) 100%);
 }
 .ytd-label {
   font-size: 0.8rem;
@@ -2904,6 +2918,12 @@ input[type="color"] {
 .insights-card {
   background: linear-gradient(135deg, var(--primary-soft) 0%, #f0e7fa 100%);
   border: 1px solid var(--primary-soft);
+}
+[data-theme="dark"] .insights-card {
+  /* Light gradient was hardcoded #f0e7fa which made the card look near-white in dark mode.
+     Use a dark purple gradient that blends with the surrounding cards. */
+  background: linear-gradient(135deg, rgba(169, 140, 255, 0.10) 0%, rgba(169, 140, 255, 0.04) 100%);
+  border: 1px solid rgba(169, 140, 255, 0.25);
 }
 .insight-item {
   display: flex;
