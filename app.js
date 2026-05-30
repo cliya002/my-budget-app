@@ -10045,6 +10045,8 @@
         startAutoSync();
       }
       showSyncStatus("Settings saved. Auto-sync is on.", "success");
+      // Refresh offline banner state since sync config changed
+      try { updateNetStatus(); } catch (e) {}
     });
     $("#syncPushBtn")?.addEventListener("click", syncPush);
     $("#syncPullBtn")?.addEventListener("click", syncPull);
@@ -10284,6 +10286,7 @@
         $("#syncGistId").value = "";
         updateSyncIndicator("synced");
         renderDashSyncCard();
+        try { updateNetStatus(); } catch (e) {}
         showToast("Cloud data deleted. Push again to re-sync.");
       } catch (e) {
         showToast(`❌ ${e.message || "Delete failed"}`);
@@ -13879,11 +13882,13 @@
       }
     }
 
-    // Show/hide offline banner (only when sync is configured, since that's when offline matters most)
+    // Show/hide offline banner (only when sync is configured AND lock screen is closed)
     if (!document.body) return; // very early in init
     let banner = $("#offlineBanner");
     const syncConfigured = !!(localStorage.getItem(KEYS.syncToken) && localStorage.getItem(KEYS.syncGistId));
-    if (!online && syncConfigured) {
+    const lockOpen = !!($("#lockScreen") && $("#lockScreen").classList.contains("open"));
+    const shouldShowBanner = !online && syncConfigured && !lockOpen;
+    if (shouldShowBanner) {
       // Count pending changes since last sync (if dirty flag is true)
       let countMsg = "";
       if (typeof dirtyForSync !== "undefined" && dirtyForSync) {
