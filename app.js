@@ -4411,7 +4411,7 @@
     const incomes = monthTxns.filter((e) => e.type === "income");
     const expenses = monthTxns.filter((e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out");
     const totalIncome = incomes.reduce((s, e) => s + incomeReportingAmount(e), 0);
-    const totalExpenses = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    const totalExpenses = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
 
     if (totalIncome === 0 && totalExpenses === 0) {
       if (empty) empty.hidden = false;
@@ -4426,9 +4426,10 @@
       const cat = state.categories.find((c) => c.id === e.categoryId);
       const name = cat ? cat.name : "Uncategorized";
       if (!byCat[name]) byCat[name] = { total: 0, vendors: {} };
-      byCat[name].total += Number(e.amount);
+      const amt = Number(e.amount) || 0;
+      byCat[name].total += amt;
       const vendor = e.desc || "(no description)";
-      byCat[name].vendors[vendor] = (byCat[name].vendors[vendor] || 0) + Number(e.amount);
+      byCat[name].vendors[vendor] = (byCat[name].vendors[vendor] || 0) + amt;
     });
     const sortedCats = Object.entries(byCat).sort((a, b) => b[1].total - a[1].total);
 
@@ -4525,7 +4526,7 @@
     expenses.forEach((e) => {
       const cat = state.categories.find((c) => c.id === e.categoryId);
       const name = cat ? cat.name : "Uncategorized";
-      totals[name] = (totals[name] || 0) + Number(e.amount);
+      totals[name] = (totals[name] || 0) + (Number(e.amount) || 0);
     });
     const labels = Object.keys(totals);
     const data = Object.values(totals);
@@ -4580,7 +4581,7 @@
     expenses.forEach((e) => {
       const day = Number((e.date || "").slice(8, 10));
       if (!day) return;
-      dayTotals[day] = (dayTotals[day] || 0) + Number(e.amount);
+      dayTotals[day] = (dayTotals[day] || 0) + (Number(e.amount) || 0);
     });
 
     const days = Object.keys(dayTotals).map(Number).sort((a, b) => a - b);
@@ -4625,18 +4626,18 @@
     ctx.style.display = "block";
 
     // Cumulative remaining balance throughout the period
-    const sorted = [...expenses].sort((a, b) => a.date.localeCompare(b.date));
+    const sorted = [...expenses].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
     let running = Number(state.income) || 0;
     const labels = [];
     const data = [];
     // Start point
     if (sorted.length) {
-      labels.push(sorted[0].date.slice(8, 10) || "1");
+      labels.push(String(sorted[0].date || "").slice(8, 10) || "1");
       data.push(running);
     }
     sorted.forEach((e) => {
-      running -= Number(e.amount);
-      labels.push(e.date.slice(8, 10));
+      running -= (Number(e.amount) || 0);
+      labels.push(String(e.date || "").slice(8, 10));
       data.push(running);
     });
 
@@ -4687,12 +4688,13 @@
     const counts = [0, 0, 0, 0, 0, 0, 0];
 
     expenses.forEach((e) => {
-      const [y, m, d] = e.date.split("-").map(Number);
+      if (!e.date) return;
+      const [y, m, d] = String(e.date).split("-").map(Number);
       if (!y) return;
       const dt = new Date(y, m - 1, d);
       // JS: Sunday=0 .. Saturday=6 → remap so Mon=0 .. Sun=6
       const idx = (dt.getDay() + 6) % 7;
-      totals[idx] += Number(e.amount);
+      totals[idx] += (Number(e.amount) || 0);
       counts[idx] += 1;
     });
 
@@ -4743,13 +4745,13 @@
     const totals = months.map((mk) =>
       state.expenses
         .filter((e) => monthKey(e.date) === mk && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
-        .reduce((s, e) => s + Number(e.amount), 0)
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0)
     );
 
     const incomes = months.map((mk) =>
       state.expenses
         .filter((e) => monthKey(e.date) === mk && e.type === "income")
-        .reduce((s, e) => s + Number(e.amount), 0)
+        .reduce((s, e) => s + (Number(e.amount) || 0), 0)
     );
 
     if (totals.every((t) => t === 0) && incomes.every((t) => t === 0)) {
@@ -4992,11 +4994,12 @@
   }
 
   function renderFreezes() {
+    const freezes = state.creditFreezes || {};
     document.querySelectorAll('[data-freeze]').forEach((cb) => {
       const bureau = cb.dataset.freeze;
-      const f = state.creditFreezes[bureau];
+      const f = freezes[bureau];
       cb.checked = !!(f && f.frozen);
-      const status = cb.parentElement.querySelector(".freeze-status");
+      const status = cb.parentElement && cb.parentElement.querySelector(".freeze-status");
       if (status) {
         status.textContent = f && f.frozen
           ? `🔒 Frozen since ${f.date}`
@@ -5009,8 +5012,9 @@
     const el = $("#annualReportStatus");
     if (!el) return;
     const bureaus = ["Equifax", "Experian", "TransUnion"];
+    const reports = state.annualReports || {};
     el.innerHTML = bureaus.map((b) => {
-      const r = state.annualReports[b];
+      const r = reports[b];
       const lastPulled = r ? r.lastPulled : null;
       let status;
       if (!lastPulled) {
@@ -6458,17 +6462,18 @@
     const ctx = $("#chartCreditTrend");
     if (!ctx) return;
 
+    const trendEmptyEl = $("#creditTrendEmpty");
     if (state.creditScores.length < 1) {
-      $("#creditTrendEmpty").hidden = false;
+      if (trendEmptyEl) trendEmptyEl.hidden = false;
       ctx.style.display = "none";
       return;
     }
-    $("#creditTrendEmpty").hidden = true;
+    if (trendEmptyEl) trendEmptyEl.hidden = true;
     ctx.style.display = "block";
 
-    const sorted = [...state.creditScores].sort((a, b) => a.date.localeCompare(b.date));
-    const labels = sorted.map((s) => s.date);
-    const data = sorted.map((s) => s.score);
+    const sorted = [...state.creditScores].sort((a, b) => String(a.date || "").localeCompare(String(b.date || "")));
+    const labels = sorted.map((s) => s.date || "");
+    const data = sorted.map((s) => Number(s.score) || 0);
 
     charts.creditTrend = new Chart(ctx, {
       type: "line",
@@ -7709,12 +7714,13 @@
     const expenses = state.expenses.filter(
       (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
     );
+    const heatEmptyEl = $("#heatmapEmpty");
     if (!expenses.length) {
-      $("#heatmapEmpty").hidden = false;
+      if (heatEmptyEl) heatEmptyEl.hidden = false;
       el.innerHTML = "";
       return;
     }
-    $("#heatmapEmpty").hidden = true;
+    if (heatEmptyEl) heatEmptyEl.hidden = true;
 
     // Aggregate by day for the past 365 days
     const today = new Date();
@@ -7724,11 +7730,13 @@
 
     const dayTotals = new Map();
     expenses.forEach((e) => {
+      if (!e.date) return;
       const d = new Date(e.date);
+      if (isNaN(d.getTime())) return;
       d.setHours(0, 0, 0, 0);
       if (d < startDate || d > today) return;
       const key = e.date;
-      dayTotals.set(key, (dayTotals.get(key) || 0) + Number(e.amount));
+      dayTotals.set(key, (dayTotals.get(key) || 0) + (Number(e.amount) || 0));
     });
 
     // Find max for intensity scaling
