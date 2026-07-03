@@ -1822,6 +1822,216 @@
       renderAll();
     }
     maybeStartTour();
+    // Handle deep-link actions (from Home Screen shortcuts / Apple Shortcuts / widget page)
+    handleDeepLinkAction();
+  }
+
+  // Deep-link actions let a Home Screen icon or Apple Shortcut jump straight to an
+  // action. Supported: ?action=add-expense | add-income | add-transfer | paycheck | dashboard | widget
+  // Example: https://cliya002.github.io/my-budget-app/?action=add-expense
+  function handleDeepLinkAction() {
+    try {
+      const params = new URLSearchParams(location.search);
+      const action = params.get("action");
+      if (!action) return;
+      // Clear the param from the URL so a refresh doesn't repeat the action
+      try { history.replaceState(null, "", location.pathname); } catch (_) {}
+      // Small delay so the app has finished its first render
+      setTimeout(() => {
+        switch (action) {
+          case "add-expense":
+            openExpenseModal({ type: "expense" });
+            break;
+          case "add-income":
+            openExpenseModal({ type: "income" });
+            break;
+          case "add-transfer":
+            if (typeof openTransferModal === "function") openTransferModal();
+            break;
+          case "paycheck":
+            if (typeof openPaycheckModal === "function") openPaycheckModal();
+            break;
+          case "repeat-last": {
+            const btn = document.getElementById("repeatLastBtn");
+            if (btn) btn.click();
+            break;
+          }
+          case "dashboard":
+            document.querySelector('[data-tab="dashboard"]')?.click();
+            break;
+          case "transactions":
+            document.querySelector('[data-tab="transactions"]')?.click();
+            break;
+          case "widget":
+            openWidgetView();
+            break;
+          default:
+            break;
+        }
+      }, 400);
+    } catch (e) { /* ignore */ }
+  }
+
+  // Compact "widget" overlay — a glanceable summary designed to be added to the
+  // iOS/Android Home Screen as its own icon (via ?action=widget). Big numbers,
+  // one-tap shortcuts. Not a true OS widget (PWAs can't do those), but gives a
+  // fast at-a-glance + quick-add experience.
+  function openWidgetView() {
+    let overlay = document.getElementById("widgetOverlay");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "widgetOverlay";
+      overlay.className = "widget-overlay";
+      document.body.appendChild(overlay);
+    }
+    renderWidgetView(overlay);
+    overlay.classList.add("open");
+  }
+
+  function renderWidgetView(overlay) {
+    const month = currentMonth();
+    const monthTxns = state.expenses.filter((e) => monthKey(e.date) === month);
+    const monthExpenses = monthTxns.filter(
+      (e) => e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out"
+    );
+    const monthIncomes = monthTxns.filter((e) => e.type === "income");
+    const totalSpent = monthExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const incomeReal = monthIncomes.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const targetIncome = incomeForMonth(month);
+    const totalIncome = incomeReal > 0 ? incomeReal : targetIncome;
+    const remaining = totalIncome - totalSpent;
+
+    // Today's spend
+    const today = todayStr();
+    const spentToday = state.expenses
+      .filter((e) => e.date === today && e.type !== "income" && e.type !== "transfer-in" && e.type !== "transfer-out")
+      .reduce((s, e) => s + (Number(e.amount) || 0), 0);
+
+    // Top category this month
+    const catTotals = {};
+    monthExpenses.forEach((e) => {
+      const cat = state.categories.find((c) => c.id === e.categoryId);
+      const name = cat ? cat.name : "Uncategorized";
+      catTotals[name] = (catTotals[name] || 0) + (Number(e.amount) || 0);
+    });
+    const topCat = Object.entries(catTotals).sort((a, b) => b[1] - a[1])[0];
+
+    const remainingCls = remaining >= 0 ? "positive" : "negative";
+    overlay.innerHTML = `
+      <div class="widget-card">
+        <div class="widget-head">
+          <span class="widget-title">📊 ${escapeHtml(monthLabel(month))}</span>
+          <button type="button" class="widget-close" aria-label="Close">×</button>
+        </div>
+        <div class="widget-hero">
+          <div class="widget-hero-label">Remaining this month</div>
+          <div class="widget-hero-value ${remainingCls}">${fmt(remaining)}</div>
+        </div>
+        <div class="widget-stats">
+          <div class="widget-stat">
+            <div class="widget-stat-label">Spent today</div>
+            <div class="widget-stat-value">${fmt(spentToday)}</div>
+          </div>
+          <div class="widget-stat">
+            <div class="widget-stat-label">Spent this month</div>
+            <div class="widget-stat-value">${fmt(totalSpent)}</div>
+          </div>
+          <div class="widget-stat">
+            <div class="widget-stat-label">Income</div>
+            <div class="widget-stat-value">${fmt(totalIncome)}</div>
+          </div>
+          <div class="widget-stat">
+            <div class="widget-stat-label">Top category</div>
+            <div class="widget-stat-value">${topCat ? escapeHtml(topCat[0]) : "—"}</div>
+          </div>
+        </div>
+        <div class="widget-actions">
+          <button type="button" class="widget-action" data-widget-action="add-expense">💸 Expense</button>
+          <button type="button" class="widget-action" data-widget-action="add-income">💰 Income</button>
+          <button type="button" class="widget-action widget-action-full" data-widget-action="open">Open full app →</button>
+        </div>
+      </div>`;
+
+    overlay.querySelector(".widget-close")?.addEventListener("click", () => {
+      overlay.classList.remove("open");
+    });
+    overlay.addEventListener("click", (e) => {
+      if (e.target === overlay) overlay.classList.remove("open");
+    });
+    overlay.querySelectorAll("[data-widget-action]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const act = btn.dataset.widgetAction;
+        overlay.classList.remove("open");
+        if (act === "add-expense") openExpenseModal({ type: "expense" });
+        else if (act === "add-income") openExpenseModal({ type: "income" });
+        // "open" just closes the widget, revealing the full app
+      });
+    });
+  }
+
+  // Instructional modal explaining how to add the app to the Home Screen and set
+  // up an Apple Shortcut for one-tap logging (the closest thing to an iOS widget).
+  function showWidgetHelp() {
+    const baseUrl = location.origin + location.pathname;
+    const existing = document.getElementById("widgetHelpModal");
+    if (existing) existing.remove();
+    const modal = document.createElement("div");
+    modal.id = "widgetHelpModal";
+    modal.className = "modal open";
+    modal.innerHTML = `
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2>📲 Home Screen & Shortcuts</h2>
+          <button class="modal-close" data-close>×</button>
+        </div>
+        <div class="widget-help-body">
+          <p class="card-sub" style="margin-bottom:1rem">
+            iOS doesn't allow true home-screen widgets for web apps, but here are the closest options:
+          </p>
+
+          <h3 class="widget-help-h">📱 iPhone / iPad</h3>
+          <ol class="widget-help-list">
+            <li><strong>Add the app:</strong> In Safari, tap the Share button → <em>Add to Home Screen</em>. This gives you the full app as an icon.</li>
+            <li><strong>Add a Quick Glance icon:</strong> Open this link in Safari, then Share → Add to Home Screen:
+              <code class="widget-help-code">${escapeHtml(baseUrl)}?action=widget</code>
+            </li>
+            <li><strong>One-tap Add Expense:</strong> Same steps with this link:
+              <code class="widget-help-code">${escapeHtml(baseUrl)}?action=add-expense</code>
+            </li>
+          </ol>
+
+          <h3 class="widget-help-h">⚡ Apple Shortcut (widget-like)</h3>
+          <ol class="widget-help-list">
+            <li>Open the <strong>Shortcuts</strong> app → tap <strong>+</strong>.</li>
+            <li>Add action <strong>"Open URLs"</strong> and paste:
+              <code class="widget-help-code">${escapeHtml(baseUrl)}?action=add-expense</code>
+            </li>
+            <li>Name it "Add Expense", pick an icon, tap Done.</li>
+            <li>On your Home Screen, add a <strong>Shortcuts widget</strong> and choose this shortcut. Tapping it jumps straight to Add Expense.</li>
+          </ol>
+
+          <h3 class="widget-help-h">🤖 Android</h3>
+          <p class="card-sub">Install the app (Chrome menu → "Install app"), then long-press the icon for quick actions: Add Expense, Add Income, Quick Glance.</p>
+
+          <div class="widget-help-links">
+            <button type="button" class="btn-secondary block" data-copy="${escapeHtml(baseUrl)}?action=add-expense">📋 Copy "Add Expense" link</button>
+            <button type="button" class="btn-secondary block" data-copy="${escapeHtml(baseUrl)}?action=widget" style="margin-top:0.5rem">📋 Copy "Quick Glance" link</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.querySelector("[data-close]")?.addEventListener("click", () => modal.remove());
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll("[data-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(btn.dataset.copy);
+          showToast("📋 Link copied");
+        } catch (_) {
+          showToast("Copy failed — long-press the link text");
+        }
+      });
+    });
   }
 
   async function checkForRemoteUpdate() {
@@ -11190,6 +11400,10 @@
       startTour();
     });
     $("#showShortcutsBtn")?.addEventListener("click", showShortcutsHelp);
+
+    // Home Screen glance + shortcuts
+    $("#openWidgetBtn")?.addEventListener("click", openWidgetView);
+    $("#showWidgetHelpBtn")?.addEventListener("click", showWidgetHelp);
 
     // Print monthly report
     $("#printReportBtn")?.addEventListener("click", openPrintReport);
