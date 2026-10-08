@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=181" />
+  <link rel="stylesheet" href="styles.css?v=182" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -820,6 +820,46 @@
                 <div class="stat-meta" id="creditAvgUtil"></div>
               </div>
             </div>
+          </div>
+
+          <!-- Credit Builder -->
+          <div class="card credit-builder" id="creditBuilder">
+            <div class="card-title" data-i18n="cb.title">🏗️ Credit Builder</div>
+            <p class="card-sub" data-i18n="cb.sub">Build your score: keep utilization low, pay every card on time, and keep old accounts open.</p>
+            <div class="cb-grid">
+              <section class="cb-block" aria-labelledby="cbUtilHead">
+                <h3 class="cb-head" id="cbUtilHead" data-i18n="cb.utilization">Overall utilization</h3>
+                <div class="cb-util-headline">
+                  <span class="cb-util-pct" id="cbUtilPct">0%</span>
+                  <span class="cb-band" id="cbUtilBand"></span>
+                </div>
+                <div class="cb-hints" id="cbUtilHints"></div>
+                <div class="cb-card-util" id="cbCardUtil"></div>
+              </section>
+              <section class="cb-block" aria-labelledby="cbRemHead">
+                <h3 class="cb-head" id="cbRemHead" data-i18n="cb.reminders">Payment reminders</h3>
+                <div class="cb-reminders" id="cbReminders"></div>
+              </section>
+              <section class="cb-block" aria-labelledby="cbScoreHead">
+                <h3 class="cb-head" id="cbScoreHead" data-i18n="cb.score">Credit score</h3>
+                <div class="cb-score" id="cbScore"></div>
+              </section>
+              <section class="cb-block" aria-labelledby="cbAgeHead">
+                <h3 class="cb-head" id="cbAgeHead" data-i18n="cb.accountAge">Account age</h3>
+                <div class="cb-age" id="cbAge"></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="card" id="creditHabits">
+            <div class="card-title" data-i18n="cb.habits">✅ Credit-building habits</div>
+            <ul class="tips-list">
+              <li class="tip-item"><span class="tip-icon">📅</span><span data-i18n="cb.habit.onTime">Pay at least the minimum on every card, on time, every month.</span></li>
+              <li class="tip-item"><span class="tip-icon">📉</span><span data-i18n="cb.habit.util">Keep utilization under 30% — ideally under 10%.</span></li>
+              <li class="tip-item"><span class="tip-icon">🕰️</span><span data-i18n="cb.habit.keepOld">Don't close your oldest accounts; age helps your score.</span></li>
+              <li class="tip-item"><span class="tip-icon">🔍</span><span data-i18n="cb.habit.inquiries">Limit new hard inquiries — space applications 6+ months apart.</span></li>
+              <li class="tip-item"><span class="tip-icon">📋</span><span data-i18n="cb.habit.reports">Check your credit reports from all three bureaus once a year.</span></li>
+            </ul>
           </div>
 
           <!-- Bureau breakdown -->
@@ -1880,8 +1920,8 @@
             <input type="number" id="cardCloseDay" min="1" max="28" placeholder="e.g. 22" />
           </div>
           <div>
-            <label>Statement due day (1-28)</label>
-            <input type="number" id="cardDueDay" min="1" max="28" placeholder="15" />
+            <label>Statement due day (1-31)</label>
+            <input type="number" id="cardDueDay" min="1" max="31" placeholder="15" />
           </div>
         </div>
         <div class="form-row two-col">
@@ -2527,8 +2567,8 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="i18n.js?v=181"></script>
-  <script src="app.js?v=181"></script>
+  <script src="i18n.js?v=182"></script>
+  <script src="app.js?v=182"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

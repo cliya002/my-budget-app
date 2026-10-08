@@ -43,6 +43,13 @@
       "description": "See this month at a glance",
       "url": "./?action=widget",
       "icons": [{ "src": "icon-192.svg", "sizes": "192x192", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Credit Builder",
+      "short_name": "Credit",
+      "description": "Utilization, payment reminders, and score tracking",
+      "url": "./?action=credit-builder",
+      "icons": [{ "src": "icon-192.svg", "sizes": "192x192", "type": "image/svg+xml" }]
     }
   ]
 }

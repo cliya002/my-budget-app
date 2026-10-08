@@ -1827,7 +1827,7 @@
   }
 
   // Deep-link actions let a Home Screen icon or Apple Shortcut jump straight to an
-  // action. Supported: ?action=add-expense | add-income | add-transfer | paycheck | dashboard | widget
+  // action. Supported: ?action=add-expense | add-income | add-transfer | paycheck | dashboard | widget | credit-builder
   // Example: https://cliya002.github.io/my-budget-app/?action=add-expense
   function handleDeepLinkAction() {
     try {
@@ -1864,6 +1864,10 @@
             break;
           case "widget":
             openWidgetView();
+            break;
+          case "credit-builder":
+            document.querySelector('[data-tab="credit"]')?.click();
+            setTimeout(() => $("#creditBuilder")?.scrollIntoView({ behavior: "smooth", block: "start" }), 150);
             break;
           default:
             break;
@@ -1916,6 +1920,20 @@
     });
     const topCat = Object.entries(catTotals).sort((a, b) => b[1] - a[1])[0];
 
+    // Next credit card payment due (Credit Builder reminder) — one small line
+    const nextDue = cbReminders().find((r) => cardCurrentBalance(r.card) > 0);
+    let nextDueHtml;
+    if (!nextDue) {
+      nextDueHtml = escapeHtml(cbT("cb.glance.none"));
+    } else {
+      const when = nextDue.overdue
+        ? cbT("cb.rem.overdue", { n: nextDue.daysAgo })
+        : nextDue.days === 0 ? cbT("cb.rem.dueToday")
+        : nextDue.days === 1 ? cbT("cb.rem.dueTomorrow")
+        : cbT("cb.rem.dueIn", { n: nextDue.days });
+      nextDueHtml = `<strong>${escapeHtml(nextDue.card.name)}</strong> · ${escapeHtml(when)} · ${fmt(cardCurrentBalance(nextDue.card))}`;
+    }
+
     const remainingCls = remaining >= 0 ? "positive" : "negative";
     overlay.innerHTML = `
       <div class="widget-card">
@@ -1944,6 +1962,10 @@
             <div class="widget-stat-label">Top category</div>
             <div class="widget-stat-value">${topCat ? escapeHtml(topCat[0]) : "—"}</div>
           </div>
+        </div>
+        <div class="widget-credit ${nextDue && (nextDue.overdue || nextDue.days <= 7) ? "soon" : ""}">
+          <span class="widget-credit-label">💳 ${escapeHtml(cbT("cb.glance.nextDue"))}</span>
+          <span class="widget-credit-value">${nextDueHtml}</span>
         </div>
         <div class="widget-actions">
           <button type="button" class="widget-action" data-widget-action="add-expense">💸 Expense</button>
@@ -6565,6 +6587,7 @@
       try { fn(); } catch (e) { console.error(`renderCredit/${name} failed:`, e); }
     };
     safeCall(renderCreditStats, "stats");
+    safeCall(renderCreditBuilder, "creditBuilder");
     safeCall(renderCardList, "cardList");
     safeCall(renderScoreList, "scoreList");
     safeCall(renderCreditTrend, "creditTrend");
@@ -8325,6 +8348,182 @@
     list.innerHTML = tips
       .map((t) => `<li class="tip-item"><span class="tip-icon">${t.icon}</span><span>${escapeHtml(t.text)}</span></li>`)
       .join("");
+  }
+
+  /* ---------- Credit Builder ---------- */
+  // Translated string with {placeholder} substitution. Falls back to the key so a
+  // missing translation is visible rather than silently blank.
+  function cbT(key, vars) {
+    let s = window.i18n ? window.i18n.t(key) : key;
+    if (vars) Object.keys(vars).forEach((k) => { s = s.replace(`{${k}}`, vars[k]); });
+    return s;
+  }
+
+  // Utilization band: <=10 excellent, <=30 good, <=50 warning, >50 danger
+  function cbUtilBand(pct) {
+    if (pct <= 10) return "excellent";
+    if (pct <= 30) return "good";
+    if (pct <= 50) return "warning";
+    return "danger";
+  }
+
+  function cbScoreBandKey(score) {
+    const n = Number(score);
+    if (n >= 800) return "cb.band.exceptional";
+    if (n >= 740) return "cb.band.veryGood";
+    if (n >= 670) return "cb.band.good";
+    if (n >= 580) return "cb.band.fair";
+    return "cb.band.poor";
+  }
+
+  // Next due date for a card. If this month's due day has already passed and the
+  // card carries a balance, flag it as overdue-looking and roll to next month.
+  function cbNextDue(card) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const dueDay = Number(card.dueDay);
+    const thisDay = clampDayToMonth(dueDay, currentMonth());
+    const thisDue = new Date(today.getFullYear(), today.getMonth(), thisDay);
+    const diff = Math.round((thisDue - today) / 86400000);
+    if (diff >= 0) return { days: diff, date: thisDue, overdue: false, daysAgo: 0 };
+    const nextMonth = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+    const nextKey = `${nextMonth.getFullYear()}-${String(nextMonth.getMonth() + 1).padStart(2, "0")}`;
+    const nextDue = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), clampDayToMonth(dueDay, nextKey));
+    return {
+      days: Math.round((nextDue - today) / 86400000),
+      date: nextDue,
+      overdue: cardCurrentBalance(card) > 0,
+      daysAgo: -diff,
+    };
+  }
+
+  // Upcoming card payments, soonest first (overdue-looking cards float to the top).
+  function cbReminders() {
+    return state.cards
+      .filter((c) => Number(c.dueDay) >= 1)
+      .map((c) => ({ card: c, ...cbNextDue(c) }))
+      .sort((a, b) => (a.overdue === b.overdue ? a.days - b.days : a.overdue ? -1 : 1));
+  }
+
+  function cbYearsMonths(ms) {
+    const months = Math.floor(ms / (365.25 * 24 * 60 * 60 * 1000) * 12);
+    return cbT("cb.age.yearsMonths", { y: Math.floor(months / 12), m: months % 12 });
+  }
+
+  function renderCreditBuilder() {
+    if (!$("#creditBuilder")) return;
+
+    // Overall utilization + pay-down hints
+    const lim = totalCardLimit();
+    const bal = totalCardBalance();
+    const util = utilizationPct();
+    const band = cbUtilBand(util);
+    const pctEl = $("#cbUtilPct");
+    const bandEl = $("#cbUtilBand");
+    const hintsEl = $("#cbUtilHints");
+    const perCardEl = $("#cbCardUtil");
+    pctEl.textContent = `${util.toFixed(0)}%`;
+    pctEl.className = `cb-util-pct ${lim > 0 ? band : ""}`;
+    if (lim <= 0) {
+      bandEl.textContent = "";
+      hintsEl.innerHTML = `<p class="empty">${cbT("cb.util.noCards")}</p>`;
+      perCardEl.innerHTML = "";
+    } else {
+      bandEl.textContent = cbT(`cb.util.${band}`);
+      bandEl.className = `cb-band ${band}`;
+      const hints = [];
+      if (util > 30) hints.push(cbT("cb.util.payDownTo30", { amount: fmt(bal - lim * 0.3) }));
+      if (util > 10) hints.push(cbT("cb.util.payDownTo10", { amount: fmt(bal - lim * 0.1) }));
+      if (!hints.length) hints.push(cbT("cb.util.under10"));
+      hintsEl.innerHTML = hints.map((h) => `<div class="cb-hint">${escapeHtml(h)}</div>`).join("");
+      perCardEl.innerHTML = `<div class="cb-sub-head">${cbT("cb.util.perCard")}</div>` + state.cards.map((c) => {
+        const cLim = Number(c.limit) || 0;
+        const cBal = cardCurrentBalance(c);
+        const cUtil = cLim > 0 ? (cBal / cLim) * 100 : 0;
+        const cBand = cbUtilBand(cUtil);
+        const pctLabel = cLim > 0 ? `${cUtil.toFixed(0)}%` : cbT("cb.util.noLimit");
+        return `
+          <div class="cb-card-row">
+            <div class="cb-card-row-head">
+              <span class="cb-card-name">${escapeHtml(c.name)}</span>
+              <span class="cb-card-pct ${cBand}">${pctLabel}</span>
+            </div>
+            <div class="progress-bar" role="progressbar" aria-label="${escapeHtml(c.name)}" aria-valuenow="${cUtil.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-fill cb-${cBand}" style="width:${Math.min(cUtil, 100).toFixed(1)}%"></div>
+            </div>
+            <div class="cb-card-amts">${fmt(cBal)} / ${fmt(cLim)}</div>
+          </div>`;
+      }).join("");
+    }
+
+    // Payment reminders
+    const remEl = $("#cbReminders");
+    const rems = cbReminders();
+    if (!rems.length) {
+      remEl.innerHTML = `<p class="empty">${cbT("cb.rem.none")}</p>`;
+    } else {
+      remEl.innerHTML = rems.map((r) => {
+        const cBal = cardCurrentBalance(r.card);
+        const cls = r.overdue ? "overdue" : r.days <= 3 ? "urgent" : r.days <= 7 ? "soon" : "";
+        let when;
+        if (r.overdue) when = cbT("cb.rem.overdue", { n: r.daysAgo });
+        else if (r.days === 0) when = cbT("cb.rem.dueToday");
+        else if (r.days === 1) when = cbT("cb.rem.dueTomorrow");
+        else when = cbT("cb.rem.dueIn", { n: r.days });
+        const sub = cBal > 0 ? fmt(cBal) : cbT("cb.rem.paid");
+        return `
+          <div class="payby-row ${cls}">
+            <div class="payby-days">
+              <div class="payby-num">${r.days}</div>
+              <div class="payby-unit">${cbT(r.days === 1 ? "cb.rem.day" : "cb.rem.days")}</div>
+            </div>
+            <div class="payby-info">
+              <div class="payby-event">${escapeHtml(r.card.name)} · ${escapeHtml(sub)}</div>
+              <div class="payby-card">${escapeHtml(when)} · ${escapeHtml(cbT("cb.rem.next", { date: localDateStr(r.date) }))}</div>
+            </div>
+            ${cBal > 0 ? `<button class="bill-pay-btn" data-action="quick-pay-card" data-id="${r.card.id}" aria-label="${escapeHtml(cbT("cb.rem.pay"))} ${escapeHtml(r.card.name)}">${escapeHtml(cbT("cb.rem.pay"))}</button>` : ""}
+          </div>`;
+      }).join("");
+    }
+
+    // Latest score, band, change since previous
+    const scoreEl = $("#cbScore");
+    const cur = latestScore();
+    const prev = previousScore();
+    if (!cur) {
+      scoreEl.innerHTML = `<p class="empty">${cbT("cb.score.none")}</p>`;
+    } else {
+      let change;
+      if (prev) {
+        const diff = Number(cur.score) - Number(prev.score);
+        const cls = diff > 0 ? "positive" : diff < 0 ? "negative" : "";
+        change = `<span class="${cls}">${cbT("cb.score.change", { change: `${diff > 0 ? "+" : ""}${diff}`, date: prev.date })}</span>`;
+      } else {
+        change = escapeHtml(cbT("cb.score.first"));
+      }
+      scoreEl.innerHTML = `
+        <div class="cb-score-row">
+          <span class="cb-score-num">${Number(cur.score)}</span>
+          <span class="score-band">${escapeHtml(cbT(cbScoreBandKey(cur.score)))}</span>
+        </div>
+        <div class="cb-score-meta">${cbT("cb.score.latest")}: ${cur.date}${cur.source ? ` · ${escapeHtml(cur.source)}` : ""}</div>
+        <div class="cb-score-meta">${change}</div>`;
+    }
+
+    // Account age: oldest + average
+    const ageEl = $("#cbAge");
+    const opened = state.cards.filter((c) => c.opened).map((c) => new Date(c.opened).getTime()).filter((t) => !isNaN(t));
+    if (!opened.length) {
+      ageEl.innerHTML = `<p class="empty">${cbT("cb.age.none")}</p>`;
+    } else {
+      const now = Date.now();
+      const ages = opened.map((t) => now - t);
+      const oldest = Math.max(...ages);
+      const avg = ages.reduce((a, b) => a + b, 0) / ages.length;
+      ageEl.innerHTML = `
+        <div class="cb-age-row"><span>${cbT("cb.age.oldest")}</span><strong>${cbYearsMonths(oldest)}</strong></div>
+        <div class="cb-age-row"><span>${cbT("cb.age.average")}</span><strong>${cbYearsMonths(avg)}</strong></div>`;
+    }
   }
 
   function openCardModal(card) {
@@ -12486,6 +12685,18 @@
         showToast("Add a card name");
         return;
       }
+      if (!(card.limit > 0)) {
+        showToast(cbT("cb.valid.limit"));
+        return;
+      }
+      if (card.balance < 0) {
+        showToast(cbT("cb.valid.balance"));
+        return;
+      }
+      if ($("#cardDueDay").value !== "" && !(card.dueDay >= 1 && card.dueDay <= 31)) {
+        showToast(cbT("cb.valid.dueDay"));
+        return;
+      }
 
       // Auto-log a limit-increase entry if user raised the limit
       if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
@@ -13873,6 +14084,7 @@
       langSel.value = window.i18n.getLocale();
       langSel.addEventListener("change", (e) => {
         window.i18n.setLocale(e.target.value);
+        renderCreditBuilder(); // JS-rendered strings aren't covered by data-i18n
         showToast("✓ Language updated");
       });
     }

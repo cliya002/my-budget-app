@@ -13,6 +13,19 @@ A mobile-friendly, offline-first budget app that runs entirely in your browser. 
 - 💾 **Local-only data** — everything stays in your browser via localStorage
 - 📤 **Export / Import** — back up your data as JSON
 - 💱 **Multi-currency** — USD, EUR, GBP, JPY, INR, AUD, CAD
+- 🏗️ **Credit Builder** — utilization, payment reminders, score log, account age (see below)
+
+### Credit Builder
+
+The **Credit** tab has a Credit Builder panel that turns your cards and score log into concrete next steps:
+
+- **Utilization** — overall balance ÷ limit with a colour band (≤10% excellent, ≤30% good, ≤50% watch out, >50% too high), a per-card progress bar, and "pay down $X to reach 30% / 10%" hints.
+- **Payment reminders** — next due date per card, soonest first, with days-until-due. Cards due within 7 days are highlighted; a card whose due day already passed this month while still carrying a balance is flagged. The next payment also shows on the Quick Glance view.
+- **Credit score** — latest score with its band (Poor → Exceptional) and the change since the previous entry. Scores are logged via **+ Log Score** (300–850, date, source) and plotted in the Score Trend chart; entries can be deleted from Score History.
+- **Account age** — oldest and average account age in years/months, from each card's opened date.
+- **Credit-building habits** — a short checklist of habits that move the score.
+
+Cards (name, limit, balance, due day 1–31, optional APR and opened date) and scores are stored in localStorage with the rest of your data and are included in JSON backups. A **Credit Builder** PWA shortcut (`?action=credit-builder`) deep-links straight to the panel.
 
 ## Run locally
 
