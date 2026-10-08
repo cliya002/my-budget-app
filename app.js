@@ -27,7 +27,7 @@
   };
 
   const DEFAULT_PWD_HASH =
-    "32ea448e581deafe4684d8bffce21c999be2b68f67440c165496b47ca0eb8f1f";
+    "b2193b526f4ca377c672b64baa68d76d42f72b6253a1dd9ff657821c0f6bfdd5";
 
   let state = {
     income: 0,             // legacy default if no per-month value set
