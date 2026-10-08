@@ -8565,6 +8565,150 @@
     $("#scoreForm").reset();
   }
 
+  /* ---------- Paste account details (card) ---------- */
+  // Pure parser for text copied from a bank's account summary page.
+  // Self-contained on purpose (no closure references): the block between
+  // the two marker comments is sliced out of this file and evaluated
+  // standalone by tests/parse-card-paste.test.js.
+  // @@parseCardPaste:start
+  function parseCardPaste(text) {
+    const out = { _derived: [], _unrecognized: [] };
+    if (typeof text !== "string") return out;
+
+    const MONTHS = {
+      jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+      jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+    };
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const round2 = (n) => Math.round(n * 100) / 100;
+
+    const toMoney = (str) => {
+      const m = /[$€£]?\s*(\d[\d,]*(?:\.\d+)?)/.exec(str);
+      if (!m) return null;
+      const n = Number(m[1].replace(/,/g, ""));
+      return Number.isFinite(n) ? round2(n) : null;
+    };
+    const toPercent = (str) => {
+      const m = /(\d+(?:\.\d+)?)\s*%?/.exec(str);
+      if (!m) return null;
+      const n = Number(m[1]);
+      return Number.isFinite(n) ? n : null;
+    };
+    const buildDate = (y, mo, d) => {
+      if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) return null;
+      return `${y}-${pad2(mo)}-${pad2(d)}`;
+    };
+    const parseDate = (str) => {
+      let m = /\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b/.exec(str); // Oct 16, 2026 / Sep. 16, 2026
+      if (m) {
+        const mo = MONTHS[m[1].slice(0, 3).toLowerCase()];
+        return mo ? buildDate(Number(m[3]), mo, Number(m[2])) : null;
+      }
+      m = /\b(\d{1,2})\/(\d{1,2})\/(\d{4}|\d{2})\b/.exec(str); // 10/16/2026 / 10/16/26
+      if (m) {
+        const y = m[3].length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+        return buildDate(y, Number(m[1]), Number(m[2]));
+      }
+      m = /\b(\d{4})-(\d{1,2})-(\d{1,2})\b/.exec(str); // 2026-10-16
+      if (m) return buildDate(Number(m[1]), Number(m[2]), Number(m[3]));
+      return null;
+    };
+    const extract = (kind, str) =>
+      kind === "money" ? toMoney(str) : kind === "date" ? parseDate(str) : toPercent(str);
+
+    const HEADERS = [
+      { rx: /^(.+?)\s*\((?:\.{3}|…|\*+|x+|•+)?\s*(\d{4})\)\s*$/i, name: 1, last4: 2 }, // Prime Visa (...3410)
+      { rx: /^(.*?)\s*(?:card\s+)?ending\s+in\s+(\d{4})\b/i, name: 1, last4: 2 },      // Card ending in 3410
+      { rx: /^(.+?)\s*[-–]\s*\*+(\d{4})\s*$/, name: 1, last4: 2 },                     // Visa - ****3410
+    ];
+    const FIELDS = [
+      { key: "balance", kind: "money", rx: /^current balance\b/i },
+      { key: "pendingCharges", kind: "money", rx: /^pending (?:charges|transactions)\b/i },
+      { key: "availableCredit", kind: "money", rx: /^available credit\b/i },
+      { key: "limit", kind: "money", rx: /^(?:total )?credit (?:limit|line)\b/i },
+      { key: "nextClosingDate", kind: "date", rx: /^(?:next |statement )?closing date\b/i },
+      {
+        key: "lastStatementBalance", kind: "money",
+        rx: /^(?:balance on last statement|last statement balance|statement balance)\b/i,
+        extraDate: { key: "lastStatementDate", rx: /\bon\s+(.+)$/i },
+      },
+      { key: "remainingStatementBalance", kind: "money", rx: /^remaining statement balance\b/i },
+      { key: "minimumPayment", kind: "money", rx: /^minimum payment(?: due)?\b/i },
+      { key: "paymentDueDate", kind: "date", rx: /^(?:payment )?due date\b/i },
+      { key: "apr", kind: "percent", rx: /^(?:purchase )?apr\b/i },
+    ];
+    const isLabel = (line) => FIELDS.some((f) => f.rx.test(line));
+    const isHeader = (line) => HEADERS.some((h) => h.rx.test(line));
+
+    const lines = text
+      .split(/\r?\n/)
+      .map((l) => l.replace(/\u00a0/g, " ").trim())
+      .filter((l) => l.length > 0);
+
+    let headerFound = false;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Header (card name + last 4): first hit only, never on a label line.
+      if (!headerFound && !isLabel(line)) {
+        let hit = null;
+        for (const h of HEADERS) {
+          const m = h.rx.exec(line);
+          if (m) { hit = { m, h }; break; }
+        }
+        if (hit) {
+          headerFound = true;
+          out.last4 = hit.m[hit.h.last4];
+          const name = (hit.m[hit.h.name] || "").trim().slice(0, 60);
+          if (/\p{L}/u.test(name)) out.name = name;
+          continue;
+        }
+      }
+
+      // Field labels: value on the same line, else paired with the next line.
+      let field = null;
+      let labelMatch = null;
+      for (const f of FIELDS) {
+        const m = f.rx.exec(line);
+        if (m) { field = f; labelMatch = m; break; }
+      }
+      if (!field) {
+        out._unrecognized.push(line);
+        continue;
+      }
+
+      let rest = line.slice(labelMatch[0].length).replace(/^[:\s]+/, "");
+      let value = rest ? extract(field.kind, rest) : null;
+      if (value == null && i + 1 < lines.length) {
+        const next = lines[i + 1];
+        if (!isLabel(next) && !isHeader(next)) {
+          rest = next;
+          value = extract(field.kind, rest);
+          i += 1; // consume the value line
+        }
+      }
+      if (value == null) continue;
+      if (out[field.key] === undefined) out[field.key] = value;
+      if (field.extraDate && out[field.extraDate.key] === undefined) {
+        const dm = field.extraDate.rx.exec(rest);
+        const d = dm ? parseDate(dm[1]) : null;
+        if (d) out[field.extraDate.key] = d;
+      }
+    }
+
+    // Derived: limit = balance + available credit when the bank omits it.
+    if (
+      out.limit === undefined &&
+      typeof out.balance === "number" &&
+      typeof out.availableCredit === "number"
+    ) {
+      out.limit = round2(out.balance + out.availableCredit);
+      out._derived.push("limit");
+    }
+    return out;
+  }
+  // @@parseCardPaste:end
+
   /* ---------- Credit report import ---------- */
   let parsedReport = null; // { score, bureau, source, cards: [...] }
 
