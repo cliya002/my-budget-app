@@ -1939,7 +1939,14 @@
     let coachHtml = "";
     try {
       const plan = ccBuildPlanFromState();
-      if (plan.status === "ok" && plan.actions.length) {
+      const locked = ccLockedPlan();
+      const prog = locked ? ccLockProgress(locked) : null;
+      if (prog) {
+        // Locked: this month's planned action + ahead/behind status.
+        const status = ccLockStatusText(prog);
+        const value = prog.currentAction ? `${ccText(prog.currentAction)} · ${status}` : status;
+        coachHtml = `<div class="widget-credit widget-coach"><span class="widget-credit-label">🔒 ${escapeHtml(cbT("cc.glance.label"))}</span><span class="widget-credit-value">${escapeHtml(value)}</span></div>`;
+      } else if (plan.status === "ok" && plan.actions.length) {
         coachHtml = `<div class="widget-credit widget-coach"><span class="widget-credit-label">🧭 ${escapeHtml(cbT("cc.glance.label"))}</span><span class="widget-credit-value">${escapeHtml(ccText(plan.actions[0]))}</span></div>`;
       }
     } catch (e) {
@@ -9280,6 +9287,325 @@
   }
   // @@buildCreditPlan:end
 
+  // Locked plan: a frozen copy of one buildCreditPlan() result that the user
+  // commits to. Both functions below are pure and self-contained (no closure
+  // references) and are sliced out by tests/credit-coach-lock.test.js.
+  //
+  // Month indexing: month index k = calendar months since lockedAt (0 = the
+  // month the plan was locked). Schedule row k+1 holds the payment made during
+  // month k, so the planned balance at the start of month k is the end balance
+  // of row k (month 0 = the starting balance).
+  // @@createLockedPlan:start
+  function createLockedPlan(plan, input, today) {
+    const p = plan && typeof plan === "object" ? plan : null;
+    if (!p || p.status !== "ok") return null;
+    const iso = typeof today === "string" && /^\d{4}-\d{2}-\d{2}/.test(today) ? today : null;
+    if (!iso) return null;
+    const inp = input && typeof input === "object" ? input : {};
+    const settingsIn = inp.settings && typeof inp.settings === "object" ? inp.settings : {};
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const numOr = (v, fallback) => (typeof v === "number" && Number.isFinite(v) ? v : fallback);
+    const monthKeyAdd = (key, n) => {
+      const m = typeof key === "string" ? /^(\d{4})-(\d{2})/.exec(key) : null;
+      if (!m) return null;
+      const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + n;
+      const y = Math.floor(total / 12);
+      return `${y}-${pad2(total - y * 12 + 1)}`;
+    };
+    const snap = p.snapshot && typeof p.snapshot === "object" ? p.snapshot : {};
+    const payoff = p.payoff && typeof p.payoff === "object" ? p.payoff : {};
+    const proj = p.projection && typeof p.projection === "object" ? p.projection : {};
+    const planMonth = typeof p.planMonth === "string" ? p.planMonth : iso.slice(0, 7);
+
+    const cards = {};
+    const cardOrder = [];
+    (Array.isArray(snap.perCard) ? snap.perCard : []).forEach((c) => {
+      const id = String(c.id);
+      cards[id] = {
+        id,
+        name: String(c.name || id),
+        balance: numOr(c.balance, 0),
+        limit: numOr(c.limit, 0),
+        apr: numOr(c.apr, 0),
+        utilization: numOr(c.utilization, 0),
+      };
+      cardOrder.push(id);
+    });
+
+    const schedule = (Array.isArray(payoff.months) ? payoff.months : []).map((r) => ({
+      month: r.month,
+      label: r.label,
+      payments: (Array.isArray(r.payments) ? r.payments : []).map((x) => ({
+        id: String(x.id),
+        payment: numOr(x.payment, 0),
+        interest: numOr(x.interest, 0),
+        endBalance: numOr(x.endBalance, 0),
+      })),
+      totalPaid: numOr(r.totalPaid, 0),
+      interest: numOr(r.interest, 0),
+      endBalance: numOr(r.endBalance, 0),
+      utilization: numOr(r.utilization, 0),
+    }));
+    const rowLabel = (m) => (m > 0 && schedule[m - 1] ? schedule[m - 1].label : null);
+    const points = (Array.isArray(proj.points) ? proj.points : []).map((pt) => ({
+      month: pt.month,
+      label: pt.label,
+      score: pt.score,
+    }));
+    const targetMonth = proj.reachesTargetMonth === undefined ? null : proj.reachesTargetMonth;
+
+    // Checklist: this month's engine actions, then one "pay" item per card per
+    // scheduled month. Row 1 is already covered by a pay-plan-<id> action for
+    // cards above 30%, so those month-0 pay items are skipped.
+    const checklist = [];
+    const covered = {};
+    (Array.isArray(p.actions) ? p.actions : []).forEach((a) => {
+      checklist.push({
+        id: String(a.id),
+        month: 0,
+        label: planMonth,
+        key: a.key,
+        vars: { ...(a.vars || {}) },
+        due: a.due || null,
+      });
+      if (/^pay-plan-/.test(a.id)) covered[String(a.id).slice("pay-plan-".length)] = true;
+    });
+    schedule.forEach((row, i) => {
+      row.payments.forEach((x) => {
+        if (!(x.payment > 0.005)) return;
+        if (i === 0 && covered[x.id]) return;
+        checklist.push({
+          id: `pay-m${i}-${x.id}`,
+          month: i,
+          label: monthKeyAdd(planMonth, i),
+          key: "cc.lock.item.pay",
+          vars: { amount: x.payment, name: cards[x.id] ? cards[x.id].name : x.id },
+          due: null,
+        });
+      });
+    });
+
+    const debtFreeMonth = payoff.debtFreeMonth === undefined ? null : payoff.debtFreeMonth;
+    const under30 = payoff.utilUnder30Month === undefined ? null : payoff.utilUnder30Month;
+    const under10 = payoff.utilUnder10Month === undefined ? null : payoff.utilUnder10Month;
+    return {
+      version: 1,
+      lockedAt: iso,
+      planMonth,
+      settings: {
+        strategy: payoff.strategy || settingsIn.strategy || "utilization",
+        targetScore: settingsIn.targetScore === undefined ? null : settingsIn.targetScore,
+        monthlyBudget: settingsIn.monthlyBudget === undefined ? null : settingsIn.monthlyBudget,
+      },
+      start: {
+        score: snap.score === undefined ? null : snap.score,
+        scoreDate: snap.scoreDate || null,
+        utilization: numOr(snap.utilization, 0),
+        totalBalance: numOr(snap.totalBalance, 0),
+        totalLimit: numOr(snap.totalLimit, 0),
+        cards,
+        cardOrder,
+      },
+      schedule,
+      summary: {
+        strategy: payoff.strategy || "utilization",
+        monthlyBudget: numOr(payoff.monthlyBudget, 0),
+        budgetSource: payoff.budgetSource || "minimums",
+        debtFreeMonth,
+        debtFreeLabel: rowLabel(debtFreeMonth),
+        totalInterest: numOr(payoff.totalInterest, 0),
+        minOnlyInterest: payoff.minOnlyInterest === undefined ? null : payoff.minOnlyInterest,
+        interestSaved: payoff.interestSaved === undefined ? null : payoff.interestSaved,
+        utilUnder30Month: under30,
+        utilUnder30Label: rowLabel(under30),
+        utilUnder10Month: under10,
+        utilUnder10Label: rowLabel(under10),
+        truncated: !!(p.flags && p.flags.truncated),
+        targetScore: numOr(snap.targetScore, null),
+        targetMonth,
+        targetLabel: targetMonth !== null && points[targetMonth] ? points[targetMonth].label : null,
+      },
+      projection: {
+        available: !!proj.available,
+        startScore: proj.startScore === undefined ? null : proj.startScore,
+        targetScore: numOr(proj.targetScore, numOr(snap.targetScore, null)),
+        points,
+      },
+      checklist,
+      done: {},
+    };
+  }
+  // @@createLockedPlan:end
+
+  // Progress against a locked plan, computed from the CURRENT cards
+  // ([{ id, name, last4, balance, limit }], balance = live balance) and score log.
+  // Tolerance per card/total = max($10, 2% of planned).
+  // @@compareToLockedPlan:start
+  function compareToLockedPlan(locked, currentCards, currentScores, today) {
+    const L = locked && typeof locked === "object" ? locked : null;
+    const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})/;
+    if (!L || typeof L.lockedAt !== "string" || !ISO_RE.test(L.lockedAt)) return null;
+    if (!L.start || typeof L.start !== "object" || !L.start.cards || typeof L.start.cards !== "object") return null;
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const num = (v, fallback) => {
+      const n = typeof v === "string" ? parseFloat(v.replace(/[^0-9.-]/g, "")) : Number(v);
+      return v !== null && v !== undefined && v !== "" && Number.isFinite(n) ? n : fallback;
+    };
+    const monthNo = (iso) => {
+      const m = ISO_RE.exec(iso);
+      return Number(m[1]) * 12 + (Number(m[2]) - 1);
+    };
+    const tolOf = (planned) => Math.max(10, 0.02 * planned);
+    const classify = (actual, planned) => {
+      const tol = tolOf(planned);
+      if (actual <= planned - tol) return "ahead";
+      if (actual > planned + tol) return "behind";
+      return "onTrack";
+    };
+    const displayName = (c) => {
+      const base = c && c.name ? String(c.name) : "Card";
+      const last4 = c && c.last4 ? String(c.last4) : "";
+      return last4 ? `${base} (…${last4})` : base;
+    };
+
+    const lockedDate = L.lockedAt.slice(0, 10);
+    const todayIso = typeof today === "string" && ISO_RE.test(today) ? today.slice(0, 10) : lockedDate;
+    const monthIndex = Math.max(0, monthNo(todayIso) - monthNo(lockedDate));
+    const schedule = Array.isArray(L.schedule) ? L.schedule : [];
+    const idx = Math.min(monthIndex, schedule.length);
+    const startCards = L.start.cards;
+    const order = Array.isArray(L.start.cardOrder) && L.start.cardOrder.length
+      ? L.start.cardOrder.map(String).filter((id) => startCards[id])
+      : Object.keys(startCards);
+
+    const plannedFor = (id) => {
+      if (idx === 0) return num(startCards[id].balance, 0);
+      const row = schedule[idx - 1];
+      const pay = row && Array.isArray(row.payments) ? row.payments.find((x) => String(x.id) === id) : null;
+      return pay ? num(pay.endBalance, 0) : 0;
+    };
+
+    const current = {};
+    (Array.isArray(currentCards) ? currentCards : []).forEach((c) => {
+      if (!c || typeof c !== "object" || c.id === undefined || c.id === null) return;
+      current[String(c.id)] = c;
+    });
+
+    const perCard = order.map((id) => {
+      const lockedCard = startCards[id];
+      const planned = round2(plannedFor(id));
+      const cur = current[id];
+      if (!cur) {
+        return { id, name: String(lockedCard.name || id), planned, actual: null, delta: null, status: "removed" };
+      }
+      const actual = round2(Math.max(0, num(cur.balance, 0)));
+      return {
+        id,
+        name: String(lockedCard.name || id),
+        planned,
+        actual,
+        delta: round2(actual - planned),
+        status: classify(actual, planned),
+      };
+    });
+    const newCards = Object.keys(current)
+      .filter((id) => !startCards[id])
+      .map((id) => ({
+        id,
+        name: displayName(current[id]),
+        actual: round2(Math.max(0, num(current[id].balance, 0))),
+        status: "new",
+      }));
+    const live = perCard.filter((c) => c.status !== "removed");
+    const plannedTotal = round2(live.reduce((s, c) => s + c.planned, 0));
+    const actualTotal = round2(live.reduce((s, c) => s + c.actual, 0) + newCards.reduce((s, c) => s + c.actual, 0));
+    const startTotal = round2(live.reduce((s, c) => s + num(startCards[c.id].balance, 0), 0));
+    const totalDelta = round2(actualTotal - plannedTotal);
+    const totalStatus = classify(actualTotal, plannedTotal);
+    const paidOffPct = startTotal > 0
+      ? Math.min(100, Math.max(0, ((startTotal - actualTotal) / startTotal) * 100))
+      : actualTotal > 0 ? 0 : 100;
+
+    let actualBal = 0;
+    let actualLimit = 0;
+    Object.keys(current).forEach((id) => {
+      actualBal += Math.max(0, num(current[id].balance, 0));
+      actualLimit += Math.max(0, num(current[id].limit, 0));
+    });
+    const plannedUtil = idx === 0
+      ? num(L.start.utilization, 0)
+      : num(schedule[idx - 1] && schedule[idx - 1].utilization, 0);
+    const actualUtil = actualLimit > 0 ? (actualBal / actualLimit) * 100 : 0;
+
+    const scores = (Array.isArray(currentScores) ? currentScores : [])
+      .map((s) => ({ date: s && typeof s.date === "string" && ISO_RE.test(s.date) ? s.date.slice(0, 10) : null, score: num(s && s.score, NaN) }))
+      .filter((s) => s.date && Number.isFinite(s.score) && s.score >= 300 && s.score <= 850)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const latest = scores.length ? scores[scores.length - 1] : null;
+    const points = L.projection && Array.isArray(L.projection.points) ? L.projection.points : [];
+    const projected = points.length ? num(points[Math.min(monthIndex, points.length - 1)].score, null) : null;
+    const dotByMonth = {};
+    scores.forEach((s) => {
+      if (s.date < lockedDate) return;
+      const m = monthNo(s.date) - monthNo(lockedDate);
+      if (points.length && m > points.length - 1) return;
+      dotByMonth[m] = { month: m, score: s.score, date: s.date }; // sorted → latest per month wins
+    });
+    const scoreDots = Object.keys(dotByMonth).map(Number).sort((a, b) => a - b).map((m) => dotByMonth[m]);
+
+    let catchUp = null;
+    if (totalStatus === "behind") {
+      live.forEach((c) => {
+        if (c.status === "behind" && (!catchUp || c.delta > catchUp.amount)) {
+          catchUp = { id: c.id, name: c.name, amount: c.delta };
+        }
+      });
+    }
+
+    const done = L.done && typeof L.done === "object" ? L.done : {};
+    const items = (Array.isArray(L.checklist) ? L.checklist : [])
+      .filter((it) => it && typeof it === "object" && it.id !== undefined)
+      .map((it) => {
+        const m = Number.isFinite(Number(it.month)) ? Number(it.month) : 0;
+        const isDone = done[it.id] === true;
+        let status = "upcoming";
+        if (m < monthIndex) status = isDone ? "past" : "missed";
+        else if (m === monthIndex) status = "current";
+        return { id: String(it.id), month: m, label: it.label || null, key: it.key, vars: it.vars || {}, due: it.due || null, done: isDone, status };
+      });
+    const currentItems = items.filter((it) => it.status === "current");
+    const currentAction = currentItems.find((it) => !it.done) || currentItems[0] || null;
+
+    return {
+      monthIndex,
+      todayMonth: todayIso.slice(0, 7),
+      perCard,
+      newCards,
+      removedCards: perCard.filter((c) => c.status === "removed").map((c) => c.id),
+      totals: {
+        planned: plannedTotal,
+        actual: actualTotal,
+        delta: totalDelta,
+        status: totalStatus,
+        startTotal,
+        paidOffPct,
+      },
+      utilization: { planned: plannedUtil, actual: actualUtil },
+      score: {
+        latest: latest ? latest.score : null,
+        latestDate: latest ? latest.date : null,
+        projected,
+        delta: latest && projected !== null ? latest.score - projected : null,
+      },
+      scoreDots,
+      verdict: { status: totalStatus, amount: round2(Math.abs(totalDelta)), catchUp },
+      items,
+      missed: items.filter((it) => it.status === "missed"),
+      currentAction,
+    };
+  }
+  // @@compareToLockedPlan:end
+
   // ---- Credit Coach glue (adapters, persistence, rendering) ----
   const CC_STRATEGIES = ["avalanche", "snowball", "utilization"];
   const CC_DEFAULTS = { strategy: "utilization", targetScore: null, monthlyBudget: null };
@@ -9351,7 +9677,10 @@
 
   // Engine input from state. No DOM access — the Quick Glance widget uses it too.
   function ccBuildPlanFromState() {
-    return buildCreditPlan({
+    return buildCreditPlan(ccEngineInput());
+  }
+  function ccEngineInput() {
+    return {
       cards: state.cards.map((c) => ({
         id: c.id,
         name: c.name,
@@ -9371,7 +9700,56 @@
       monthlyExpenses: ccMonthlyExpenses(),
       today: todayStr(),
       settings: ccSettings(),
-    });
+    };
+  }
+
+  // Locked plan lives in state.settings.creditCoachLock (persisted, encrypted,
+  // exported/imported and Gist-synced with the rest of settings; setSetting
+  // stamps the timestamp the sync merge uses). Previous locks (summary only,
+  // newest first, max 3) live in state.settings.creditCoachLockHistory.
+  // Validated here at the boundary; malformed data reads as "unlocked".
+  function ccLockedPlan() {
+    const raw = state.settings && state.settings.creditCoachLock;
+    if (!raw || typeof raw !== "object") return null;
+    if (typeof raw.lockedAt !== "string" || !/^\d{4}-\d{2}-\d{2}/.test(raw.lockedAt)) return null;
+    if (!raw.start || typeof raw.start !== "object" || !raw.start.cards || typeof raw.start.cards !== "object") return null;
+    if (!Array.isArray(raw.schedule) || !Array.isArray(raw.checklist) || !raw.summary || typeof raw.summary !== "object") return null;
+    return raw;
+  }
+  function ccLockHistory() {
+    const h = state.settings && state.settings.creditCoachLockHistory;
+    return Array.isArray(h)
+      ? h.filter((x) => x && typeof x === "object" && typeof x.lockedAt === "string" && x.summary && typeof x.summary === "object").slice(0, 3)
+      : [];
+  }
+  function ccLockProgress(locked) {
+    return compareToLockedPlan(
+      locked,
+      state.cards.map((c) => ({ id: c.id, name: c.name, last4: c.last4, balance: cardCurrentBalance(c), limit: c.limit })),
+      state.creditScores.map((s) => ({ date: s.date, score: Number(s.score) })),
+      todayStr(),
+    );
+  }
+  // Fresh lock from current data + settings; null when there is nothing to lock.
+  function ccNewLock() {
+    const input = ccEngineInput();
+    return createLockedPlan(buildCreditPlan(input), input, todayStr());
+  }
+  function ccToggleLockedCheck(actionId, done) {
+    const locked = ccLockedPlan();
+    if (!locked) return;
+    const next = { ...(locked.done && typeof locked.done === "object" ? locked.done : {}) };
+    if (done) next[actionId] = true;
+    else delete next[actionId];
+    setSetting("creditCoachLock", { ...locked, done: next });
+    saveData();
+  }
+  // Status word for the verdict/totals ("Ahead" / "On track" / "Behind").
+  function ccLockStatusText(prog) {
+    const v = prog.verdict;
+    if (v.status === "ahead") return cbT("cc.lock.glance.ahead", { amount: fmt(v.amount) });
+    if (v.status === "behind") return cbT("cc.lock.glance.behind", { amount: fmt(v.amount) });
+    return cbT("cc.lock.status.onTrack");
   }
 
   // Checklist persistence: one key holding { fingerprint, done }. A different
@@ -9425,9 +9803,174 @@
     return `<div class="cc-stat"><div class="cc-stat-label">${escapeHtml(label)}</div><div class="cc-stat-value">${valueHtml}</div>${subHtml ? `<div class="cc-stat-sub">${subHtml}</div>` : ""}</div>`;
   }
 
+  // Month-by-month schedule table (live and locked plans). cols = [{ id, name }].
+  function ccPlanTableHtml(months, cols) {
+    if (!months.length) return "";
+    const head = `<tr><th>${escapeHtml(cbT("cc.plan.col.month"))}</th>`
+      + cols.map((c) => `<th>${escapeHtml(c.name)}</th>`).join("")
+      + `<th>${escapeHtml(cbT("cc.plan.col.paid"))}</th><th>${escapeHtml(cbT("cc.plan.col.interest"))}</th><th>${escapeHtml(cbT("cc.plan.col.util"))}</th></tr>`;
+    const rows = months.map((r) => {
+      const cells = cols.map((c) => {
+        const p = r.payments.find((x) => x.id === c.id);
+        if (!p) return "<td>—</td>";
+        return `<td>${fmt(p.payment)}<span class="cc-cell-sub">${fmt(p.endBalance)}</span></td>`;
+      }).join("");
+      return `<tr><td>${escapeHtml(monthLabel(r.label))}</td>${cells}<td>${fmt(r.totalPaid)}</td><td>${fmt(r.interest)}</td><td>${escapeHtml(Number(r.utilization).toFixed(0))}%</td></tr>`;
+    }).join("");
+    return `<details class="education-item cc-details"><summary>${escapeHtml(cbT("cc.plan.table"))}</summary><div class="cc-table-wrap"><table class="cc-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
+  }
+
+  function ccDebtFreeText(month, label) {
+    if (month === 0) return cbT("cc.plan.noDebt");
+    if (month === null || month === undefined) return cbT("cc.plan.notWithin36");
+    return cbT("cc.plan.inMonths", { month: monthLabel(label || ""), n: formatMonths(month) });
+  }
+  function ccUtilMonthText(month, label) {
+    if (month === 0) return cbT("cc.plan.already");
+    if (month === null || month === undefined) return cbT("cc.plan.never");
+    return monthLabel(label || "");
+  }
+
+  // Payoff section while locked: frozen summary + frozen schedule.
+  function ccLockedPlanHtml(locked) {
+    const s = locked.summary;
+    const strategy = CC_STRATEGIES.includes(s.strategy) ? s.strategy : CC_DEFAULTS.strategy;
+    const tiles = [
+      ccStat(cbT("cc.plan.debtFree"), escapeHtml(ccDebtFreeText(s.debtFreeMonth, s.debtFreeLabel))),
+      ccStat(cbT("cc.plan.interest"), fmt(Number(s.totalInterest) || 0),
+        s.truncated ? escapeHtml(cbT("cc.plan.interestPartial")) : ""),
+      ccStat(cbT("cc.plan.saved"), s.interestSaved === null || s.interestSaved === undefined ? "—" : fmt(Number(s.interestSaved) || 0)),
+      ccStat(cbT("cc.plan.under30"), escapeHtml(ccUtilMonthText(s.utilUnder30Month, s.utilUnder30Label))),
+      ccStat(cbT("cc.plan.under10"), escapeHtml(ccUtilMonthText(s.utilUnder10Month, s.utilUnder10Label))),
+      ccStat(cbT("cc.lock.targetTile"), escapeHtml(ccUtilMonthText(s.targetMonth, s.targetLabel)),
+        s.targetScore === null || s.targetScore === undefined ? "" : escapeHtml(String(s.targetScore))),
+    ];
+    const sourceKey = s.budgetSource === "override" ? "cc.plan.budgetOverride"
+      : s.budgetSource === "auto" ? "cc.plan.budgetAuto" : "cc.plan.budgetMinimums";
+    const order = Array.isArray(locked.start.cardOrder) ? locked.start.cardOrder : Object.keys(locked.start.cards);
+    const cols = order
+      .filter((id) => locked.start.cards[id])
+      .map((id) => ({ id, name: String(locked.start.cards[id].name || id) }));
+    return `<p class="cc-note">${escapeHtml(cbT("cc.lock.planNote", { strategy: cbT(`cc.strategy.${strategy}`) }))}</p>`
+      + `<div class="cc-stats">${tiles.join("")}</div>`
+      + `<p class="cc-note">${escapeHtml(cbT("cc.plan.budget", { amount: fmt(Number(s.monthlyBudget) || 0) }))} · ${escapeHtml(cbT(sourceKey))}</p>`
+      + ccPlanTableHtml(locked.schedule, cols);
+  }
+
+  // Collapsed list of up to 3 previous locks (summary only).
+  function ccHistoryHtml() {
+    const history = ccLockHistory();
+    if (!history.length) return "";
+    const items = history.map((h) => {
+      const s = h.summary;
+      const strategy = CC_STRATEGIES.includes(s.strategy) ? s.strategy : CC_DEFAULTS.strategy;
+      return `<li>${escapeHtml(cbT("cc.lock.historyItem", {
+        date: h.lockedAt.slice(0, 10),
+        strategy: cbT(`cc.strategy.${strategy}`),
+        month: ccDebtFreeText(s.debtFreeMonth, s.debtFreeLabel),
+        amount: fmt(Number(s.totalInterest) || 0),
+      }))}</li>`;
+    }).join("");
+    return `<details class="education-item cc-details"><summary>${escapeHtml(cbT("cc.lock.history", { n: history.length }))}</summary><ul class="cc-history-list">${items}</ul></details>`;
+  }
+
+  const CC_STATUS_CLASS = { ahead: "excellent", onTrack: "good", behind: "danger", new: "warning" };
+
+  // Progress vs the locked plan (computed live by compareToLockedPlan).
+  function ccProgressHtml(prog) {
+    const v = prog.verdict;
+    let verdict;
+    if (v.status === "ahead") verdict = cbT("cc.lock.verdict.ahead", { amount: fmt(v.amount) });
+    else if (v.status === "behind") {
+      verdict = v.catchUp
+        ? cbT("cc.lock.verdict.behind", { amount: fmt(v.amount), amount2: fmt(v.catchUp.amount), name: v.catchUp.name })
+        : cbT("cc.lock.verdict.behindPlain", { amount: fmt(v.amount) });
+    } else verdict = cbT("cc.lock.verdict.onTrack");
+    const statusChip = (status) => `<span class="cb-band ${CC_STATUS_CLASS[status] || "good"}">${escapeHtml(cbT(`cc.lock.status.${status}`))}</span>`;
+    const pct = Math.round(prog.totals.paidOffPct);
+    let html = `<p class="cc-verdict ${v.status}" role="status">${escapeHtml(verdict)}</p>`;
+    html += `<p class="cc-note">${escapeHtml(cbT("cc.lock.monthIdx", { n: prog.monthIndex + 1, month: monthLabel(prog.todayMonth) }))}</p>`;
+    html += `<div class="cc-progress"><div class="cc-progress-label" id="ccPaidLabel">${escapeHtml(cbT("cc.lock.paidOff", { pct }))}</div>`
+      + `<div class="progress-bar" role="progressbar" aria-labelledby="ccPaidLabel" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><div class="progress-fill success" style="width:${pct}%"></div></div></div>`;
+    const sc = prog.score;
+    const tiles = [
+      ccStat(cbT("cc.lock.totalBal"), `${fmt(prog.totals.actual)} ${statusChip(prog.totals.status)}`,
+        escapeHtml(cbT("cc.lock.plannedSub", { amount: fmt(prog.totals.planned) }))),
+      ccStat(cbT("cc.snap.util"), `${escapeHtml(prog.utilization.actual.toFixed(0))}%`,
+        escapeHtml(cbT("cc.lock.plannedSub", { amount: `${prog.utilization.planned.toFixed(0)}%` }))),
+      ccStat(cbT("cc.lock.score"),
+        sc.latest === null ? escapeHtml(cbT("cc.lock.scoreNone")) : escapeHtml(String(sc.latest)),
+        sc.projected === null ? "" : escapeHtml(cbT("cc.lock.projectedSub", { score: sc.projected }))),
+    ];
+    html += `<div class="cc-stats">${tiles.join("")}</div>`;
+    html += `<div class="cb-sub-head">${escapeHtml(cbT("cc.lock.perCard"))}</div>`;
+    html += prog.perCard.map((c) => {
+      if (c.status === "removed") {
+        return `<div class="cc-prog-row removed"><span class="cc-prog-name">${escapeHtml(c.name)}</span><span class="cc-prog-amts">${escapeHtml(cbT("cc.lock.removedNote"))}</span><span class="cb-band cc-chip-muted">${escapeHtml(cbT("cc.lock.status.removed"))}</span></div>`;
+      }
+      return `<div class="cc-prog-row"><span class="cc-prog-name">${escapeHtml(c.name)}</span><span class="cc-prog-amts">${escapeHtml(cbT("cc.lock.amounts", { amount: fmt(c.planned), amount2: fmt(c.actual) }))}</span>${statusChip(c.status)}</div>`;
+    }).join("");
+    html += prog.newCards.map((c) => `<div class="cc-prog-row"><span class="cc-prog-name">${escapeHtml(c.name)}</span><span class="cc-prog-amts">${escapeHtml(cbT("cc.lock.actualSub", { amount: fmt(c.actual) }))}</span>${statusChip("new")}</div>`).join("");
+    if (prog.newCards.length) {
+      html += `<div class="cb-hints">${prog.newCards.map((c) => `<div class="cb-hint">${escapeHtml(cbT("cc.lock.newCard", { name: c.name }))}</div>`).join("")}</div>`;
+    }
+    return html;
+  }
+
+  // Locked checklist: this month's items first (prominent), then earlier
+  // months (unchecked ones flagged "Missed"). Ticks live in the lock itself.
+  function ccLockedChecklistHtml(prog) {
+    const row = (it) => {
+      const text = ccText(it);
+      const past = it.status === "missed" || it.status === "past";
+      const cls = ["cc-action"];
+      if (it.done) cls.push("done");
+      if (it.status === "missed") cls.push("missed");
+      if (it.status === "current") cls.push("current");
+      const sub = it.due ? cbT("cc.act.by", { date: it.due }) : it.label ? monthLabel(it.label) : "";
+      const chip = past ? `<span class="cb-band warning cc-missed-chip">${escapeHtml(cbT("cc.lock.missed"))}</span> ` : "";
+      return `<label class="${cls.join(" ")}"${past ? ' data-cc-past="1"' : ""}><input type="checkbox" data-cc-action="${escapeHtml(it.id)}" ${it.done ? "checked" : ""} aria-label="${escapeHtml(text)}"><span>${chip}${escapeHtml(text)}${sub ? `<span class="cc-action-due">${escapeHtml(sub)}</span>` : ""}</span></label>`;
+    };
+    const current = prog.items.filter((it) => it.status === "current");
+    const earlier = prog.items.filter((it) => it.status === "missed" || it.status === "past");
+    let html = `<div class="cb-sub-head">${escapeHtml(cbT("cc.lock.thisMonth", { month: monthLabel(prog.todayMonth) }))}</div>`;
+    html += current.length ? current.map(row).join("") : `<p class="empty">${escapeHtml(cbT("cc.act.none"))}</p>`;
+    if (earlier.length) {
+      html += `<div class="cb-sub-head">${escapeHtml(cbT("cc.lock.earlier"))}</div>${earlier.map(row).join("")}`;
+    }
+    return html;
+  }
+
+  // Lock bar + control state. While locked the controls show the settings the
+  // plan was locked with and are disabled (described by the "Unlock to change" hint).
+  function ccSyncLockUi(locked, canLock) {
+    const bar = $("#ccLockBar");
+    const badge = $("#ccLockBadge");
+    const hint = $("#ccLockHint");
+    const lockBtn = $("#ccLock");
+    if (bar) bar.hidden = !locked;
+    if (badge) badge.textContent = locked ? cbT("cc.lock.badge", { date: locked.lockedAt.slice(0, 10) }) : "";
+    if (hint) hint.hidden = !locked;
+    if (lockBtn) lockBtn.hidden = !!locked || !canLock;
+    ["#ccStrategy", "#ccTarget", "#ccBudget", "#ccReset"].forEach((sel) => {
+      const el = $(sel);
+      if (!el) return;
+      el.disabled = !!locked;
+      if (locked) el.setAttribute("aria-describedby", "ccLockHint");
+      else el.removeAttribute("aria-describedby");
+    });
+  }
+
   function renderCreditCoach() {
     if (!$("#creditCoach")) return;
-    const settings = ccSettings();
+    const locked = ccLockedPlan();
+    const settings = locked
+      ? {
+        strategy: CC_STRATEGIES.includes(locked.settings && locked.settings.strategy) ? locked.settings.strategy : CC_DEFAULTS.strategy,
+        targetScore: locked.settings && Number.isInteger(locked.settings.targetScore) ? locked.settings.targetScore : null,
+        monthlyBudget: locked.settings && Number(locked.settings.monthlyBudget) > 0 ? Number(locked.settings.monthlyBudget) : null,
+      }
+      : ccSettings();
 
     // Sync controls (placeholders show what "auto" resolves to)
     const stratSel = $("#ccStrategy");
@@ -9442,12 +9985,16 @@
     const targetEl = $("#ccTarget");
     if (targetEl) {
       targetEl.value = settings.targetScore === null ? "" : String(settings.targetScore);
-      targetEl.placeholder = String(plan.snapshot.targetScore);
+      targetEl.placeholder = String(locked && locked.summary.targetScore !== null ? locked.summary.targetScore : plan.snapshot.targetScore);
     }
+    ccSyncLockUi(locked, plan.status === "ok");
+    const progress = locked ? ccLockProgress(locked) : null;
+    const progressSection = $("#ccProgressBlock");
+    if (progressSection) progressSection.hidden = !progress;
 
     const emptyEl = $("#ccEmpty");
     const bodyEl = $("#ccBody");
-    if (plan.status === "no-cards") {
+    if (plan.status === "no-cards" && !progress) {
       if (emptyEl) emptyEl.hidden = false;
       if (bodyEl) bodyEl.hidden = true;
       destroyChart("creditCoach");
@@ -9455,6 +10002,7 @@
     }
     if (emptyEl) emptyEl.hidden = true;
     if (bodyEl) bodyEl.hidden = false;
+    if (progress) $("#ccProgress").innerHTML = ccProgressHtml(progress);
 
     const snap = plan.snapshot;
     const payoff = plan.payoff;
@@ -9547,34 +10095,24 @@
         .join(", ");
       planHtml += `<p class="cc-note">${escapeHtml(cbT("cc.note.aprAssumed", { names }))}</p>`;
     }
-    if (payoff.months.length) {
-      const head = `<tr><th>${escapeHtml(cbT("cc.plan.col.month"))}</th>`
-        + perCard.map((c) => `<th>${escapeHtml(c.name)}</th>`).join("")
-        + `<th>${escapeHtml(cbT("cc.plan.col.paid"))}</th><th>${escapeHtml(cbT("cc.plan.col.interest"))}</th><th>${escapeHtml(cbT("cc.plan.col.util"))}</th></tr>`;
-      const rows = payoff.months.map((r) => {
-        const cells = perCard.map((c) => {
-          const p = r.payments.find((x) => x.id === c.id);
-          if (!p) return "<td>—</td>";
-          return `<td>${fmt(p.payment)}<span class="cc-cell-sub">${fmt(p.endBalance)}</span></td>`;
-        }).join("");
-        return `<tr><td>${escapeHtml(monthLabel(r.label))}</td>${cells}<td>${fmt(r.totalPaid)}</td><td>${fmt(r.interest)}</td><td>${escapeHtml(r.utilization.toFixed(0))}%</td></tr>`;
-      }).join("");
-      planHtml += `<details class="education-item cc-details"><summary>${escapeHtml(cbT("cc.plan.table"))}</summary><div class="cc-table-wrap"><table class="cc-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
-    }
-    $("#ccPlan").innerHTML = planHtml;
+    planHtml += ccPlanTableHtml(payoff.months, perCard);
+    // While locked the frozen plan replaces the live one.
+    $("#ccPlan").innerHTML = (locked ? ccLockedPlanHtml(locked) : planHtml) + ccHistoryHtml();
 
-    // (d) Projection text + chart
+    // (d) Projection text + chart (locked: frozen line + actual scores as dots)
     const projTextEl = $("#ccProjText");
     const chartWrap = $("#creditCoach .cc-chart");
-    if (!proj.available) {
+    const shownProj = locked ? locked.projection : proj;
+    const shownTargetMonth = locked ? locked.summary.targetMonth : proj.reachesTargetMonth;
+    if (!shownProj.available || !shownProj.points.length) {
       projTextEl.innerHTML = `<p class="empty">${escapeHtml(cbT("cc.empty.noScores"))}</p>`;
       if (chartWrap) chartWrap.hidden = true;
       destroyChart("creditCoach");
     } else {
-      const n = proj.reachesTargetMonth;
-      const line = n === null
-        ? cbT("cc.proj.notReached", { score: proj.targetScore })
-        : cbT("cc.proj.reaches", { score: proj.targetScore, month: monthLabel(proj.points[n].label), n });
+      const n = shownTargetMonth;
+      const line = n === null || !shownProj.points[n]
+        ? cbT("cc.proj.notReached", { score: shownProj.targetScore })
+        : cbT("cc.proj.reaches", { score: shownProj.targetScore, month: monthLabel(shownProj.points[n].label), n });
       projTextEl.innerHTML = `<p>${escapeHtml(line)}</p><p class="cc-caveat">${escapeHtml(cbT("cc.proj.caveat"))}</p>`;
       if (chartWrap) chartWrap.hidden = false;
       destroyChart("creditCoach");
@@ -9583,27 +10121,42 @@
         const css = getComputedStyle(document.documentElement);
         const primary = css.getPropertyValue("--primary").trim() || "#5b3fb8";
         const success = css.getPropertyValue("--success").trim() || "#22c55e";
+        const datasets = [
+          {
+            label: cbT("cc.proj.series"),
+            data: shownProj.points.map((p) => p.score),
+            borderColor: primary,
+            backgroundColor: "transparent",
+            tension: 0.3,
+            pointRadius: 2,
+          },
+          {
+            label: cbT("cc.proj.target"),
+            data: shownProj.points.map(() => shownProj.targetScore),
+            borderColor: success,
+            borderDash: [6, 4],
+            pointRadius: 0,
+          },
+        ];
+        if (progress) {
+          const blue = css.getPropertyValue("--blue").trim() || "#3b82f6";
+          const byMonth = {};
+          progress.scoreDots.forEach((d) => { byMonth[d.month] = d.score; });
+          datasets.push({
+            label: cbT("cc.lock.dots"),
+            data: shownProj.points.map((p) => (byMonth[p.month] === undefined ? null : byMonth[p.month])),
+            borderColor: blue,
+            backgroundColor: blue,
+            showLine: false,
+            pointRadius: 5,
+            pointHoverRadius: 6,
+          });
+        }
         charts.creditCoach = new Chart(canvas, {
           type: "line",
           data: {
-            labels: proj.points.map((p) => (p.month === 0 ? cbT("cc.proj.now") : ccMonthShort(p.label))),
-            datasets: [
-              {
-                label: cbT("cc.proj.series"),
-                data: proj.points.map((p) => p.score),
-                borderColor: primary,
-                backgroundColor: "transparent",
-                tension: 0.3,
-                pointRadius: 2,
-              },
-              {
-                label: cbT("cc.proj.target"),
-                data: proj.points.map(() => proj.targetScore),
-                borderColor: success,
-                borderDash: [6, 4],
-                pointRadius: 0,
-              },
-            ],
+            labels: shownProj.points.map((p) => (p.month === 0 && !locked ? cbT("cc.proj.now") : ccMonthShort(p.label))),
+            datasets,
           },
           options: {
             responsive: true,
@@ -9619,6 +10172,10 @@
     }
 
     // (e) Action checklist
+    if (progress) {
+      $("#ccActions").innerHTML = ccLockedChecklistHtml(progress);
+      return;
+    }
     const done = ccLoadChecks(plan.fingerprint);
     $("#ccActions").innerHTML = plan.actions.length
       ? plan.actions.map((a) => {
@@ -13688,8 +14245,47 @@
     });
     $("#ccActions")?.addEventListener("change", (e) => {
       if (!e.target.matches("input[data-cc-action]")) return;
-      ccToggleCheck(ccCurrentFingerprint, e.target.dataset.ccAction, e.target.checked);
-      e.target.closest(".cc-action")?.classList.toggle("done", e.target.checked);
+      // Locked: ticks are stored in the lock (no fingerprint reset);
+      // unlocked: the fingerprinted local checklist as before.
+      if (ccLockedPlan()) ccToggleLockedCheck(e.target.dataset.ccAction, e.target.checked);
+      else ccToggleCheck(ccCurrentFingerprint, e.target.dataset.ccAction, e.target.checked);
+      const row = e.target.closest(".cc-action");
+      row?.classList.toggle("done", e.target.checked);
+      if (row && row.dataset.ccPast) row.classList.toggle("missed", !e.target.checked);
+    });
+    $("#ccLock")?.addEventListener("click", () => {
+      if (ccLockedPlan()) return;
+      if (!confirm(cbT("cc.lock.confirm"))) return;
+      const lock = ccNewLock();
+      if (!lock) return;
+      setSetting("creditCoachLock", lock);
+      saveData();
+      renderCreditCoach();
+      showToast(cbT("cc.lock.toast.locked"));
+    });
+    $("#ccUnlock")?.addEventListener("click", () => {
+      if (!ccLockedPlan()) return;
+      if (!confirm(cbT("cc.lock.unlockConfirm"))) return;
+      setSetting("creditCoachLock", null);
+      saveData();
+      renderCreditCoach();
+      showToast(cbT("cc.lock.toast.unlocked"));
+    });
+    $("#ccReplan")?.addEventListener("click", () => {
+      const prev = ccLockedPlan();
+      if (!prev) return;
+      if (!confirm(cbT("cc.lock.replanConfirm"))) return;
+      const lock = ccNewLock();
+      if (!lock) {
+        showToast(cbT("cc.empty.noCards"));
+        return;
+      }
+      const history = [{ lockedAt: prev.lockedAt, summary: prev.summary }, ...ccLockHistory()].slice(0, 3);
+      setSetting("creditCoachLockHistory", history);
+      setSetting("creditCoachLock", lock);
+      saveData();
+      renderCreditCoach();
+      showToast(cbT("cc.lock.toast.replanned"));
     });
 
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());

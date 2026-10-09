@@ -51,6 +51,17 @@ whenever cards, scores, income or expenses change:
 Strategy, target score and the optional monthly amount are saved with your settings. Unit tests for the engine:
 `node --test "tests/*.test.js"`.
 
+**Locking your plan.** Press **🔒 Lock this plan** to commit to the current plan: the schedule, summary, score projection
+and checklist are frozen (saved with your settings, so they travel with JSON backups and Gist sync) and the strategy,
+target and amount controls are disabled until you unlock. While locked, the coach tracks progress live against the
+frozen plan — plan month, planned vs actual total and per-card balances (*Ahead* / *On track* / *Behind*, with a
+tolerance of the larger of $10 or 2% of the planned amount), planned vs actual utilization, your latest score against
+the projection (logged scores appear as dots on the chart), % of starting debt paid off and a one-line catch-up
+suggestion. Checklist ticks are kept while balances change; unchecked items from past months show as *Missed*. Deleted
+cards are marked removed and excluded; cards added after locking are counted in the actual totals with a hint to
+re-plan. **Unlock** returns to live recalculation; **Re-plan** locks a fresh plan from current data and keeps the last
+three previous plans (date and summary) under *Previous plans*.
+
 ## Run locally
 
 It's just static HTML/CSS/JS — no build step.

@@ -5216,3 +5216,27 @@ body.has-offline-banner {
 .cc-action.done span { text-decoration: line-through; color: var(--text-dim); }
 .cc-action-due { display: block; font-size: 0.75rem; color: var(--text-dim); }
 .widget-coach { border-color: var(--success); }
+
+/* Credit Coach — locked plan */
+.cc-lockbar { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+.cc-lockbar > button { padding: 0.45rem 0.9rem; font-size: 0.85rem; }
+.cc-lock-badge { font-size: 0.85rem; font-weight: 600; padding: 0.3rem 0.75rem; border-radius: var(--radius-pill); background: var(--primary-soft); color: var(--primary); }
+.cc-lock-badge:empty { display: none; }
+.cc-controls select:disabled, .cc-controls input:disabled, .cc-controls button:disabled { opacity: 0.55; cursor: not-allowed; }
+.cc-verdict { margin: 0 0 0.25rem; font-size: 1rem; font-weight: 700; color: var(--text); }
+.cc-verdict.ahead { color: var(--success); }
+.cc-verdict.behind { color: var(--danger); }
+.cc-progress { margin: 0.5rem 0 0.75rem; }
+.cc-progress-label { font-size: 0.85rem; font-weight: 600; margin-bottom: 0.3rem; }
+.cc-prog-row { display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; align-items: center; padding: 0.4rem 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; }
+.cc-prog-name { font-weight: 600; flex: 1 1 10rem; min-width: 0; overflow-wrap: anywhere; }
+.cc-prog-amts { color: var(--text-dim); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+.cc-prog-row .cb-band { flex-shrink: 0; }
+.cc-prog-row.removed .cc-prog-name { color: var(--text-dim); text-decoration: line-through; }
+.cb-band.cc-chip-muted { background: var(--card); color: var(--text-dim); border: 1px solid var(--border); }
+.cc-action.current > span { font-weight: 600; }
+.cc-action.missed > span { color: var(--text-dim); }
+.cc-missed-chip { font-size: 0.7rem; padding: 0.05rem 0.45rem; margin-right: 0.3rem; text-decoration: none; display: inline-block; }
+.cc-action.done .cc-missed-chip { display: none; }
+.cc-history-list { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.82rem; color: var(--text-dim); }
+.cc-history-list li { margin: 0.2rem 0; }
