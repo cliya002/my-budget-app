@@ -5201,9 +5201,18 @@ body.has-offline-banner {
 .cc-table th { color: var(--text-dim); font-weight: 600; }
 .cc-cell-sub { display: block; font-size: 0.7rem; color: var(--text-dim); }
 .cc-chart { margin-top: 0.5rem; }
-.cc-action { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.45rem 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; cursor: pointer; }
+/* Coach cards size to their own content instead of stretching to the tallest
+   card in the row, and may shrink below their content's min width. */
+.credit-coach .cb-grid { align-items: start; }
+.credit-coach .cb-block { min-width: 0; }
+/* Each checklist row is a <label>: undo the global form-label look
+   (block, dim, small, bottom margin) and keep it a single flex row. */
+.cc-action { display: flex; gap: 0.6rem; align-items: flex-start; margin: 0; padding: 0.45rem 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; font-weight: 400; color: var(--text); cursor: pointer; }
 .cc-action:last-child { border-bottom: none; }
-.cc-action input { margin-top: 0.2rem; accent-color: var(--primary); flex-shrink: 0; }
+/* The global `input { width: 100%; padding }` rule stretched the checkbox
+   across the row and squeezed the text into a sliver; pin it to its own size. */
+.cc-action input[type="checkbox"] { flex: 0 0 auto; width: 1.05rem; height: 1.05rem; margin: 0.12rem 0 0; padding: 0; accent-color: var(--primary); cursor: pointer; }
+.cc-action > span { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
 .cc-action.done span { text-decoration: line-through; color: var(--text-dim); }
 .cc-action-due { display: block; font-size: 0.75rem; color: var(--text-dim); }
 .widget-coach { border-color: var(--success); }
