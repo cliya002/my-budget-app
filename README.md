@@ -24,6 +24,7 @@ The **Credit** tab has a Credit Builder panel that turns your cards and score lo
 - **Credit score** — latest score with its band (Poor → Exceptional) and the change since the previous entry. Scores are logged via **+ Log Score** (300–850, date, source) and plotted in the Score Trend chart; entries can be deleted from Score History.
 - **Account age** — oldest and average account age in years/months, from each card's opened date.
 - **Credit-building habits** — a short checklist of habits that move the score.
+- **Paste from bank** — tap **📋 Paste from bank** on the Credit tab, paste the account summary copied from your bank's website (e.g. Chase: current balance, pending charges, available credit, total credit limit, next closing date, balance on last statement, remaining statement balance), review the recognized fields, and import. A card whose last 4 digits (or name) match is updated in place; otherwise the Add Card form opens pre-filled.
 
 Cards (name, limit, balance, due day 1–31, optional APR and opened date) and scores are stored in localStorage with the rest of your data and are included in JSON backups. A **Credit Builder** PWA shortcut (`?action=credit-builder`) deep-links straight to the panel.
 
@@ -75,5 +76,6 @@ git push -u origin main
 ├── index.html    # markup
 ├── styles.css    # mobile-first styles
 ├── app.js        # all app logic
+├── tests/        # node --test unit tests (parseCardPaste)
 └── .github/workflows/deploy.yml  # GitHub Pages deploy
 ```
