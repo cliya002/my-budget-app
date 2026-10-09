@@ -14,6 +14,7 @@ A mobile-friendly, offline-first budget app that runs entirely in your browser. 
 - 📤 **Export / Import** — back up your data as JSON
 - 💱 **Multi-currency** — USD, EUR, GBP, JPY, INR, AUD, CAD
 - 🏗️ **Credit Builder** — utilization, payment reminders, score log, account age (see below)
+- 🧭 **Credit Coach (offline)** — rule-based payoff plan, diagnosis, score projection and action checklist (see below)
 
 ### Credit Builder
 
@@ -27,6 +28,28 @@ The **Credit** tab has a Credit Builder panel that turns your cards and score lo
 - **Paste from bank** — tap **📋 Paste from bank** on the Credit tab, paste the account summary copied from your bank's website (e.g. Chase: current balance, pending charges, available credit, total credit limit, next closing date, balance on last statement, remaining statement balance), review the recognized fields, and import. A card whose last 4 digits (or name) match is updated in place; otherwise the Add Card form opens pre-filled.
 
 Cards (name, limit, balance, due day 1–31, optional APR and opened date) and scores are stored in localStorage with the rest of your data and are included in JSON backups. A **Credit Builder** PWA shortcut (`?action=credit-builder`) deep-links straight to the panel.
+
+### Credit Coach (offline)
+
+The **Credit Coach** panel at the top of the Credit tab turns your cards, score log, income and spending into a plan.
+It uses **local rules only** — no AI API, no network request, no data leaves the device — and recomputes instantly
+whenever cards, scores, income or expenses change:
+
+- **Snapshot** — latest score and band, target score, trend, overall and per-card utilization, total minimums, monthly
+  cash available (income − average spending of the last 3 months), account age.
+- **Diagnosis** — prioritized "what's hurting" (high/medium/low) and "what's helping" lists from fixed rules
+  (utilization bands, maxed cards, payments due within 7 days, thin file, short history, score trend, stale score).
+- **Payoff plan** — month-by-month schedule (up to 36 months) with three strategies: *Utilization first* (default),
+  *Avalanche* (highest APR) and *Snowball* (smallest balance); minimums on every card, interest at APR/12 (24.99% assumed
+  when a card has no APR), debt-free month, total interest, interest saved vs minimums only, and the months when
+  utilization drops under 30% / 10%.
+- **Score projection** — a clearly labelled estimate from utilization bands plus on-time payment history, with the
+  month it reaches your target. Real scores depend on your full report.
+- **Action checklist** — dated, prioritized steps (pay X by date, pay the minimum before the due date, autopay, keep the
+  oldest card open, log your score again, spread spending). Checkboxes persist on the device and reset when balances change.
+
+Strategy, target score and the optional monthly amount are saved with your settings. Unit tests for the engine:
+`node --test "tests/*.test.js"`.
 
 ## Run locally
 
@@ -76,6 +99,6 @@ git push -u origin main
 ├── index.html    # markup
 ├── styles.css    # mobile-first styles
 ├── app.js        # all app logic
-├── tests/        # node --test unit tests (parseCardPaste)
+├── tests/        # node --test unit tests (parseCardPaste, buildCreditPlan)
 └── .github/workflows/deploy.yml  # GitHub Pages deploy
 ```

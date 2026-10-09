@@ -24,6 +24,7 @@
     syncSkipReceiptsCellular: "mb_sync_skip_receipts_cellular",
     seeded: "mb_seeded_v1",       // one-time flag — defaults seeded for this install
     locale: "mb_locale",          // i18n locale, e.g. "en", "es", "fr", "de", "pt", "si"
+    coachChecks: "mb_coach_checks", // Credit Coach checklist: { fingerprint, done }
   };
 
   const DEFAULT_PWD_HASH =
@@ -1934,6 +1935,17 @@
       nextDueHtml = `<strong>${escapeHtml(nextDue.card.name)}</strong> · ${escapeHtml(when)} · ${fmt(cardCurrentBalance(nextDue.card))}`;
     }
 
+    // Credit Coach: top action (local rule engine, no network) — one small line
+    let coachHtml = "";
+    try {
+      const plan = ccBuildPlanFromState();
+      if (plan.status === "ok" && plan.actions.length) {
+        coachHtml = `<div class="widget-credit widget-coach"><span class="widget-credit-label">🧭 ${escapeHtml(cbT("cc.glance.label"))}</span><span class="widget-credit-value">${escapeHtml(ccText(plan.actions[0]))}</span></div>`;
+      }
+    } catch (e) {
+      coachHtml = "";
+    }
+
     const remainingCls = remaining >= 0 ? "positive" : "negative";
     overlay.innerHTML = `
       <div class="widget-card">
@@ -1967,6 +1979,7 @@
           <span class="widget-credit-label">💳 ${escapeHtml(cbT("cb.glance.nextDue"))}</span>
           <span class="widget-credit-value">${nextDueHtml}</span>
         </div>
+        ${coachHtml}
         <div class="widget-actions">
           <button type="button" class="widget-action" data-widget-action="add-expense">💸 Expense</button>
           <button type="button" class="widget-action" data-widget-action="add-income">💰 Income</button>
@@ -6588,6 +6601,7 @@
     };
     safeCall(renderCreditStats, "stats");
     safeCall(renderCreditBuilder, "creditBuilder");
+    safeCall(renderCreditCoach, "creditCoach");
     safeCall(renderCardList, "cardList");
     safeCall(renderScoreList, "scoreList");
     safeCall(renderCreditTrend, "creditTrend");
@@ -8389,7 +8403,9 @@
   // missing translation is visible rather than silently blank.
   function cbT(key, vars) {
     let s = window.i18n ? window.i18n.t(key) : key;
-    if (vars) Object.keys(vars).forEach((k) => { s = s.replace(`{${k}}`, vars[k]); });
+    // Function replacer so `$&`-style sequences in a value (e.g. a card name)
+    // are inserted literally instead of being expanded.
+    if (vars) Object.keys(vars).forEach((k) => { s = s.replace(`{${k}}`, () => String(vars[k])); });
     return s;
   }
 
@@ -8656,6 +8672,961 @@
   function closeScoreModal() {
     $("#scoreModal").classList.remove("open");
     $("#scoreForm").reset();
+  }
+
+  /* ---------- Credit Coach ---------- */
+  // Local, deterministic credit-improvement planner: looks at the cards,
+  // logged scores and monthly cash flow and produces a diagnosis, a payoff
+  // schedule, a score projection and a prioritized action list. No network,
+  // no AI API, no DOM, no state. Output carries i18n KEYS (cc.*) plus raw
+  // vars; the renderer formats, translates (cbT) and escapes.
+  // Self-contained on purpose (no closure references): the block between
+  // the two marker comments is sliced out of this file and evaluated
+  // standalone by tests/credit-coach.test.js.
+  // @@buildCreditPlan:start
+  function buildCreditPlan(input) {
+    const inp = input && typeof input === "object" ? input : {};
+    const settings = inp.settings && typeof inp.settings === "object" ? inp.settings : {};
+
+    /* ---- local helpers (pure, deterministic) ---- */
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const num = (v, fallback) => {
+      if (v === null || v === undefined || v === "") return fallback;
+      const n = typeof v === "string" ? parseFloat(v.replace(/[^0-9.-]/g, "")) : Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const clamp = (lo, hi, v) => Math.min(hi, Math.max(lo, v));
+    const ISO_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+    const parseIso = (iso) => {
+      const m = typeof iso === "string" ? ISO_RE.exec(iso.slice(0, 10)) : null;
+      if (!m) return null;
+      const y = Number(m[1]);
+      const mo = Number(m[2]);
+      const d = Number(m[3]);
+      if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+      return { y, m: mo, d };
+    };
+    const toIso = (y, m, d) => `${y}-${pad2(m)}-${pad2(d)}`;
+    const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
+    const isoAddDays = (iso, n) => {
+      const p = parseIso(iso);
+      if (!p) return null;
+      const dt = new Date(Date.UTC(p.y, p.m - 1, p.d + n));
+      return toIso(dt.getUTCFullYear(), dt.getUTCMonth() + 1, dt.getUTCDate());
+    };
+    const isoAddMonths = (iso, n) => {
+      const p = parseIso(iso);
+      if (!p) return null;
+      const total = p.y * 12 + (p.m - 1) + n;
+      const y = Math.floor(total / 12);
+      const m = total - y * 12 + 1;
+      return toIso(y, m, Math.min(p.d, daysInMonth(y, m)));
+    };
+    const isoDiffDays = (a, b) => {
+      const pa = parseIso(a);
+      const pb = parseIso(b);
+      if (!pa || !pb) return null;
+      return Math.round((Date.UTC(pb.y, pb.m - 1, pb.d) - Date.UTC(pa.y, pa.m - 1, pa.d)) / 86400000);
+    };
+    const monthKeyAdd = (key, n) => {
+      const m = typeof key === "string" ? /^(\d{4})-(\d{2})/.exec(key) : null;
+      if (!m) return null;
+      const total = Number(m[1]) * 12 + (Number(m[2]) - 1) + n;
+      const y = Math.floor(total / 12);
+      return `${y}-${pad2(total - y * 12 + 1)}`;
+    };
+    const monthsBetween = (a, b) => {
+      const pa = parseIso(a);
+      const pb = parseIso(b);
+      if (!pa || !pb) return null;
+      let months = (pb.y - pa.y) * 12 + (pb.m - pa.m);
+      if (pb.d < pa.d) months -= 1;
+      return Math.max(0, months);
+    };
+    const nextDueDate = (today, dueDay) => {
+      const p = parseIso(today);
+      if (!p) return null;
+      const thisMonth = toIso(p.y, p.m, Math.min(dueDay, daysInMonth(p.y, p.m)));
+      if (thisMonth >= today) return thisMonth;
+      const y2 = p.m === 12 ? p.y + 1 : p.y;
+      const m2 = p.m === 12 ? 1 : p.m + 1;
+      return toIso(y2, m2, Math.min(dueDay, daysInMonth(y2, m2)));
+    };
+    const utilTable = (u) => {
+      if (u > 90) return 0;
+      if (u > 50) return 15;
+      if (u > 30) return 35;
+      if (u > 10) return 60;
+      if (u > 0) return 80;
+      return 75;
+    };
+    const bandKey = (score) => {
+      const n = Number(score);
+      if (n >= 800) return "cb.band.exceptional";
+      if (n >= 740) return "cb.band.veryGood";
+      if (n >= 670) return "cb.band.good";
+      if (n >= 580) return "cb.band.fair";
+      return "cb.band.poor";
+    };
+    const displayName = (c) => {
+      const base = c && c.name ? String(c.name) : "Card";
+      const last4 = c && c.last4 ? String(c.last4) : "";
+      return last4 ? `${base} (…${last4})` : base;
+    };
+
+    /* ---- inputs ---- */
+    const today = parseIso(inp.today) ? String(inp.today).slice(0, 10) : "1970-01-01";
+    const planMonth = today.slice(0, 7);
+    const rawCards = Array.isArray(inp.cards) ? inp.cards.filter((c) => c && typeof c === "object") : [];
+    const STRATEGIES = ["avalanche", "snowball", "utilization"];
+    const strategy = STRATEGIES.includes(settings.strategy) ? settings.strategy : "utilization";
+
+    const flags = {
+      noScores: false,
+      noIncome: false,
+      noExpenses: false,
+      budgetShortfall: false,
+      minOnlyTruncated: false,
+      truncated: false,
+      aprAssumed: [],
+      minEstimated: [],
+    };
+
+    /* ---- scores ---- */
+    const scores = (Array.isArray(inp.scores) ? inp.scores : [])
+      .map((s) => ({ date: s && parseIso(s.date) ? String(s.date).slice(0, 10) : null, score: num(s && s.score, NaN) }))
+      .filter((s) => s.date && Number.isFinite(s.score) && s.score >= 300 && s.score <= 850)
+      .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const last = scores.length ? scores[scores.length - 1] : null;
+    const score = last ? last.score : null;
+    const scoreDate = last ? last.date : null;
+    flags.noScores = score === null;
+    const n = scores.length;
+    const deltaAgo = (months) => {
+      if (!last) return null;
+      const cutoff = isoAddMonths(last.date, -months);
+      let ref = null;
+      for (let i = 0; i < n; i++) if (scores[i].date <= cutoff) ref = scores[i];
+      return ref ? last.score - ref.score : null;
+    };
+    const trend = {
+      delta3: n >= 2 ? last.score - scores[Math.max(0, n - 3)].score : null,
+      delta6m: deltaAgo(6),
+      delta12m: deltaAgo(12),
+    };
+    const tsRaw = num(settings.targetScore, null);
+    const targetScore = tsRaw !== null && Number.isInteger(tsRaw) && tsRaw >= 300 && tsRaw <= 850
+      ? tsRaw
+      : score === null || score < 670 ? 670 : score < 740 ? 740 : score < 800 ? 800 : 850;
+    const staleDays = scoreDate ? isoDiffDays(scoreDate, today) : null;
+    const scoreStale = score === null || staleDays === null || staleDays >= 60;
+
+    /* ---- cash ---- */
+    const incomeRaw = num(inp.monthlyIncome, null);
+    const monthlyIncome = incomeRaw !== null && incomeRaw > 0 ? incomeRaw : null;
+    const expRaw = num(inp.monthlyExpenses, null);
+    const monthlyExpenses = expRaw !== null && expRaw >= 0 ? expRaw : null;
+    flags.noIncome = monthlyIncome === null;
+    flags.noExpenses = monthlyExpenses === null;
+    let cashAvailable = null;
+    if (monthlyIncome !== null) {
+      cashAvailable = monthlyExpenses !== null ? Math.max(0, monthlyIncome - monthlyExpenses) : monthlyIncome;
+    }
+
+    /* ---- per-card snapshot ---- */
+    const perCard = rawCards.map((c, i) => {
+      const id = c.id !== undefined && c.id !== null && c.id !== "" ? String(c.id) : `card-${i}`;
+      const balance = Math.max(0, num(c.balance, 0));
+      const limit = Math.max(0, num(c.limit, 0));
+      const utilization = limit > 0 ? (balance / limit) * 100 : 0;
+      // Missing/invalid/negative APR → 24.99% assumed; an explicit 0 (promo APR) is honoured.
+      const aprIn = num(c.apr, null);
+      const aprAssumed = aprIn === null || aprIn < 0;
+      const apr = aprAssumed ? 24.99 : aprIn;
+      if (aprAssumed) flags.aprAssumed.push(id);
+      const minIn = num(c.minPayment !== undefined && c.minPayment !== null ? c.minPayment : c.minimumPayment, 0);
+      const minEstimated = !(minIn > 0);
+      const minPayment = minEstimated
+        ? Math.min(balance, Math.max(25, balance * 0.02))
+        : Math.min(balance, minIn);
+      if (minEstimated) flags.minEstimated.push(id);
+      const dueDay = Math.trunc(num(c.dueDay, 0));
+      const nextDue = dueDay >= 1 && dueDay <= 31 ? nextDueDate(today, dueDay) : null;
+      const daysToDue = nextDue ? isoDiffDays(today, nextDue) : null;
+      const rsb = num(c.remainingStatementBalance, null);
+      const statementDue = rsb !== null ? Math.max(0, rsb) : balance;
+      const openedIso = parseIso(c.opened) ? String(c.opened).slice(0, 10) : null;
+      const ageMonths = openedIso && openedIso <= today ? monthsBetween(openedIso, today) : null;
+      const nextClosing = parseIso(c.nextClosingDate) ? String(c.nextClosingDate).slice(0, 10) : null;
+      return {
+        id,
+        name: displayName(c),
+        last4: c.last4 ? String(c.last4) : "",
+        balance,
+        limit,
+        utilization,
+        apr,
+        aprAssumed,
+        minPayment,
+        minEstimated,
+        minFixed: minEstimated ? null : minIn,
+        nextDue,
+        daysToDue,
+        statementDue,
+        autopay: !!c.autopay,
+        ageMonths,
+        nextClosingDate: nextClosing,
+      };
+    });
+    const totalBalance = perCard.reduce((s, c) => s + c.balance, 0);
+    const totalLimit = perCard.reduce((s, c) => s + c.limit, 0);
+    const utilization = totalLimit > 0 ? (totalBalance / totalLimit) * 100 : 0;
+    const totalMinimums = perCard.reduce((s, c) => s + (c.balance > 0 ? c.minPayment : 0), 0);
+    const aged = perCard.filter((c) => c.ageMonths !== null);
+    let oldestAgeMonths = null;
+    let avgAgeMonths = null;
+    let oldestCardId = null;
+    if (aged.length) {
+      const oldest = aged.reduce((best, c) => (c.ageMonths > best.ageMonths ? c : best), aged[0]);
+      oldestAgeMonths = oldest.ageMonths;
+      oldestCardId = oldest.id;
+      avgAgeMonths = Math.round(aged.reduce((s, c) => s + c.ageMonths, 0) / aged.length);
+    }
+
+    const fingerprint = planMonth + "|" + perCard
+      .map((c) => `${c.id}:${Math.round(c.balance)}:${Math.round(c.limit)}`)
+      .sort()
+      .join(",");
+
+    const snapshot = {
+      score,
+      scoreDate,
+      bandKey: score === null ? null : bandKey(score),
+      targetScore,
+      targetBandKey: bandKey(targetScore),
+      trend,
+      utilization,
+      totalBalance,
+      totalLimit,
+      totalMinimums,
+      minsEstimated: flags.minEstimated.length > 0,
+      perCard: perCard.map((c) => ({
+        id: c.id,
+        name: c.name,
+        last4: c.last4,
+        balance: c.balance,
+        limit: c.limit,
+        utilization: c.utilization,
+        apr: c.apr,
+        aprAssumed: c.aprAssumed,
+        minPayment: c.minPayment,
+        minEstimated: c.minEstimated,
+        nextDue: c.nextDue,
+        daysToDue: c.daysToDue,
+        statementDue: c.statementDue,
+      })),
+      cashAvailable,
+      monthlyIncome,
+      monthlyExpenses,
+      oldestAgeMonths,
+      avgAgeMonths,
+      oldestCardId,
+    };
+
+    if (!perCard.length) {
+      return {
+        status: "no-cards",
+        planMonth,
+        fingerprint,
+        flags,
+        snapshot,
+        diagnosis: { hurting: [], helping: [] },
+        payoff: {
+          strategy,
+          monthlyBudget: 0,
+          budgetSource: "minimums",
+          months: [],
+          debtFreeMonth: null,
+          totalInterest: 0,
+          minOnlyInterest: 0,
+          interestSaved: 0,
+          utilUnder30Month: null,
+          utilUnder10Month: null,
+        },
+        projection: { available: false, startScore: score, targetScore, points: [], reachesTargetMonth: null },
+        actions: [],
+      };
+    }
+
+    /* ---- diagnosis ---- */
+    const hurting = [];
+    const helping = [];
+    if (utilization > 30) {
+      hurting.push({ id: "util-high", severity: "high", key: "cc.diag.utilHigh", vars: { pct: utilization } });
+    } else if (utilization > 10) {
+      hurting.push({ id: "util-med", severity: "medium", key: "cc.diag.utilMed", vars: { pct: utilization } });
+    }
+    perCard.forEach((c) => {
+      if (c.utilization >= 90) {
+        hurting.push({ id: `card-maxed-${c.id}`, severity: "high", key: "cc.diag.cardMaxed", vars: { name: c.name, pct: c.utilization } });
+      } else if (c.utilization > 50) {
+        hurting.push({ id: `card-high-${c.id}`, severity: "high", key: "cc.diag.cardHigh", vars: { name: c.name, pct: c.utilization } });
+      } else if (c.utilization > 30) {
+        hurting.push({ id: `card-med-${c.id}`, severity: "medium", key: "cc.diag.cardMed", vars: { name: c.name, pct: c.utilization } });
+      }
+    });
+    const dueSoon = perCard.filter((c) => c.daysToDue !== null && c.daysToDue >= 0 && c.daysToDue <= 7 && c.statementDue > 0);
+    dueSoon.forEach((c) => {
+      hurting.push({
+        id: `due-${c.id}`,
+        severity: "high",
+        key: "cc.diag.dueSoon",
+        vars: { name: c.name, amount: c.minPayment, date: c.nextDue },
+      });
+    });
+    if (perCard.length < 2) {
+      hurting.push({ id: "thin-file", severity: "low", key: "cc.diag.thinFile", vars: { n: perCard.length } });
+    }
+    if (avgAgeMonths !== null && avgAgeMonths < 24) {
+      hurting.push({ id: "short-history", severity: "low", key: "cc.diag.shortHistory", vars: { months: avgAgeMonths } });
+    }
+    if (trend.delta3 !== null && trend.delta3 < 0) {
+      hurting.push({ id: "trend-down", severity: "medium", key: "cc.diag.trendDown", vars: { delta: trend.delta3 } });
+    }
+    if (score !== null && staleDays !== null && staleDays >= 60) {
+      hurting.push({ id: "stale-score", severity: "low", key: "cc.diag.staleScore", vars: { days: staleDays } });
+    }
+    const SEV_RANK = { high: 0, medium: 1, low: 2 };
+    hurting.sort((a, b) => SEV_RANK[a.severity] - SEV_RANK[b.severity]);
+
+    if (utilization <= 10) helping.push({ id: "util-excellent", key: "cc.help.utilExcellent", vars: { pct: utilization } });
+    else if (utilization <= 30) helping.push({ id: "util-good", key: "cc.help.utilGood", vars: { pct: utilization } });
+    if (!dueSoon.length) helping.push({ id: "no-due", key: "cc.help.noDue", vars: {} });
+    if (perCard.length >= 2) helping.push({ id: "mix", key: "cc.help.mix", vars: { n: perCard.length } });
+    if (avgAgeMonths !== null && avgAgeMonths >= 24) helping.push({ id: "age", key: "cc.help.age", vars: { months: avgAgeMonths } });
+    if (trend.delta3 !== null && trend.delta3 > 0) helping.push({ id: "trend-up", key: "cc.help.trendUp", vars: { delta: trend.delta3 } });
+    if (perCard.every((c) => c.autopay)) helping.push({ id: "autopay", key: "cc.help.autopay", vars: {} });
+
+    /* ---- payoff ---- */
+    const minRule = (card, bal) => {
+      if (bal <= 0) return 0;
+      const rule = card.minFixed !== null ? card.minFixed : Math.max(25, bal * 0.02);
+      return Math.min(bal, rule);
+    };
+    const totalMins = totalMinimums;
+    const overrideRaw = num(settings.monthlyBudget, null);
+    const override = overrideRaw !== null && overrideRaw > 0 ? overrideRaw : null;
+    let candidate = null;
+    let budgetSource = "minimums";
+    if (override !== null) {
+      candidate = override;
+      budgetSource = "override";
+    } else if (cashAvailable !== null) {
+      candidate = Math.min(cashAvailable, totalBalance);
+      budgetSource = "auto";
+    }
+    let monthlyBudget = totalMins;
+    if (candidate !== null) {
+      monthlyBudget = Math.max(candidate, totalMins);
+      flags.budgetShortfall = candidate < totalMins;
+    }
+
+    const utilOf = (c) => (c.limit > 0 ? (c.bal / c.limit) * 100 : 0);
+    const avalancheCmp = (a, b) => (b.apr - a.apr) || (b.bal - a.bal) || (a.idx - b.idx);
+    const snowballCmp = (a, b) => (a.bal - b.bal) || (b.apr - a.apr) || (a.idx - b.idx);
+    const tierOf = (c) => {
+      if (c.limit <= 0) return 2;
+      const u = utilOf(c);
+      return u > 30 ? 0 : u > 10 ? 1 : 2;
+    };
+    const tierCap = (c) => {
+      const t = tierOf(c);
+      if (t === 0) return c.bal - 0.3 * c.limit + 0.01;
+      if (t === 1) return c.bal - 0.1 * c.limit + 0.01;
+      return c.bal;
+    };
+    const strategyOrder = (list, strat) => {
+      const live = list.filter((c) => c.bal > 0.005);
+      if (strat === "snowball") return live.sort(snowballCmp);
+      if (strat === "utilization") {
+        return live.sort((a, b) => {
+          const ta = tierOf(a);
+          const tb = tierOf(b);
+          if (ta !== tb) return ta - tb;
+          if (ta === 2) return avalancheCmp(a, b);
+          return (utilOf(b) - utilOf(a)) || avalancheCmp(a, b);
+        });
+      }
+      return live.sort(avalancheCmp);
+    };
+
+    const simulate = (budgetOrNull, strat, maxMonths) => {
+      const working = perCard
+        .filter((c) => c.balance > 0.005)
+        .map((c, idx) => ({ id: c.id, idx, bal: c.balance, apr: c.apr, limit: c.limit, minFixed: c.minFixed }));
+      const rows = [];
+      let totalInterest = 0;
+      let prevTotal = working.reduce((s, c) => s + c.bal, 0);
+      for (let m = 1; m <= maxMonths && working.some((c) => c.bal > 0.005); m++) {
+        const pay = {};
+        const interest = {};
+        working.forEach((c) => {
+          const i = c.bal > 0.005 ? c.bal * (c.apr / 100 / 12) : 0;
+          interest[c.id] = i;
+          c.bal += i;
+          totalInterest += i;
+          const p = minRule(c, c.bal);
+          c.bal -= p;
+          pay[c.id] = p;
+        });
+        const paidMins = working.reduce((s, c) => s + pay[c.id], 0);
+        let extra = budgetOrNull === null ? 0 : budgetOrNull - paidMins;
+        let guard = 0;
+        const skip = {};
+        while (extra > 0.005 && guard++ < 50) {
+          const order = strategyOrder(working, strat).filter((c) => !skip[c.id]);
+          const target = order.length ? order[0] : null;
+          if (!target) break;
+          const cap = strat === "utilization" ? tierCap(target) : target.bal;
+          const p = Math.min(extra, cap, target.bal);
+          if (p <= 0) {
+            skip[target.id] = true;
+            continue;
+          }
+          target.bal -= p;
+          pay[target.id] += p;
+          extra -= p;
+        }
+        working.forEach((c) => { if (c.bal < 0.005) c.bal = 0; });
+        const endBalance = working.reduce((s, c) => s + c.bal, 0);
+        rows.push({
+          month: m,
+          label: monthKeyAdd(planMonth, m),
+          payments: working.map((c) => ({
+            id: c.id,
+            payment: round2(pay[c.id]),
+            interest: round2(interest[c.id]),
+            endBalance: round2(c.bal),
+          })),
+          totalPaid: round2(working.reduce((s, c) => s + pay[c.id], 0)),
+          interest: round2(working.reduce((s, c) => s + interest[c.id], 0)),
+          endBalance: round2(endBalance),
+          utilization: totalLimit > 0 ? (endBalance / totalLimit) * 100 : 0,
+        });
+        // Minimum-only run: once the total stops falling (interest >= the
+        // minimum on some card) it never finishes — stop early instead of
+        // compounding for the whole horizon.
+        if (budgetOrNull === null && endBalance >= prevTotal - 0.005) break;
+        prevTotal = endBalance;
+      }
+      return { rows, finished: working.every((c) => c.bal <= 0.005), totalInterest };
+    };
+
+    const hasDebt = perCard.some((c) => c.balance > 0.005);
+    const plan = hasDebt ? simulate(monthlyBudget, strategy, 36) : { rows: [], finished: true, totalInterest: 0 };
+    const minOnly = hasDebt ? simulate(null, "avalanche", 600) : { rows: [], finished: true, totalInterest: 0 };
+    flags.truncated = !plan.finished;
+    flags.minOnlyTruncated = !minOnly.finished;
+    const rows = plan.rows;
+    const firstUnder = (limitPct) => {
+      if (utilization < limitPct) return 0;
+      const row = rows.find((r) => r.utilization < limitPct);
+      return row ? row.month : null;
+    };
+    // The minimums-only comparison is only meaningful when both runs finish;
+    // a truncated run has no comparable interest total, so report null.
+    const comparable = plan.finished && minOnly.finished;
+    const payoff = {
+      strategy,
+      monthlyBudget: round2(monthlyBudget),
+      budgetSource,
+      months: rows,
+      debtFreeMonth: !hasDebt ? 0 : plan.finished ? rows.length : null,
+      totalInterest: round2(plan.totalInterest),
+      minOnlyInterest: comparable ? round2(minOnly.totalInterest) : null,
+      interestSaved: comparable ? round2(Math.max(0, minOnly.totalInterest - plan.totalInterest)) : null,
+      utilUnder30Month: firstUnder(30),
+      utilUnder10Month: firstUnder(10),
+    };
+
+    /* ---- projection ---- */
+    const uAt = (m) => {
+      if (m === 0) return utilization;
+      if (rows[m - 1]) return rows[m - 1].utilization;
+      if (rows.length) return rows[rows.length - 1].utilization;
+      return utilization;
+    };
+    const projection = { available: score !== null, startScore: score, targetScore, points: [], reachesTargetMonth: null };
+    if (projection.available) {
+      const scale = Math.min(1, Math.max(0, (850 - score) / 150));
+      const base = utilTable(uAt(0));
+      for (let m = 0; m <= 36; m++) {
+        const s = clamp(300, 850, Math.round(score + scale * (utilTable(uAt(m)) - base) + 2 * m));
+        projection.points.push({ month: m, label: m === 0 ? planMonth : monthKeyAdd(planMonth, m), score: s });
+        if (projection.reachesTargetMonth === null && s >= targetScore) projection.reachesTargetMonth = m;
+      }
+    }
+
+    /* ---- actions ---- */
+    const actions = [];
+    if (flags.budgetShortfall) {
+      actions.push({
+        id: "budget-shortfall",
+        priority: 1,
+        key: "cc.act.shortfall",
+        // `candidate` is the amount that actually fell short: the override
+        // on the override path, cashAvailable on the auto path.
+        vars: { mins: totalMins, cash: candidate !== null ? candidate : 0 },
+        due: null,
+      });
+    }
+    dueSoon.forEach((c) => {
+      actions.push({
+        id: `pay-min-${c.id}`,
+        priority: 1,
+        key: "cc.act.payMin",
+        vars: { amount: c.minPayment, name: c.name, date: c.nextDue },
+        due: c.nextDue,
+      });
+    });
+    if (rows.length) {
+      perCard.forEach((c) => {
+        if (!(c.utilization > 30)) return;
+        const p = rows[0].payments.find((x) => x.id === c.id);
+        if (!p || !(p.payment > 0)) return;
+        const by = c.nextClosingDate && c.nextClosingDate >= today
+          ? c.nextClosingDate
+          : c.nextDue || isoAddDays(today, 30);
+        const endUtil = c.limit > 0 ? (p.endBalance / c.limit) * 100 : 0;
+        actions.push({
+          id: `pay-plan-${c.id}`,
+          priority: 2,
+          key: endUtil < 30 ? "cc.act.payTo30" : "cc.act.payPlanned",
+          vars: { amount: p.payment, name: c.name, date: by },
+          due: by,
+        });
+      });
+    }
+    const noAutopay = perCard.filter((c) => !c.autopay);
+    if (noAutopay.length) {
+      actions.push({
+        id: "autopay",
+        priority: 3,
+        key: "cc.act.autopay",
+        vars: { names: noAutopay.map((c) => c.name).join(", ") },
+        due: null,
+      });
+    }
+    if (oldestCardId !== null) {
+      const oldest = perCard.find((c) => c.id === oldestCardId);
+      actions.push({
+        id: "keep-oldest",
+        priority: 4,
+        key: "cc.act.keepOpen",
+        vars: { name: oldest.name, years: Math.floor(oldestAgeMonths / 12), months: oldestAgeMonths % 12 },
+        due: null,
+      });
+    }
+    const logDate = scoreStale ? today : isoAddDays(scoreDate, 30);
+    actions.push({ id: "log-score", priority: 3, key: "cc.act.logScore", vars: { date: logDate }, due: logDate });
+    const hotCandidates = perCard.filter((c) => c.utilization > 30);
+    if (hotCandidates.length) {
+      const hot = hotCandidates.reduce((best, c) => (c.utilization > best.utilization ? c : best), hotCandidates[0]);
+      let cool = null;
+      let room = 0;
+      perCard.forEach((c) => {
+        if (c.id === hot.id || !(c.utilization < 30)) return;
+        const r = 0.3 * c.limit - c.balance;
+        if (r > 0 && r > room) {
+          room = r;
+          cool = c;
+        }
+      });
+      if (cool) {
+        const amount = Math.min(hot.balance - 0.3 * hot.limit, room);
+        if (amount >= 1) {
+          actions.push({
+            id: `spread-${hot.id}-${cool.id}`,
+            priority: 5,
+            key: "cc.act.spread",
+            vars: { amount, from: hot.name, to: cool.name },
+            due: null,
+          });
+        }
+      }
+    }
+    actions.sort((a, b) => {
+      if (a.priority !== b.priority) return a.priority - b.priority;
+      if (a.due !== b.due) {
+        if (a.due === null) return 1;
+        if (b.due === null) return -1;
+        return a.due < b.due ? -1 : 1;
+      }
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    });
+
+    return {
+      status: "ok",
+      planMonth,
+      fingerprint,
+      flags,
+      snapshot,
+      diagnosis: { hurting, helping },
+      payoff,
+      projection,
+      actions,
+    };
+  }
+  // @@buildCreditPlan:end
+
+  // ---- Credit Coach glue (adapters, persistence, rendering) ----
+  const CC_STRATEGIES = ["avalanche", "snowball", "utilization"];
+  const CC_DEFAULTS = { strategy: "utilization", targetScore: null, monthlyBudget: null };
+  // Fingerprint of the plan currently rendered; the checklist change handler
+  // needs it so a tick is stored against the right plan.
+  let ccCurrentFingerprint = null;
+
+  // Controls from state.settings.creditCoach, sanitised with the same rules
+  // the change handlers apply at the boundary.
+  function ccSettings() {
+    const raw = state.settings && state.settings.creditCoach && typeof state.settings.creditCoach === "object"
+      ? state.settings.creditCoach : {};
+    const strategy = CC_STRATEGIES.includes(raw.strategy) ? raw.strategy : CC_DEFAULTS.strategy;
+    const t = Number(raw.targetScore);
+    const targetScore = Number.isInteger(t) && t >= 300 && t <= 850 ? t : null;
+    // 0 means "no override" (auto), the same reading the engine applies.
+    const b = Number(raw.monthlyBudget);
+    const monthlyBudget = raw.monthlyBudget !== null && raw.monthlyBudget !== undefined && raw.monthlyBudget !== ""
+      && Number.isFinite(b) && b > 0 ? Math.round(b * 100) / 100 : null;
+    return { strategy, targetScore, monthlyBudget };
+  }
+
+  // Current month plus the two before it, as YYYY-MM keys.
+  function ccRecentMonths() {
+    const [y, m] = currentMonth().split("-").map(Number);
+    const keys = [];
+    for (let i = 0; i < 3; i++) {
+      const d = new Date(y, m - 1 - i, 1);
+      keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return keys;
+  }
+
+  // Explicit income for this month, else the average of income transactions
+  // over the last 3 months (only months with at least one income entry
+  // count, same rule as ccMonthlyExpenses), else null (unknown).
+  function ccMonthlyIncome() {
+    const explicit = incomeForMonth(currentMonth());
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    const months = ccRecentMonths();
+    const perMonth = {};
+    state.expenses.forEach((e) => {
+      if (e.type !== "income") return;
+      const k = monthKey(e.date);
+      if (!months.includes(k)) return;
+      perMonth[k] = (perMonth[k] || 0) + (Number(e.amount) || 0);
+    });
+    const vals = Object.values(perMonth);
+    if (!vals.length) return null;
+    const avg = vals.reduce((s, v) => s + v, 0) / vals.length;
+    return avg > 0 ? avg : null;
+  }
+
+  // Average monthly spending over the last 3 months (only months with at
+  // least one expense count); null when there is nothing to average.
+  function ccMonthlyExpenses() {
+    const months = ccRecentMonths();
+    const perMonth = {};
+    state.expenses.forEach((e) => {
+      if (e.type !== "expense") return;
+      const k = monthKey(e.date);
+      if (!months.includes(k)) return;
+      perMonth[k] = (perMonth[k] || 0) + (Number(e.amount) || 0);
+    });
+    const vals = Object.values(perMonth);
+    if (!vals.length) return null;
+    return vals.reduce((s, v) => s + v, 0) / vals.length;
+  }
+
+  // Engine input from state. No DOM access — the Quick Glance widget uses it too.
+  function ccBuildPlanFromState() {
+    return buildCreditPlan({
+      cards: state.cards.map((c) => ({
+        id: c.id,
+        name: c.name,
+        last4: c.last4,
+        limit: c.limit,
+        balance: cardCurrentBalance(c),
+        apr: c.apr,
+        dueDay: c.dueDay,
+        opened: c.opened,
+        minPayment: c.minPayment,
+        autopay: c.autopay,
+        remainingStatementBalance: c.remainingStatementBalance,
+        nextClosingDate: c.nextClosingDate,
+      })),
+      scores: state.creditScores.map((s) => ({ date: s.date, score: Number(s.score) })),
+      monthlyIncome: ccMonthlyIncome(),
+      monthlyExpenses: ccMonthlyExpenses(),
+      today: todayStr(),
+      settings: ccSettings(),
+    });
+  }
+
+  // Checklist persistence: one key holding { fingerprint, done }. A different
+  // fingerprint (balance/limit changed by >= $1, or a new month) starts clean.
+  function ccLoadChecks(fingerprint) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEYS.coachChecks) || "null");
+      if (raw && raw.fingerprint === fingerprint && raw.done && typeof raw.done === "object") return raw.done;
+    } catch (e) { /* corrupt entry → start empty */ }
+    return {};
+  }
+  function ccToggleCheck(fingerprint, actionId, done) {
+    const current = ccLoadChecks(fingerprint);
+    if (done) current[actionId] = true;
+    else delete current[actionId];
+    try {
+      localStorage.setItem(KEYS.coachChecks, JSON.stringify({ fingerprint, done: current }));
+    } catch (e) { /* storage full/blocked — checklist just won't persist */ }
+  }
+
+  // Format the engine's raw vars and translate. Callers escape the result.
+  function ccText(item) {
+    const vars = {};
+    const src = item.vars || {};
+    Object.keys(src).forEach((k) => {
+      const v = src[k];
+      if (k === "amount" || k === "amount2" || k === "mins" || k === "cash") vars[k] = fmt(Number(v) || 0);
+      else if (k === "pct") vars[k] = (Number(v) || 0).toFixed(0);
+      else if (k === "delta") vars[k] = `${Number(v) > 0 ? "+" : ""}${Number(v) || 0}`;
+      else vars[k] = v;
+    });
+    return cbT(item.key, vars);
+  }
+
+  function ccMonthShort(key) {
+    if (!key) return "";
+    const [y, m] = key.split("-");
+    return new Date(Number(y), Number(m) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "2-digit" });
+  }
+
+  // Score band → existing .cb-band chip class.
+  function ccScoreBandClass(score) {
+    const n = Number(score);
+    if (n >= 740) return "excellent";
+    if (n >= 670) return "good";
+    if (n >= 580) return "warning";
+    return "danger";
+  }
+
+  function ccStat(label, valueHtml, subHtml) {
+    return `<div class="cc-stat"><div class="cc-stat-label">${escapeHtml(label)}</div><div class="cc-stat-value">${valueHtml}</div>${subHtml ? `<div class="cc-stat-sub">${subHtml}</div>` : ""}</div>`;
+  }
+
+  function renderCreditCoach() {
+    if (!$("#creditCoach")) return;
+    const settings = ccSettings();
+
+    // Sync controls (placeholders show what "auto" resolves to)
+    const stratSel = $("#ccStrategy");
+    if (stratSel) stratSel.value = settings.strategy;
+    const hintEl = $("#ccStrategyHint");
+    if (hintEl) hintEl.textContent = cbT(`cc.strategy.${settings.strategy}.hint`);
+    const budgetEl = $("#ccBudget");
+    if (budgetEl) budgetEl.value = settings.monthlyBudget === null ? "" : String(settings.monthlyBudget);
+
+    const plan = ccBuildPlanFromState();
+    ccCurrentFingerprint = plan.fingerprint;
+    const targetEl = $("#ccTarget");
+    if (targetEl) {
+      targetEl.value = settings.targetScore === null ? "" : String(settings.targetScore);
+      targetEl.placeholder = String(plan.snapshot.targetScore);
+    }
+
+    const emptyEl = $("#ccEmpty");
+    const bodyEl = $("#ccBody");
+    if (plan.status === "no-cards") {
+      if (emptyEl) emptyEl.hidden = false;
+      if (bodyEl) bodyEl.hidden = true;
+      destroyChart("creditCoach");
+      return;
+    }
+    if (emptyEl) emptyEl.hidden = true;
+    if (bodyEl) bodyEl.hidden = false;
+
+    const snap = plan.snapshot;
+    const payoff = plan.payoff;
+    const proj = plan.projection;
+    const perCard = snap.perCard;
+
+    // (a) Snapshot tiles
+    const tiles = [];
+    if (snap.score !== null) {
+      tiles.push(ccStat(cbT("cc.snap.score"),
+        `${escapeHtml(String(snap.score))} <span class="cb-band ${ccScoreBandClass(snap.score)}">${escapeHtml(cbT(snap.bandKey))}</span>`,
+        escapeHtml(String(snap.scoreDate || ""))));
+    } else {
+      tiles.push(ccStat(cbT("cc.snap.score"), escapeHtml(cbT("cc.empty.noScores"))));
+    }
+    tiles.push(ccStat(cbT("cc.snap.target"),
+      `${escapeHtml(String(snap.targetScore))} <span class="cb-band ${ccScoreBandClass(snap.targetScore)}">${escapeHtml(cbT(snap.targetBandKey))}</span>`));
+    const signed = (d) => `${d > 0 ? "+" : ""}${d}`;
+    const trendSubs = [];
+    if (snap.trend.delta6m !== null) trendSubs.push(`${escapeHtml(cbT("cc.snap.trend6"))}: ${escapeHtml(signed(snap.trend.delta6m))}`);
+    if (snap.trend.delta12m !== null) trendSubs.push(`${escapeHtml(cbT("cc.snap.trend12"))}: ${escapeHtml(signed(snap.trend.delta12m))}`);
+    tiles.push(ccStat(cbT("cc.snap.trend3"),
+      escapeHtml(snap.trend.delta3 === null ? "—" : signed(snap.trend.delta3)),
+      trendSubs.join(" · ")));
+    tiles.push(ccStat(cbT("cc.snap.util"),
+      `${escapeHtml(snap.utilization.toFixed(0))}% <span class="cb-band ${cbUtilBand(snap.utilization)}">${escapeHtml(cbT(`cb.util.${cbUtilBand(snap.utilization)}`))}</span>`));
+    tiles.push(ccStat(cbT("cc.snap.balance"), `${fmt(snap.totalBalance)} / ${fmt(snap.totalLimit)}`));
+    tiles.push(ccStat(cbT("cc.snap.minimums"),
+      `${fmt(snap.totalMinimums)}${snap.minsEstimated ? ` <span class="cc-stat-sub">${escapeHtml(cbT("cc.snap.est"))}</span>` : ""}`));
+    tiles.push(ccStat(cbT("cc.snap.cash"),
+      snap.cashAvailable === null ? escapeHtml(cbT("cc.snap.cashUnknown")) : fmt(snap.cashAvailable)));
+    tiles.push(ccStat(cbT("cc.snap.age"),
+      snap.oldestAgeMonths === null ? escapeHtml(cbT("cc.snap.ageNone"))
+        : `${escapeHtml(formatMonths(snap.oldestAgeMonths))} / ${escapeHtml(formatMonths(snap.avgAgeMonths))}`));
+    $("#ccSnapshot").innerHTML = tiles.join("");
+
+    // (b) Diagnosis
+    const SEV_CLASS = { high: "danger", medium: "warning", low: "good" };
+    const hurting = plan.diagnosis.hurting;
+    let diagHtml = hurting.length
+      ? hurting.map((it) => `<div class="cc-diag-item"><span class="cb-band ${SEV_CLASS[it.severity] || "good"}">${escapeHtml(cbT(`cc.sev.${it.severity}`))}</span><span>${escapeHtml(ccText(it))}</span></div>`).join("")
+      : `<p class="empty">${escapeHtml(cbT("cc.diag.none"))}</p>`;
+    if (plan.diagnosis.helping.length) {
+      diagHtml += `<div class="cb-sub-head">${escapeHtml(cbT("cc.diag.helping"))}</div>`
+        + plan.diagnosis.helping.map((it) => `<div class="cc-diag-item"><span class="cb-band excellent">✓</span><span>${escapeHtml(ccText(it))}</span></div>`).join("");
+    }
+    $("#ccDiag").innerHTML = diagHtml;
+
+    // (c) Payoff plan
+    const planTiles = [];
+    let debtFreeHtml;
+    if (payoff.debtFreeMonth === 0) debtFreeHtml = escapeHtml(cbT("cc.plan.noDebt"));
+    else if (payoff.debtFreeMonth === null) debtFreeHtml = escapeHtml(cbT("cc.plan.notWithin36"));
+    else {
+      const row = payoff.months[payoff.debtFreeMonth - 1];
+      debtFreeHtml = escapeHtml(cbT("cc.plan.inMonths", {
+        month: monthLabel(row ? row.label : ""),
+        n: formatMonths(payoff.debtFreeMonth),
+      }));
+    }
+    planTiles.push(ccStat(cbT("cc.plan.debtFree"), debtFreeHtml));
+    planTiles.push(ccStat(cbT("cc.plan.interest"), fmt(payoff.totalInterest),
+      plan.flags.truncated ? escapeHtml(cbT("cc.plan.interestPartial")) : ""));
+    // null when either run was truncated — the comparison is not meaningful.
+    planTiles.push(ccStat(cbT("cc.plan.saved"), payoff.interestSaved === null ? "—" : fmt(payoff.interestSaved)));
+    const utilMonthText = (m) => {
+      if (m === 0) return cbT("cc.plan.already");
+      if (m === null) return cbT("cc.plan.never");
+      const row = payoff.months[m - 1];
+      return monthLabel(row ? row.label : "");
+    };
+    planTiles.push(ccStat(cbT("cc.plan.under30"), escapeHtml(utilMonthText(payoff.utilUnder30Month))));
+    planTiles.push(ccStat(cbT("cc.plan.under10"), escapeHtml(utilMonthText(payoff.utilUnder10Month))));
+    const sourceKey = payoff.budgetSource === "override" ? "cc.plan.budgetOverride"
+      : payoff.budgetSource === "auto" ? "cc.plan.budgetAuto" : "cc.plan.budgetMinimums";
+    let planHtml = `<div class="cc-stats">${planTiles.join("")}</div>`;
+    planHtml += `<p class="cc-note">${escapeHtml(cbT("cc.plan.budget", { amount: fmt(payoff.monthlyBudget) }))} · ${escapeHtml(cbT(sourceKey))}</p>`;
+    if (plan.flags.budgetShortfall) {
+      planHtml += `<div class="cc-warn">${escapeHtml(cbT("cc.plan.shortfall", {
+        mins: fmt(snap.totalMinimums),
+        cash: fmt(payoff.budgetSource === "override" ? settings.monthlyBudget : (snap.cashAvailable || 0)),
+      }))}</div>`;
+    }
+    if (plan.flags.noIncome && payoff.budgetSource === "minimums") {
+      planHtml += `<div class="cc-warn">${escapeHtml(cbT("cc.empty.noIncome"))}</div>`;
+    }
+    if (plan.flags.aprAssumed.length) {
+      const names = plan.flags.aprAssumed
+        .map((id) => { const c = perCard.find((p) => p.id === id); return c ? c.name : id; })
+        .join(", ");
+      planHtml += `<p class="cc-note">${escapeHtml(cbT("cc.note.aprAssumed", { names }))}</p>`;
+    }
+    if (payoff.months.length) {
+      const head = `<tr><th>${escapeHtml(cbT("cc.plan.col.month"))}</th>`
+        + perCard.map((c) => `<th>${escapeHtml(c.name)}</th>`).join("")
+        + `<th>${escapeHtml(cbT("cc.plan.col.paid"))}</th><th>${escapeHtml(cbT("cc.plan.col.interest"))}</th><th>${escapeHtml(cbT("cc.plan.col.util"))}</th></tr>`;
+      const rows = payoff.months.map((r) => {
+        const cells = perCard.map((c) => {
+          const p = r.payments.find((x) => x.id === c.id);
+          if (!p) return "<td>—</td>";
+          return `<td>${fmt(p.payment)}<span class="cc-cell-sub">${fmt(p.endBalance)}</span></td>`;
+        }).join("");
+        return `<tr><td>${escapeHtml(monthLabel(r.label))}</td>${cells}<td>${fmt(r.totalPaid)}</td><td>${fmt(r.interest)}</td><td>${escapeHtml(r.utilization.toFixed(0))}%</td></tr>`;
+      }).join("");
+      planHtml += `<details class="education-item cc-details"><summary>${escapeHtml(cbT("cc.plan.table"))}</summary><div class="cc-table-wrap"><table class="cc-table"><thead>${head}</thead><tbody>${rows}</tbody></table></div></details>`;
+    }
+    $("#ccPlan").innerHTML = planHtml;
+
+    // (d) Projection text + chart
+    const projTextEl = $("#ccProjText");
+    const chartWrap = $("#creditCoach .cc-chart");
+    if (!proj.available) {
+      projTextEl.innerHTML = `<p class="empty">${escapeHtml(cbT("cc.empty.noScores"))}</p>`;
+      if (chartWrap) chartWrap.hidden = true;
+      destroyChart("creditCoach");
+    } else {
+      const n = proj.reachesTargetMonth;
+      const line = n === null
+        ? cbT("cc.proj.notReached", { score: proj.targetScore })
+        : cbT("cc.proj.reaches", { score: proj.targetScore, month: monthLabel(proj.points[n].label), n });
+      projTextEl.innerHTML = `<p>${escapeHtml(line)}</p><p class="cc-caveat">${escapeHtml(cbT("cc.proj.caveat"))}</p>`;
+      if (chartWrap) chartWrap.hidden = false;
+      destroyChart("creditCoach");
+      const canvas = $("#chartCreditCoach");
+      if (typeof Chart !== "undefined" && canvas) {
+        const css = getComputedStyle(document.documentElement);
+        const primary = css.getPropertyValue("--primary").trim() || "#5b3fb8";
+        const success = css.getPropertyValue("--success").trim() || "#22c55e";
+        charts.creditCoach = new Chart(canvas, {
+          type: "line",
+          data: {
+            labels: proj.points.map((p) => (p.month === 0 ? cbT("cc.proj.now") : ccMonthShort(p.label))),
+            datasets: [
+              {
+                label: cbT("cc.proj.series"),
+                data: proj.points.map((p) => p.score),
+                borderColor: primary,
+                backgroundColor: "transparent",
+                tension: 0.3,
+                pointRadius: 2,
+              },
+              {
+                label: cbT("cc.proj.target"),
+                data: proj.points.map(() => proj.targetScore),
+                borderColor: success,
+                borderDash: [6, 4],
+                pointRadius: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: "top", labels: { boxWidth: 12 } } },
+            scales: {
+              x: { grid: { display: false } },
+              y: { min: 300, max: 850, grid: { color: chartGridColor() } },
+            },
+          },
+        });
+      }
+    }
+
+    // (e) Action checklist
+    const done = ccLoadChecks(plan.fingerprint);
+    $("#ccActions").innerHTML = plan.actions.length
+      ? plan.actions.map((a) => {
+        const text = ccText(a);
+        const isDone = !!done[a.id];
+        return `<label class="cc-action${isDone ? " done" : ""}"><input type="checkbox" data-cc-action="${escapeHtml(a.id)}" ${isDone ? "checked" : ""} aria-label="${escapeHtml(text)}"><span>${escapeHtml(text)}${a.due ? `<span class="cc-action-due">${escapeHtml(cbT("cc.act.by", { date: a.due }))}</span>` : ""}</span></label>`;
+      }).join("")
+      : `<p class="empty">${escapeHtml(cbT("cc.act.none"))}</p>`;
   }
 
   /* ---------- Paste account details (card) ---------- */
@@ -12660,6 +13631,67 @@
     // Credit: open card/score modals
     $("#addCardBtn").addEventListener("click", () => openCardModal(null));
     $("#pasteCardBtn")?.addEventListener("click", openCardPasteModal);
+
+    // Credit Coach controls (validated here, at the boundary, only)
+    $("#ccStrategy")?.addEventListener("change", (e) => {
+      const strategy = CC_STRATEGIES.includes(e.target.value) ? e.target.value : "utilization";
+      setSetting("creditCoach", { ...ccSettings(), strategy });
+      saveData();
+      renderCreditCoach();
+    });
+    $("#ccTarget")?.addEventListener("change", (e) => {
+      const raw = String(e.target.value).trim();
+      let targetScore = null;
+      if (raw !== "") {
+        const v = Number(raw);
+        if (!Number.isInteger(v) || v < 300 || v > 850) {
+          showToast(cbT("cc.valid.target"));
+          const prev = ccSettings().targetScore;
+          e.target.value = prev === null ? "" : String(prev);
+          return;
+        }
+        targetScore = v;
+      }
+      setSetting("creditCoach", { ...ccSettings(), targetScore });
+      saveData();
+      renderCreditCoach();
+    });
+    $("#ccBudget")?.addEventListener("change", (e) => {
+      const raw = String(e.target.value).trim();
+      let monthlyBudget = null;
+      if (raw !== "") {
+        const v = parseFloat(raw);
+        if (!Number.isFinite(v) || v < 0) {
+          showToast(cbT("cc.valid.budget"));
+          const prev = ccSettings().monthlyBudget;
+          e.target.value = prev === null ? "" : String(prev);
+          return;
+        }
+        // 0 → auto (null), matching the engine's `> 0` override rule so the
+        // field never shows an amount the plan is not using.
+        monthlyBudget = v > 0 ? Math.round(v * 100) / 100 : null;
+      }
+      setSetting("creditCoach", { ...ccSettings(), monthlyBudget });
+      saveData();
+      renderCreditCoach();
+    });
+    $("#ccRecalc")?.addEventListener("click", () => {
+      renderCreditCoach();
+      showToast(cbT("cc.toast.recalc"));
+    });
+    $("#ccReset")?.addEventListener("click", () => {
+      setSetting("creditCoach", { ...CC_DEFAULTS });
+      localStorage.removeItem(KEYS.coachChecks);
+      saveData();
+      renderCreditCoach();
+      showToast(cbT("cc.toast.reset"));
+    });
+    $("#ccActions")?.addEventListener("change", (e) => {
+      if (!e.target.matches("input[data-cc-action]")) return;
+      ccToggleCheck(ccCurrentFingerprint, e.target.dataset.ccAction, e.target.checked);
+      e.target.closest(".cc-action")?.classList.toggle("done", e.target.checked);
+    });
+
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
     $("#importCreditBtn").addEventListener("click", openImportCreditModal);
     $("#payCardsBtn")?.addEventListener("click", openPayCardModal);
@@ -14514,6 +15546,7 @@
       langSel.addEventListener("change", (e) => {
         window.i18n.setLocale(e.target.value);
         renderCreditBuilder(); // JS-rendered strings aren't covered by data-i18n
+        renderCreditCoach();
         renderCardList();
         showToast("✓ Language updated");
       });

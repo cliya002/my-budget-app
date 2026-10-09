@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=184" />
+  <link rel="stylesheet" href="styles.css?v=185" />
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='6' y='14' width='52' height='36' rx='4' fill='%235b3fb8'/%3E%3Crect x='6' y='14' width='52' height='10' fill='%234a32a0'/%3E%3Ccircle cx='46' cy='32' r='4' fill='%23f5f1ea'/%3E%3C/svg%3E" />
 </head>
 <body>
@@ -819,6 +819,65 @@
                 <div class="stat-label">Cards</div>
                 <div class="stat-value" id="creditCardCount">0</div>
                 <div class="stat-meta" id="creditAvgUtil"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Credit Coach (offline, rule-based) -->
+          <div class="card credit-builder credit-coach" id="creditCoach">
+            <div class="card-title" data-i18n="cc.title">🧭 Credit Coach</div>
+            <p class="card-sub" data-i18n="cc.sub">A step-by-step plan to pay down your cards and move your score into good standing. Computed on this device with fixed rules — no AI service, no network.</p>
+            <div class="cc-controls">
+              <div class="form-row two-col">
+                <div>
+                  <label for="ccStrategy" data-i18n="cc.ctl.strategy">Payoff strategy</label>
+                  <select id="ccStrategy">
+                    <option value="utilization" data-i18n="cc.strategy.utilization">Utilization first (best for score)</option>
+                    <option value="avalanche" data-i18n="cc.strategy.avalanche">Avalanche (highest APR first)</option>
+                    <option value="snowball" data-i18n="cc.strategy.snowball">Snowball (smallest balance first)</option>
+                  </select>
+                  <p class="cc-ctl-hint" id="ccStrategyHint"></p>
+                </div>
+                <div>
+                  <label for="ccTarget" data-i18n="cc.ctl.target">Target score</label>
+                  <input type="number" id="ccTarget" min="300" max="850" step="10" inputmode="numeric" />
+                </div>
+              </div>
+              <div class="form-row two-col">
+                <div>
+                  <label for="ccBudget" data-i18n="cc.ctl.budget">Monthly amount toward cards (optional)</label>
+                  <input type="number" id="ccBudget" min="0" step="10" inputmode="decimal" data-i18n-placeholder="cc.ctl.budgetAuto" placeholder="Auto: income − expenses" />
+                </div>
+                <div class="cc-ctl-actions">
+                  <button type="button" id="ccRecalc" class="btn-secondary" data-i18n="cc.ctl.recalc">↻ Recalculate</button>
+                  <button type="button" id="ccReset" class="btn-secondary" data-i18n="cc.ctl.reset">Reset plan</button>
+                </div>
+              </div>
+            </div>
+            <p class="empty" id="ccEmpty" hidden data-i18n="cc.empty.noCards">Add a card or paste from your bank to get a plan.</p>
+            <div id="ccBody">
+              <div class="cb-grid">
+                <section class="cb-block cc-span" aria-labelledby="ccSnapHead">
+                  <h3 class="cb-head" id="ccSnapHead" data-i18n="cc.snapshot">Snapshot</h3>
+                  <div id="ccSnapshot" class="cc-stats"></div>
+                </section>
+                <section class="cb-block" aria-labelledby="ccDiagHead">
+                  <h3 class="cb-head" id="ccDiagHead" data-i18n="cc.diagnosis">What's hurting your score</h3>
+                  <div id="ccDiag"></div>
+                </section>
+                <section class="cb-block" aria-labelledby="ccPlanHead">
+                  <h3 class="cb-head" id="ccPlanHead" data-i18n="cc.plan">Payoff plan</h3>
+                  <div id="ccPlan"></div>
+                </section>
+                <section class="cb-block" aria-labelledby="ccProjHead">
+                  <h3 class="cb-head" id="ccProjHead" data-i18n="cc.projection">Score projection (estimate)</h3>
+                  <div id="ccProjText"></div>
+                  <div class="chart-wrap cc-chart"><canvas id="chartCreditCoach" role="img" aria-label="Projected credit score by month" data-i18n-attr="aria-label" data-i18n="cc.proj.chartAria"></canvas></div>
+                </section>
+                <section class="cb-block" aria-labelledby="ccActHead">
+                  <h3 class="cb-head" id="ccActHead" data-i18n="cc.actions">Action checklist</h3>
+                  <div id="ccActions"></div>
+                </section>
               </div>
             </div>
           </div>
@@ -2594,8 +2653,8 @@
         "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
     }
   </script>
-  <script src="i18n.js?v=184"></script>
-  <script src="app.js?v=184"></script>
+  <script src="i18n.js?v=185"></script>
+  <script src="app.js?v=185"></script>
   <script>
     if ("serviceWorker" in navigator) {
       window.addEventListener("load", () => {

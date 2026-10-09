@@ -5173,3 +5173,37 @@ body.has-offline-banner {
 .card-paste-meta { font-size: 0.78rem; color: var(--text-dim); margin: -0.25rem 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.15rem 0.5rem; }
 .cb-card-stmt { font-size: 0.75rem; color: var(--warning); margin-top: 0.15rem; }
 .cb-card-last4 { font-weight: 400; color: var(--text-dim); margin-left: 0.25rem; }
+
+/* ================ Credit Coach ================ */
+.credit-coach { border-left-color: var(--success); }
+.cc-controls { margin-top: 0.5rem; }
+.cc-ctl-hint { margin: 0.25rem 0 0; font-size: 0.78rem; color: var(--text-dim); }
+.cc-ctl-actions { display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap; }
+.cc-ctl-actions > button { flex: 1; }
+.cc-span { grid-column: 1 / -1; }
+.cc-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+@media (min-width: 720px) { .cc-stats { grid-template-columns: repeat(4, 1fr); } }
+.cc-stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.5rem 0.6rem; }
+.cc-stat-label { font-size: 0.72rem; color: var(--text-dim); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.cc-stat-value { font-size: 1.1rem; font-weight: 700; font-variant-numeric: tabular-nums; display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+.cc-stat-sub { font-size: 0.75rem; color: var(--text-dim); }
+.cc-diag-item { display: flex; gap: 0.5rem; align-items: flex-start; padding: 0.4rem 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; }
+.cc-diag-item:last-child { border-bottom: none; }
+.cc-diag-item .cb-band { flex-shrink: 0; }
+.cc-warn { margin-top: 0.5rem; padding: 0.5rem 0.7rem; font-size: 0.85rem; border: 1px solid var(--warning); color: var(--warning); background: var(--card-soft); border-radius: var(--radius-sm); }
+.cc-note { margin-top: 0.4rem; font-size: 0.78rem; color: var(--text-dim); }
+.cc-caveat { margin: 0.4rem 0 0; font-size: 0.75rem; color: var(--text-dim); font-style: italic; }
+.cc-details { margin-top: 0.6rem; }
+.cc-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-top: 0.5rem; }
+.cc-table { border-collapse: collapse; font-size: 0.78rem; min-width: 100%; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.cc-table th, .cc-table td { padding: 0.35rem 0.5rem; border-bottom: 1px solid var(--border); text-align: right; }
+.cc-table th:first-child, .cc-table td:first-child { text-align: left; position: sticky; left: 0; background: var(--card-soft); }
+.cc-table th { color: var(--text-dim); font-weight: 600; }
+.cc-cell-sub { display: block; font-size: 0.7rem; color: var(--text-dim); }
+.cc-chart { margin-top: 0.5rem; }
+.cc-action { display: flex; gap: 0.6rem; align-items: flex-start; padding: 0.45rem 0; border-bottom: 1px dashed var(--border); font-size: 0.88rem; cursor: pointer; }
+.cc-action:last-child { border-bottom: none; }
+.cc-action input { margin-top: 0.2rem; accent-color: var(--primary); flex-shrink: 0; }
+.cc-action.done span { text-decoration: line-through; color: var(--text-dim); }
+.cc-action-due { display: block; font-size: 0.75rem; color: var(--text-dim); }
+.widget-coach { border-color: var(--success); }
