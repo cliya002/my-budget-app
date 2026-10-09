@@ -5160,3 +5160,16 @@ body.has-offline-banner {
 .widget-credit-value { color: var(--text); }
 .widget-credit.soon { border-color: var(--warning); }
 .widget-credit.soon .widget-credit-value { color: var(--warning); }
+
+/* ================ Paste account details ================ */
+.cp-textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; width: 100%; }
+.cp-actions { display: flex; gap: 0.5rem; margin-top: 0.75rem; }
+.cp-actions > button { flex: 1; }
+.cp-warn {
+  margin-top: 0.5rem; padding: 0.6rem 0.85rem; font-size: 0.85rem;
+  background: var(--card-soft); border: 1px solid var(--warning); color: var(--warning); border-radius: var(--radius-sm);
+}
+.cp-warn ul { margin: 0.35rem 0 0; padding-left: 1.1rem; color: var(--text-dim); }
+.card-paste-meta { font-size: 0.78rem; color: var(--text-dim); margin: -0.25rem 0 0.5rem; display: flex; flex-wrap: wrap; gap: 0.15rem 0.5rem; }
+.cb-card-stmt { font-size: 0.75rem; color: var(--warning); margin-top: 0.15rem; }
+.cb-card-last4 { font-weight: 400; color: var(--text-dim); margin-left: 0.25rem; }

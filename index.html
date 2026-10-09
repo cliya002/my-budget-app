@@ -767,6 +767,7 @@
               <button id="addScoreBtn" class="btn-secondary">+ Log Score</button>
               <button id="payMinimumsBtn" class="btn-secondary" title="Pay minimum on every card">⚡ Pay Mins</button>
               <button id="payCardsBtn" class="btn-secondary">💸 Pay Cards</button>
+              <button id="pasteCardBtn" class="btn-secondary" data-i18n="cp.btn">📋 Paste from bank</button>
               <button id="addCardBtn" class="btn-primary">+ Add Card</button>
             </div>
           </div>
@@ -1924,6 +1925,10 @@
             <input type="number" id="cardDueDay" min="1" max="31" placeholder="15" />
           </div>
         </div>
+        <div class="form-row">
+          <label for="cardNextClose" data-i18n="cp.form.nextClose">Next closing date (optional)</label>
+          <input type="date" id="cardNextClose" />
+        </div>
         <div class="form-row two-col">
           <div>
             <label>Account opened (optional)</label>
@@ -1959,6 +1964,28 @@
         </label>
         <button type="submit" class="btn-primary block">Save Card</button>
       </form>
+    </div>
+  </div>
+
+  <!-- Paste Card Details Modal -->
+  <div id="cardPasteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="cardPasteTitle">
+    <div class="modal-card import-modal">
+      <div class="modal-header">
+        <h2 id="cardPasteTitle" data-i18n="cp.title">📋 Paste account details</h2>
+        <button class="modal-close" id="cardPasteClose" aria-label="Close">×</button>
+      </div>
+      <p class="card-sub" id="cardPasteHint" data-i18n="cp.hint">Copy the account summary from your bank's website and paste it here.</p>
+      <div class="form-row">
+        <label for="cardPasteText" data-i18n="cp.textLabel">Pasted account details</label>
+        <textarea id="cardPasteText" rows="8" class="cp-textarea" aria-describedby="cardPasteHint"
+                  data-i18n-placeholder="cp.placeholder" placeholder="Prime Visa (...3410)&#10;Current balance&#10;$707.78&#10;Total credit limit&#10;$1,000.00"></textarea>
+      </div>
+      <div id="cardPasteStatus" class="import-status" hidden aria-live="polite"></div>
+      <div id="cardPastePreview" class="import-preview" hidden></div>
+      <div class="cp-actions">
+        <button type="button" class="btn-secondary" id="cardPasteCancel" data-i18n="cp.cancel">Cancel</button>
+        <button type="button" class="btn-primary" id="cardPasteImport" data-i18n="cp.import" disabled>Import</button>
+      </div>
     </div>
   </div>
 

@@ -7687,6 +7687,29 @@
     if (Number(c.signupBonus) > 0) {
       rows.push(`<div class="card-detail-row"><span>Sign-up bonus</span><strong>${fmt(c.signupBonus)} earned</strong></div>`);
     }
+    // Fields imported via "Paste from bank"
+    if (c.pendingCharges != null) {
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.pendingCharges"))}</span><strong>${escapeHtml(fmt(c.pendingCharges))}</strong></div>`);
+    }
+    if (c.availableCredit != null) {
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.availableCredit"))}</span><strong>${escapeHtml(fmt(c.availableCredit))}</strong></div>`);
+    }
+    if (c.nextClosingDate) {
+      const when = cpWhenLabel(cpDaysUntil(c.nextClosingDate));
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.nextClosingDate"))}</span><strong>${escapeHtml(c.nextClosingDate)} (${escapeHtml(when)})</strong></div>`);
+    }
+    if (c.lastStatementBalance != null) {
+      const val = c.lastStatementDate
+        ? cbT("cp.card.lastStmt", { amount: fmt(c.lastStatementBalance), date: c.lastStatementDate })
+        : fmt(c.lastStatementBalance);
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.lastStatementBalance"))}</span><strong>${escapeHtml(val)}</strong></div>`);
+    }
+    if (c.remainingStatementBalance != null) {
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.remainingStatementBalance"))}</span><strong>${escapeHtml(fmt(c.remainingStatementBalance))}</strong></div>`);
+    }
+    if (c.lastImportedAt) {
+      rows.push(`<div class="card-detail-row"><span>${escapeHtml(cbT("cp.field.imported"))}</span><strong>${escapeHtml(cpTimeAgo(c.lastImportedAt))}</strong></div>`);
+    }
     // Last payment
     const lastPay = state.expenses
       .filter((e) => e.kind === "credit-payment" && e.cardId === c.id && e.type === "transfer-out")
@@ -7771,6 +7794,16 @@
           const cls2 = stmtUtil >= 50 ? "alert-danger" : "alert-warning";
           stmtAlert = `<div class="stmt-alert ${cls2}">⚠️ Statement balance is ${stmtUtil.toFixed(0)}% — this is what gets reported. Pay before statement closes.</div>`;
         }
+        // Fields imported via "Paste from bank" (only when present)
+        const metaChips = [];
+        if (c.pendingCharges != null) metaChips.push(cbT("cp.card.pending", { amount: fmt(c.pendingCharges) }));
+        if (c.availableCredit != null) metaChips.push(cbT("cp.card.available", { amount: fmt(c.availableCredit) }));
+        if (c.nextClosingDate) metaChips.push(cbT("cp.card.closes", { date: c.nextClosingDate, when: cpWhenLabel(cpDaysUntil(c.nextClosingDate)) }));
+        if (Number(c.remainingStatementBalance) > 0) metaChips.push(cbT("cp.card.stmtDue", { amount: fmt(c.remainingStatementBalance) }));
+        if (c.lastImportedAt) metaChips.push(cbT("cp.card.imported", { when: cpTimeAgo(c.lastImportedAt) }));
+        const pasteMeta = metaChips.length
+          ? `<div class="card-item-sub card-paste-meta">${metaChips.map((t) => `<span>${escapeHtml(t)}</span>`).join("")}</div>`
+          : "";
         return `
           <li class="card-item" data-card-row="${c.id}">
             <div class="card-item-head">
@@ -7783,6 +7816,7 @@
               </div>
             </div>
             <div class="card-item-sub">${issuer}${due}${apr}</div>
+            ${pasteMeta}
             <div class="card-item-bal">
               <span>${fmt(bal)} of ${fmt(lim)}${stmt > 0 ? ` · stmt ${fmt(stmt)}` : ""}</span>
               <span class="${util >= 30 ? (util >= 50 ? "negative" : "") : "positive"}">${util.toFixed(0)}% util</span>
@@ -8445,13 +8479,14 @@
         return `
           <div class="cb-card-row">
             <div class="cb-card-row-head">
-              <span class="cb-card-name">${escapeHtml(c.name)}</span>
+              <span class="cb-card-name">${escapeHtml(c.name)}${c.last4 ? `<span class="cb-card-last4">…${escapeHtml(c.last4)}</span>` : ""}</span>
               <span class="cb-card-pct ${cBand}">${pctLabel}</span>
             </div>
             <div class="progress-bar" role="progressbar" aria-label="${escapeHtml(c.name)}" aria-valuenow="${cUtil.toFixed(0)}" aria-valuemin="0" aria-valuemax="100">
               <div class="progress-fill cb-${cBand}" style="width:${Math.min(cUtil, 100).toFixed(1)}%"></div>
             </div>
             <div class="cb-card-amts">${fmt(cBal)} / ${fmt(cLim)}</div>
+            ${Number(c.remainingStatementBalance) > 0 ? `<div class="cb-card-stmt">${escapeHtml(cbT("cp.cb.stmtDue", { amount: fmt(c.remainingStatementBalance) }))}</div>` : ""}
           </div>`;
       }).join("");
     }
@@ -8540,6 +8575,7 @@
     $("#cardDueDay").value = isEdit ? (card.dueDay || "") : "";
     $("#cardOpened").value = isEdit ? (card.opened || "") : "";
     $("#cardCloseDay").value = isEdit ? (card.closeDay || "") : "";
+    $("#cardNextClose").value = isEdit ? (card.nextClosingDate || "") : "";
     $("#cardAnnualFee").value = isEdit ? (card.annualFee || "") : "";
     $("#cardCashback").value = isEdit ? (card.cashbackRate || "") : "";
     $("#cardBonus").value = isEdit ? (card.signupBonus || "") : "";
@@ -8553,6 +8589,63 @@
     $("#cardModal").classList.remove("open");
     $("#cardForm").reset();
     $("#cardEditId").value = "";
+    cardPastePending = null;
+  }
+
+  // Auto-log a limit-increase entry when a card's limit was raised.
+  function maybeLogLimitIncrease(oldCard, card, note) {
+    if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
+      state.limitIncreases.push(touchRecord({
+        id: uid(),
+        cardId: card.id,
+        oldLimit: Number(oldCard.limit),
+        newLimit: Number(card.limit),
+        date: todayStr(),
+        note,
+      }));
+    }
+  }
+
+  // Auto-create or sync the paired account so the card's debt shows up on Balances.
+  function syncCardPairedAccount(card) {
+    if (!card.accountId) {
+      // Create a new account for this card with starting balance = -current debt
+      const palette = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444"];
+      const acc = touchRecord({
+        id: uid(),
+        name: card.name,
+        type: "credit",
+        balance: -Math.abs(Number(card.balance) || 0), // negative = debt
+        color: palette[state.accounts.length % palette.length],
+        cardId: card.id, // back-reference
+      });
+      state.accounts.push(acc);
+      card.accountId = acc.id;
+    } else {
+      // Sync paired account when name or balance changes. Recompute starting balance so
+      // accountBalance(account.id) = -current_card_balance after considering existing txns.
+      const acc = state.accounts.find((a) => a.id === card.accountId);
+      if (acc) {
+        let dirty = false;
+        if (acc.name !== card.name) { acc.name = card.name; dirty = true; }
+        // Compute current account txn delta and adjust starting balance to match new card balance
+        const txnDelta = state.expenses
+          .filter((e) => e.accountId === acc.id)
+          .reduce((s, t) => {
+            if (t.type === "income") return s + Number(t.amount);
+            if (t.type === "transfer-out") return s - Number(t.amount);
+            if (t.type === "transfer-in") return s + Number(t.amount);
+            return s - Number(t.amount);
+          }, 0);
+        const desiredAccBal = -Math.abs(Number(card.balance) || 0);
+        const newStarting = desiredAccBal - txnDelta;
+        if (Math.abs((Number(acc.balance) || 0) - newStarting) > 0.005) {
+          acc.balance = newStarting;
+          dirty = true;
+        }
+        if (dirty) touchRecord(acc);
+      }
+    }
   }
 
   function openScoreModal() {
@@ -8708,6 +8801,222 @@
     return out;
   }
   // @@parseCardPaste:end
+
+  let currentCardPaste = null; // last parseCardPaste() result shown in the preview
+  let cardPasteTimer = null;
+  // Import-only extras stashed for the Add Card form; merged by the submit handler on create.
+  let cardPastePending = null;
+
+  const CP_FIELD_ORDER = [
+    "name", "last4", "balance", "pendingCharges", "availableCredit", "limit",
+    "nextClosingDate", "lastStatementBalance", "lastStatementDate",
+    "remainingStatementBalance", "minimumPayment", "paymentDueDate", "apr",
+  ];
+  const CP_MONEY_KEYS = [
+    "balance", "pendingCharges", "availableCredit", "limit", "lastStatementBalance",
+    "remainingStatementBalance", "minimumPayment", "apr",
+  ];
+  const CP_DATE_KEYS = ["nextClosingDate", "lastStatementDate", "paymentDueDate"];
+
+  function cpRecognizedCount(p) {
+    return p ? Object.keys(p).filter((k) => !k.startsWith("_")).length : 0;
+  }
+
+  // Import boundary: keep only finite, non-negative numbers, ISO dates, 4-digit last4,
+  // and a 1–60 char name. Everything else is dropped and reported in `skipped`.
+  function validateCardPaste(parsed) {
+    const fields = {};
+    const skipped = [];
+    if (!parsed) return { fields, skipped };
+    CP_MONEY_KEYS.forEach((k) => {
+      if (parsed[k] === undefined) return;
+      const v = Number(parsed[k]);
+      if (Number.isFinite(v) && v >= 0) fields[k] = v;
+      else skipped.push(k);
+    });
+    CP_DATE_KEYS.forEach((k) => {
+      if (parsed[k] === undefined) return;
+      if (typeof parsed[k] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed[k])) fields[k] = parsed[k];
+      else skipped.push(k);
+    });
+    if (parsed.last4 !== undefined) {
+      if (/^\d{4}$/.test(String(parsed.last4))) fields.last4 = String(parsed.last4);
+      else skipped.push("last4");
+    }
+    if (parsed.name !== undefined) {
+      const n = String(parsed.name).trim();
+      if (n.length >= 1 && n.length <= 60) fields.name = n;
+      else skipped.push("name");
+    }
+    return { fields, skipped };
+  }
+
+  // Dedupe: match by last4 first; otherwise by name (case-insensitive) among cards
+  // whose last4 is empty or equal to the parsed one. Never merge two distinct cards.
+  function findCardForPaste(fields) {
+    if (fields.last4) {
+      const byLast4 = state.cards.find((c) => String(c.last4 || "") === fields.last4);
+      if (byLast4) return byLast4;
+    }
+    if (fields.name) {
+      const want = fields.name.toLowerCase();
+      return state.cards.find((c) =>
+        String(c.name || "").trim().toLowerCase() === want &&
+        (!c.last4 || !fields.last4 || String(c.last4) === fields.last4)) || null;
+    }
+    return null;
+  }
+
+  function cpTimeAgo(ts) {
+    const diff = Math.max(0, Date.now() - Number(ts));
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return cbT("cp.rel.justNow");
+    if (mins < 60) return cbT("cp.rel.minutes", { n: mins });
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return cbT("cp.rel.hours", { n: hours });
+    return cbT("cp.rel.days", { n: Math.floor(hours / 24) });
+  }
+
+  // Whole days from local midnight today to the ISO date (negative when passed).
+  function cpDaysUntil(iso) {
+    const [y, m, d] = String(iso).split("-").map(Number);
+    const target = new Date(y, m - 1, d);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return Math.round((target - today) / 86400000);
+  }
+  function cpWhenLabel(days) {
+    if (days === 0) return cbT("cp.card.today");
+    if (days > 0) return cbT("cp.card.inDays", { n: days });
+    return cbT("cp.card.passed");
+  }
+
+  function openCardPasteModal() {
+    currentCardPaste = null;
+    $("#cardPasteText").value = "";
+    const status = $("#cardPasteStatus");
+    status.hidden = true;
+    status.textContent = "";
+    const preview = $("#cardPastePreview");
+    preview.hidden = true;
+    preview.innerHTML = "";
+    $("#cardPasteImport").disabled = true;
+    $("#cardPasteModal").classList.add("open");
+    setTimeout(() => $("#cardPasteText")?.focus(), 50);
+  }
+  function closeCardPasteModal() {
+    $("#cardPasteModal").classList.remove("open");
+    currentCardPaste = null;
+  }
+
+  function cpPreviewDisplay(key, value) {
+    if (key === "apr") return `${value}%`;
+    if (CP_MONEY_KEYS.includes(key)) return fmt(value);
+    return String(value);
+  }
+
+  function renderCardPastePreview() {
+    const text = $("#cardPasteText").value;
+    const preview = $("#cardPastePreview");
+    const importBtn = $("#cardPasteImport");
+    if (!text.trim()) {
+      currentCardPaste = null;
+      preview.hidden = true;
+      preview.innerHTML = "";
+      importBtn.disabled = true;
+      return;
+    }
+    const parsed = parseCardPaste(text);
+    currentCardPaste = parsed;
+    const count = cpRecognizedCount(parsed);
+    const { fields } = validateCardPaste(parsed);
+
+    let html = `<div class="detected-cards-title">${escapeHtml(count === 1 ? cbT("cp.recognizedOne") : cbT("cp.recognized", { n: count }))}</div>`;
+    CP_FIELD_ORDER.forEach((key) => {
+      if (parsed[key] === undefined) return;
+      const derived = key === "limit" && parsed._derived.includes("limit")
+        ? `<div class="detected-mini">${escapeHtml(cbT("cp.derived"))}</div>`
+        : "";
+      html += `<div class="detected-row"><span class="detected-label">${escapeHtml(cbT(`cp.field.${key}`))}</span><span class="detected-val">${escapeHtml(cpPreviewDisplay(key, parsed[key]))}${derived}</span></div>`;
+    });
+    if (count > 0) {
+      const target = findCardForPaste(fields);
+      const line = target
+        ? cbT("cp.willUpdate", { name: `${target.name}${target.last4 ? ` (…${target.last4})` : ""}` })
+        : cbT("cp.willCreate");
+      html += `<div class="detected-mini">${escapeHtml(line)}</div>`;
+    }
+    if (count === 0) {
+      html += `<div class="cp-warn">${escapeHtml(cbT("cp.none"))}</div>`;
+    } else if (count < 3) {
+      const unknown = parsed._unrecognized.slice(0, 5).map((l) => `<li>${escapeHtml(l)}</li>`).join("");
+      html += `<div class="cp-warn">${escapeHtml(cbT("cp.few"))}${unknown ? `<ul>${unknown}</ul>` : ""}</div>`;
+    }
+    preview.innerHTML = html;
+    preview.hidden = false;
+    importBtn.disabled = count === 0;
+  }
+
+  function applyCardPaste() {
+    if (!currentCardPaste || cpRecognizedCount(currentCardPaste) === 0) return;
+    const { fields: f, skipped } = validateCardPaste(currentCardPaste);
+    const target = findCardForPaste(f);
+    if (target) {
+      const old = { ...target };
+      if (f.balance != null) target.balance = f.balance;
+      if (f.limit != null) target.limit = f.limit;
+      if (f.lastStatementBalance != null) {
+        target.statement = f.lastStatementBalance;
+        target.lastStatementBalance = f.lastStatementBalance;
+      }
+      if (f.minimumPayment != null) target.minPayment = f.minimumPayment;
+      if (f.apr != null) target.apr = f.apr;
+      if (f.paymentDueDate) target.dueDay = Number(f.paymentDueDate.slice(8, 10));
+      if (f.nextClosingDate) {
+        target.nextClosingDate = f.nextClosingDate;
+        const d = Number(f.nextClosingDate.slice(8, 10));
+        if (d <= 28) target.closeDay = d;
+      }
+      if (f.last4 && !target.last4) target.last4 = f.last4;
+      ["pendingCharges", "availableCredit", "lastStatementDate", "remainingStatementBalance"].forEach((k) => {
+        if (f[k] !== undefined) target[k] = f[k];
+      });
+      target.lastImportedAt = Date.now();
+      maybeLogLimitIncrease(old, target, "Auto-logged from pasted account details");
+      syncCardPairedAccount(target);
+      touchRecord(target);
+      saveData();
+      closeCardPasteModal();
+      renderAll();
+      showToast(cbT("cp.toast.updated", { name: `${target.name}${target.last4 ? ` (…${target.last4})` : ""}` }));
+    } else {
+      const count = cpRecognizedCount(currentCardPaste);
+      closeCardPasteModal();
+      openCardModal(null);
+      if (f.name) $("#cardName").value = f.name;
+      if (f.last4) $("#cardLast4").value = f.last4;
+      if (f.limit != null) $("#cardLimit").value = f.limit;
+      if (f.balance != null) $("#cardBalance").value = f.balance;
+      if (f.lastStatementBalance != null) $("#cardStatement").value = f.lastStatementBalance;
+      if (f.apr != null) $("#cardApr").value = f.apr;
+      if (f.paymentDueDate) $("#cardDueDay").value = Number(f.paymentDueDate.slice(8, 10));
+      if (f.nextClosingDate) {
+        const d = Number(f.nextClosingDate.slice(8, 10));
+        if (d <= 28) $("#cardCloseDay").value = d;
+        $("#cardNextClose").value = f.nextClosingDate;
+      }
+      const pending = { lastImportedAt: Date.now() };
+      ["pendingCharges", "availableCredit", "lastStatementBalance", "lastStatementDate", "remainingStatementBalance"].forEach((k) => {
+        if (f[k] !== undefined) pending[k] = f[k];
+      });
+      if (f.minimumPayment !== undefined) pending.minPayment = f.minimumPayment;
+      cardPastePending = pending;
+      showToast(cbT("cp.toast.prefilled", { n: count }));
+    }
+    if (skipped.length) {
+      setTimeout(() => showToast(cbT("cp.toast.invalid")), 2300);
+    }
+  }
 
   /* ---------- Credit report import ---------- */
   let parsedReport = null; // { score, bureau, source, cards: [...] }
@@ -12350,6 +12659,7 @@
 
     // Credit: open card/score modals
     $("#addCardBtn").addEventListener("click", () => openCardModal(null));
+    $("#pasteCardBtn")?.addEventListener("click", openCardPasteModal);
     $("#addScoreBtn").addEventListener("click", () => openScoreModal());
     $("#importCreditBtn").addEventListener("click", openImportCreditModal);
     $("#payCardsBtn")?.addEventListener("click", openPayCardModal);
@@ -12486,6 +12796,17 @@
     $("#cardModal").addEventListener("click", (e) => {
       if (e.target.id === "cardModal") closeCardModal();
     });
+    // Paste account details modal
+    $("#cardPasteClose")?.addEventListener("click", closeCardPasteModal);
+    $("#cardPasteCancel")?.addEventListener("click", closeCardPasteModal);
+    $("#cardPasteModal")?.addEventListener("click", (e) => {
+      if (e.target.id === "cardPasteModal") closeCardPasteModal();
+    });
+    $("#cardPasteText")?.addEventListener("input", () => {
+      clearTimeout(cardPasteTimer);
+      cardPasteTimer = setTimeout(renderCardPastePreview, 150);
+    });
+    $("#cardPasteImport")?.addEventListener("click", applyCardPaste);
     $("#scoreModalClose").addEventListener("click", closeScoreModal);
     $("#scoreModal").addEventListener("click", (e) => {
       if (e.target.id === "scoreModal") closeScoreModal();
@@ -12822,9 +13143,22 @@
         annualFee: parseFloat($("#cardAnnualFee").value) || 0,
         cashbackRate: parseFloat($("#cardCashback").value) || 0,
         signupBonus: parseFloat($("#cardBonus").value) || 0,
+        nextClosingDate: $("#cardNextClose").value || null,
         // Preserve existing accountId link if editing
         accountId: oldCard?.accountId || null,
       };
+      // Import-only fields (from "Paste from bank") aren't editable in the form;
+      // carry them over so an edit doesn't silently drop them.
+      if (oldCard) {
+        ["pendingCharges", "availableCredit", "lastStatementBalance", "lastStatementDate",
+          "remainingStatementBalance", "minPayment", "lastImportedAt"].forEach((k) => {
+          if (oldCard[k] !== undefined) card[k] = oldCard[k];
+        });
+      }
+      if (!editId && cardPastePending) {
+        Object.assign(card, cardPastePending);
+        cardPastePending = null;
+      }
       if (!card.name) {
         showToast("Add a card name");
         return;
@@ -12842,57 +13176,8 @@
         return;
       }
 
-      // Auto-log a limit-increase entry if user raised the limit
-      if (oldCard && Number(card.limit) > Number(oldCard.limit) && oldCard.limit > 0) {
-        state.limitIncreases.push(touchRecord({
-          id: uid(),
-          cardId: card.id,
-          oldLimit: Number(oldCard.limit),
-          newLimit: Number(card.limit),
-          date: todayStr(),
-          note: "Auto-logged from card edit",
-        }));
-      }
-
-      // Auto-create or sync paired account so the card's debt shows up on Balances
-      if (!card.accountId) {
-        // Create a new account for this card with starting balance = -current debt
-        const palette = ["#ec4899", "#8b5cf6", "#06b6d4", "#f59e0b", "#ef4444"];
-        const acc = touchRecord({
-          id: uid(),
-          name: card.name,
-          type: "credit",
-          balance: -Math.abs(Number(card.balance) || 0), // negative = debt
-          color: palette[state.accounts.length % palette.length],
-          cardId: card.id, // back-reference
-        });
-        state.accounts.push(acc);
-        card.accountId = acc.id;
-      } else {
-        // Sync paired account when name or balance changes. Recompute starting balance so
-        // accountBalance(account.id) = -current_card_balance after considering existing txns.
-        const acc = state.accounts.find((a) => a.id === card.accountId);
-        if (acc) {
-          let dirty = false;
-          if (acc.name !== card.name) { acc.name = card.name; dirty = true; }
-          // Compute current account txn delta and adjust starting balance to match new card balance
-          const txnDelta = state.expenses
-            .filter((e) => e.accountId === acc.id)
-            .reduce((s, t) => {
-              if (t.type === "income") return s + Number(t.amount);
-              if (t.type === "transfer-out") return s - Number(t.amount);
-              if (t.type === "transfer-in") return s + Number(t.amount);
-              return s - Number(t.amount);
-            }, 0);
-          const desiredAccBal = -Math.abs(Number(card.balance) || 0);
-          const newStarting = desiredAccBal - txnDelta;
-          if (Math.abs((Number(acc.balance) || 0) - newStarting) > 0.005) {
-            acc.balance = newStarting;
-            dirty = true;
-          }
-          if (dirty) touchRecord(acc);
-        }
-      }
+      maybeLogLimitIncrease(oldCard, card, "Auto-logged from card edit");
+      syncCardPairedAccount(card);
 
       if (editId) {
         const idx = state.cards.findIndex((c) => c.id === editId);
@@ -14229,6 +14514,7 @@
       langSel.addEventListener("change", (e) => {
         window.i18n.setLocale(e.target.value);
         renderCreditBuilder(); // JS-rendered strings aren't covered by data-i18n
+        renderCardList();
         showToast("✓ Language updated");
       });
     }
